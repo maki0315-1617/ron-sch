@@ -1,0 +1,830 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { auth, db } from './firebase'
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  signOut,
+} from 'firebase/auth'
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  setDoc,
+  where,
+} from 'firebase/firestore'
+import { CalendarDays, ChevronLeft, ChevronRight, Clock3, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
+
+const dayNames = ['日', '月', '火', '水', '木', '金', '土']
+
+const formatDateKey = (date) => {
+  const d = new Date(date)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const parseTimeValue = (time = '09:00') => {
+  const [hourText = '9', minuteText = '0'] = String(time).split(':')
+  return Number(hourText || 0) * 60 + Number(minuteText || 0)
+}
+
+const addDays = (date, amount) => {
+  const next = new Date(date)
+  next.setDate(next.getDate() + amount)
+  return next
+}
+
+const getWeekStart = (date) => {
+  const base = new Date(date)
+  base.setHours(0, 0, 0, 0)
+  const day = base.getDay()
+  const diff = day === 0 ? -6 : 1 - day
+  base.setDate(base.getDate() + diff)
+  return base
+}
+
+const formatWeekTitle = (date) =>
+  new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' }).format(date)
+
+const formatMonthTitle = (date) =>
+  new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long' }).format(date)
+
+function App() {
+  const [session, setSession] = useState(null)
+  const [authMode, setAuthMode] = useState('login')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [selectedDate, setSelectedDate] = useState(new Date())
+  const [scheduleMap, setScheduleMap] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [detailDraft, setDetailDraft] = useState(null)
+  const holdTimerRef = useRef(null)
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setSession(user)
+    })
+    return () => unsubscribe()
+  }, [])
+
+  const weekDates = useMemo(() => {
+    const start = getWeekStart(selectedDate)
+    return Array.from({ length: 7 }, (_, index) => addDays(start, index))
+  }, [selectedDate])
+
+  const selectedKey = formatDateKey(selectedDate)
+
+  const selectedItems = useMemo(() => {
+    const items = scheduleMap[selectedKey] || []
+    return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
+  }, [scheduleMap, selectedKey])
+
+  const fetchWeekSchedule = async () => {
+    if (!session || weekDates.length === 0) return
+
+    setLoading(true)
+    try {
+      const startKey = formatDateKey(weekDates[0])
+      const endKey = formatDateKey(weekDates[6])
+
+      const q = query(
+        collection(db, 'schedule_items'),
+        where('user_id', '==', session.uid),
+        where('date', '>=', startKey),
+        where('date', '<=', endKey)
+      )
+
+      const snapshot = await getDocs(q)
+      const nextMap = {}
+
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data()
+        const dateKey = item.date
+
+        if (!nextMap[dateKey]) {
+          nextMap[dateKey] = []
+        }
+
+        nextMap[dateKey].push({
+          id: item.id || docSnap.id,
+          title: item.title || '予定',
+          time: item.time || '09:00',
+          details: item.details || '',
+          date: dateKey,
+        })
+      })
+
+      Object.keys(nextMap).forEach((key) => {
+        nextMap[key].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
+      })
+
+      setScheduleMap(nextMap)
+    } catch (error) {
+      console.error('週予定取得エラー:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (session) {
+      fetchWeekSchedule()
+    }
+  }, [session, selectedDate])
+
+  const handleAuth = async (e) => {
+    e.preventDefault()
+    setAuthError('')
+
+    try {
+      if (authMode === 'signup') {
+        await createUserWithEmailAndPassword(auth, email, password)
+      } else {
+        await signInWithEmailAndPassword(auth, email, password)
+      }
+    } catch (error) {
+      setAuthError(error.message)
+    }
+  }
+
+  const changeWeek = (offset) => {
+    setSelectedDate((current) => addDays(current, offset))
+  }
+
+  const openDetail = (item) => {
+    setDetailDraft({
+      id: item.id,
+      title: item.title || '予定',
+      time: item.time || '09:00',
+      details: item.details || '',
+      date: item.date || selectedKey,
+    })
+  }
+
+  const closeDetail = () => setDetailDraft(null)
+
+  const saveDetailDraft = async () => {
+    if (!session || !detailDraft) return
+
+    try {
+      const itemId = detailDraft.id || `s-${Date.now()}`
+      const item = {
+        id: itemId,
+        user_id: session.uid,
+        title: detailDraft.title.trim() || '予定',
+        time: detailDraft.time || '09:00',
+        details: detailDraft.details || '',
+        date: detailDraft.date || selectedKey,
+      }
+
+      await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${itemId}`), item)
+      setDetailDraft(null)
+      await fetchWeekSchedule()
+    } catch (error) {
+      console.error('予定保存エラー:', error)
+    }
+  }
+
+  const deleteScheduleItem = async (item) => {
+    if (!session) return
+
+    try {
+      await deleteDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`))
+      await fetchWeekSchedule()
+    } catch (error) {
+      console.error('予定削除エラー:', error)
+    }
+  }
+
+  const startLongPress = (item) => {
+    holdTimerRef.current = setTimeout(() => {
+      openDetail(item)
+    }, 500)
+  }
+
+  const clearLongPress = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+  }
+
+  const handleAddSchedule = () => {
+    setDetailDraft({
+      id: `new-${Date.now()}`,
+      title: '新規予定',
+      time: '09:00',
+      details: '',
+      date: selectedKey,
+    })
+  }
+
+  return (
+    <>
+      {!session ? (
+        <div style={styles.authContainer}>
+          <div style={styles.authBox}>
+            <div style={styles.brandRow}>
+              <CalendarDays size={28} color="#2d6cdf" />
+              <h2 style={styles.brandTitle}>Schedule Board</h2>
+            </div>
+            <p style={styles.authCaption}>{authMode === 'login' ? 'ログイン画面' : '新規登録画面'}</p>
+            {authError && <p style={styles.authError}>{authError}</p>}
+
+            <form onSubmit={handleAuth} style={styles.authForm}>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="メールアドレス"
+                style={styles.input}
+                required
+              />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="パスワード"
+                style={styles.input}
+                required
+              />
+              <button type="submit" style={styles.primaryButton}>
+                {authMode === 'login' ? 'ログイン' : '登録する'}
+              </button>
+            </form>
+
+            <button
+              type="button"
+              style={styles.textButton}
+              onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+            >
+              {authMode === 'login' ? 'アカウントをお持ちでない方は新規登録' : 'すでにアカウントをお持ちの方はこちら'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={styles.appShell}>
+          <header style={styles.header}>
+            <div style={styles.headerTitleBox}>
+              <CalendarDays size={26} color="#2563eb" />
+              <h1 style={styles.title}>Schedule Board</h1>
+            </div>
+
+            <div style={styles.userArea}>
+              <span style={styles.userEmail}>{session.email}</span>
+              <button type="button" style={styles.logoutButton} onClick={() => signOut(auth)}>
+                <LogOut size={16} /> ログアウト
+              </button>
+            </div>
+          </header>
+
+          <main style={styles.main}>
+            <section
+              style={styles.weekSection}
+              onWheel={(e) => {
+                if (Math.abs(e.deltaY) > 30) {
+                  changeWeek(e.deltaY > 0 ? 7 : -7)
+                }
+              }}
+            >
+              <div style={styles.weekNav}>
+                <button type="button" style={styles.navButton} aria-label="前の週" onClick={() => changeWeek(-7)}>
+                  <ChevronLeft size={18} />
+                </button>
+                <div style={styles.weekTitle}>{formatMonthTitle(weekDates[0])}</div>
+                <button type="button" style={styles.navButton} aria-label="次の週" onClick={() => changeWeek(7)}>
+                  <ChevronRight size={18} />
+                </button>
+              </div>
+
+              <div style={styles.weekGrid}>
+                {weekDates.map((date) => {
+                  const key = formatDateKey(date)
+                  const list = scheduleMap[key] || []
+                  const isSelected = key === selectedKey
+
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      onClick={() => setSelectedDate(date)}
+                      style={{
+                        ...styles.dayButton,
+                        background: isSelected ? '#dbeafe' : '#ffffff',
+                        borderColor: isSelected ? '#2563eb' : '#d9e2f2',
+                        boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.16)' : '0 2px 6px rgba(15,23,42,0.04)',
+                      }}
+                    >
+                      <span style={{ ...styles.dayLabel, color: date.getDay() === 0 ? '#dc2626' : date.getDay() === 6 ? '#2563eb' : '#475569' }}>
+                        {dayNames[date.getDay()]}
+                      </span>
+                      <strong style={styles.dayNumber}>{date.getDate()}</strong>
+                      <span style={styles.dayMeta}>{list.length ? `${list.length}件` : '予定なし'}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+
+            <section style={styles.scheduleSection}>
+              <div style={styles.selectedHeader}>
+                <div>
+                  <div style={styles.selectedCaption}>選択中の日</div>
+                  <h2 style={styles.selectedDateText}>{formatWeekTitle(selectedDate)}</h2>
+                </div>
+                <button type="button" style={styles.addButton} onClick={handleAddSchedule}>
+                  <Plus size={18} /> 追加
+                </button>
+              </div>
+
+              {loading ? (
+                <div style={styles.loadingState}>読み込み中...</div>
+              ) : selectedItems.length === 0 ? (
+                <div style={styles.emptyState}>この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
+              ) : (
+                <div style={styles.scheduleList}>
+                  {selectedItems.map((item) => (
+                    <div
+                      key={item.id}
+                      onPointerDown={() => startLongPress(item)}
+                      onPointerUp={clearLongPress}
+                      onPointerLeave={clearLongPress}
+                      onPointerCancel={clearLongPress}
+                      onClick={() => {
+                        clearLongPress()
+                        openDetail(item)
+                      }}
+                      style={styles.scheduleCard}
+                    >
+                      <div style={styles.scheduleTimeBox}>
+                        <Clock3 size={16} color="#2563eb" />
+                        <span>{item.time || '09:00'}</span>
+                      </div>
+
+                      <div style={styles.scheduleBody}>
+                        <div style={styles.scheduleTitleRow}>
+                          <span style={styles.scheduleTitle}>{item.title}</span>
+                          <button
+                            type="button"
+                            style={styles.deleteButton}
+                            aria-label="予定を削除"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              deleteScheduleItem(item)
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+
+                        <div style={styles.scheduleDetailText}>
+                          {item.details ? item.details : '詳細なし'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </main>
+
+          {detailDraft && (
+            <div style={styles.modalOverlay} onClick={closeDetail}>
+              <div style={styles.modal} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <PencilLine size={18} color="#2563eb" />
+                    <h3 style={styles.modalTitle}>予定の詳細</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={closeDetail}>閉じる</button>
+                </div>
+
+                <label style={styles.fieldLabel}>タイトル</label>
+                <input
+                  type="text"
+                  value={detailDraft.title}
+                  onChange={(e) => setDetailDraft({ ...detailDraft, title: e.target.value })}
+                  style={styles.modalInput}
+                />
+
+                <label style={styles.fieldLabel}>時間</label>
+                <input
+                  type="time"
+                  value={detailDraft.time}
+                  onChange={(e) => setDetailDraft({ ...detailDraft, time: e.target.value })}
+                  style={styles.modalInput}
+                />
+
+                <label style={styles.fieldLabel}>詳細メモ</label>
+                <textarea
+                  value={detailDraft.details}
+                  onChange={(e) => setDetailDraft({ ...detailDraft, details: e.target.value })}
+                  rows={6}
+                  style={styles.textarea}
+                  placeholder="予定の詳細を入力してください。複数行で記録できます。"
+                />
+
+                <div style={styles.modalActionRow}>
+                  <button type="button" style={styles.secondaryButton} onClick={closeDetail}>キャンセル</button>
+                  <button type="button" style={styles.primaryButton} onClick={saveDetailDraft}>保存</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
+const styles = {
+  authContainer: {
+    minHeight: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%)',
+    padding: '20px',
+  },
+  authBox: {
+    width: '100%',
+    maxWidth: '420px',
+    background: '#fff',
+    borderRadius: '20px',
+    padding: '28px 24px',
+    boxShadow: '0 20px 45px rgba(15, 23, 42, 0.12)',
+    border: '1px solid #e5eefb',
+  },
+  brandRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '10px',
+    marginBottom: '8px',
+  },
+  brandTitle: {
+    margin: 0,
+    fontSize: '26px',
+    color: '#1f2937',
+  },
+  authCaption: {
+    margin: '0 0 18px',
+    textAlign: 'center',
+    color: '#64748b',
+    fontSize: '14px',
+  },
+  authError: {
+    margin: '0 0 12px',
+    color: '#dc2626',
+    fontSize: '13px',
+    textAlign: 'center',
+  },
+  authForm: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  input: {
+    width: '100%',
+    padding: '12px 14px',
+    borderRadius: '10px',
+    border: '1px solid #d9e2f2',
+    background: '#f8fbff',
+    fontSize: '14px',
+  },
+  primaryButton: {
+    background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+    border: 'none',
+    borderRadius: '10px',
+    color: '#fff',
+    padding: '12px 16px',
+    fontSize: '15px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+  secondaryButton: {
+    background: '#eef2ff',
+    border: '1px solid #c7d2fe',
+    borderRadius: '10px',
+    color: '#1e3a8a',
+    padding: '11px 16px',
+    fontSize: '14px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  textButton: {
+    marginTop: '16px',
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    color: '#2563eb',
+    fontSize: '13px',
+    cursor: 'pointer',
+  },
+  appShell: {
+    maxWidth: '960px',
+    margin: '0 auto',
+    padding: '24px 16px 40px',
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '16px',
+    marginBottom: '20px',
+    paddingBottom: '14px',
+    borderBottom: '1px solid #dfeaf7',
+  },
+  headerTitleBox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  title: {
+    margin: 0,
+    fontSize: '28px',
+    color: '#0f172a',
+  },
+  userArea: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
+  userEmail: {
+    color: '#475569',
+    fontSize: '13px',
+  },
+  logoutButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: '1px solid #d9e2f2',
+    background: '#ffffff',
+    color: '#334155',
+    padding: '8px 12px',
+    borderRadius: '10px',
+    cursor: 'pointer',
+  },
+  main: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '18px',
+  },
+  weekSection: {
+    background: '#ffffff',
+    border: '1px solid #e8eef7',
+    borderRadius: '18px',
+    padding: '16px',
+    boxShadow: '0 12px 26px rgba(15, 23, 42, 0.04)',
+  },
+  weekNav: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: '14px',
+  },
+  navButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '38px',
+    height: '38px',
+    borderRadius: '12px',
+    border: '1px solid #dfeaf7',
+    background: '#f8fbff',
+    color: '#0f172a',
+    cursor: 'pointer',
+  },
+  weekTitle: {
+    fontSize: '16px',
+    fontWeight: 700,
+    color: '#1e293b',
+  },
+  weekGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+    gap: '8px',
+  },
+  dayButton: {
+    border: '1px solid #d9e2f2',
+    borderRadius: '14px',
+    minHeight: '110px',
+    padding: '10px 8px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    cursor: 'pointer',
+  },
+  dayLabel: {
+    fontSize: '12px',
+    fontWeight: 600,
+  },
+  dayNumber: {
+    fontSize: '22px',
+    color: '#111827',
+  },
+  dayMeta: {
+    fontSize: '11px',
+    color: '#64748b',
+  },
+  scheduleSection: {
+    background: '#ffffff',
+    border: '1px solid #e8eef7',
+    borderRadius: '18px',
+    padding: '16px',
+    boxShadow: '0 12px 26px rgba(15, 23, 42, 0.04)',
+  },
+  selectedHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '16px',
+    marginBottom: '16px',
+  },
+  selectedCaption: {
+    fontSize: '12px',
+    color: '#64748b',
+    marginBottom: '2px',
+  },
+  selectedDateText: {
+    margin: 0,
+    fontSize: '26px',
+    color: '#0f172a',
+  },
+  addButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    background: '#2563eb',
+    color: '#fff',
+    border: 'none',
+    borderRadius: '10px',
+    padding: '10px 14px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+  loadingState: {
+    padding: '28px 12px',
+    textAlign: 'center',
+    color: '#475569',
+  },
+  emptyState: {
+    background: '#f8fbff',
+    border: '1px dashed #d7e5f9',
+    borderRadius: '12px',
+    padding: '28px 18px',
+    color: '#52607a',
+    textAlign: 'center',
+    lineHeight: 1.6,
+  },
+  scheduleList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '14px',
+  },
+  scheduleCard: {
+    display: 'flex',
+    gap: '12px',
+    alignItems: 'flex-start',
+    background: '#f8fbff',
+    border: '1px solid #dfeaf7',
+    borderRadius: '14px',
+    padding: '12px 14px',
+    boxShadow: '0 4px 10px rgba(15, 23, 42, 0.02)',
+    cursor: 'pointer',
+  },
+  scheduleTimeBox: {
+    minWidth: '94px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    background: '#e0edff',
+    borderRadius: '10px',
+    color: '#1d4ed8',
+    padding: '8px 10px',
+    fontSize: '13px',
+    fontWeight: 700,
+  },
+  scheduleBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  scheduleTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginBottom: '8px',
+  },
+  scheduleTitle: {
+    fontSize: '18px',
+    fontWeight: 700,
+    color: '#0f172a',
+    wordBreak: 'break-word',
+  },
+  deleteButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '30px',
+    height: '30px',
+    borderRadius: '8px',
+    border: '1px solid #e2e8f0',
+    background: '#ffffff',
+    color: '#ef4444',
+    cursor: 'pointer',
+  },
+  scheduleDetailText: {
+    fontSize: '14px',
+    color: '#475569',
+    whiteSpace: 'pre-wrap',
+    lineHeight: 1.6,
+    wordBreak: 'break-word',
+  },
+  modalOverlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(15, 23, 42, 0.55)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '20px',
+    zIndex: 50,
+  },
+  modal: {
+    width: '100%',
+    maxWidth: '520px',
+    background: '#fff',
+    borderRadius: '18px',
+    padding: '18px 18px 16px',
+    boxShadow: '0 18px 40px rgba(15, 23, 42, 0.22)',
+  },
+  modalHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginBottom: '12px',
+  },
+  modalTitleWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  modalTitle: {
+    margin: 0,
+    fontSize: '20px',
+    color: '#0f172a',
+  },
+  closeButton: {
+    border: '1px solid #dfeaf7',
+    background: '#f8fbff',
+    color: '#334155',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    padding: '8px 10px',
+  },
+  fieldLabel: {
+    display: 'block',
+    marginBottom: '8px',
+    marginTop: '12px',
+    fontSize: '13px',
+    fontWeight: 700,
+    color: '#334155',
+  },
+  modalInput: {
+    width: '100%',
+    borderRadius: '10px',
+    border: '1px solid #d9e2f2',
+    background: '#f8fbff',
+    padding: '10px 12px',
+    fontSize: '14px',
+  },
+  textarea: {
+    width: '100%',
+    borderRadius: '10px',
+    border: '1px solid #d9e2f2',
+    background: '#f8fbff',
+    padding: '12px',
+    resize: 'vertical',
+    minHeight: '140px',
+    fontSize: '14px',
+  },
+  modalActionRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '10px',
+    marginTop: '18px',
+  },
+}
+
+export default App
