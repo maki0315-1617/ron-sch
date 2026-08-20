@@ -15,7 +15,7 @@ import {
   setDoc,
   where,
 } from 'firebase/firestore'
-import { CalendarDays, ChevronLeft, ChevronRight, Clock3, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -76,6 +76,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [detailDraft, setDetailDraft] = useState(null)
   const holdTimerRef = useRef(null)
+  const weekSwipeRef = useRef(null)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -129,6 +130,8 @@ function App() {
             time: item.time || '09:00',
             endTime: item.endTime || '10:00',
             details: item.details || '',
+            completed: item.completed === true,
+            priority: item.priority || 'normal',
             date: dateKey,
           })
         }
@@ -179,6 +182,8 @@ function App() {
       time: item.time || '09:00',
       endTime: item.endTime || '10:00',
       details: item.details || '',
+      completed: item.completed === true,
+      priority: item.priority || 'normal',
       date: item.date || selectedKey,
     })
   }
@@ -206,6 +211,8 @@ function App() {
         time: startTime,
         endTime: endTime,
         details: detailDraft.details || '',
+        completed: detailDraft.completed === true,
+        priority: detailDraft.priority || 'normal',
         date: detailDraft.date || selectedKey,
       }
 
@@ -220,6 +227,7 @@ function App() {
 
   const deleteScheduleItem = async (item) => {
     if (!session) return
+    if (!window.confirm(`「${item.title}」を削除しますか？`)) return
 
     try {
       await deleteDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`))
@@ -231,6 +239,7 @@ function App() {
   }
 
   const startLongPress = (item) => {
+    if (item.completed) return
     holdTimerRef.current = setTimeout(() => {
       openDetail(item)
     }, 500)
@@ -250,8 +259,23 @@ function App() {
       time: '09:00',
       endTime: '10:00',
       details: '',
+      completed: false,
+      priority: 'normal',
       date: selectedKey,
     })
+  }
+
+  const toggleCompleted = async (item) => {
+    if (!session) return
+
+    try {
+      const nextItem = { ...item, completed: !item.completed, user_id: session.uid }
+      await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), nextItem)
+      await fetchWeekSchedule()
+    } catch (error) {
+      console.error('完了状態更新エラー:', error)
+      alert(`完了状態の更新に失敗しました:\n${error.message}`)
+    }
   }
 
   const copyToNextDay = async (item) => {
@@ -269,6 +293,8 @@ function App() {
         time: item.time,
         endTime: item.endTime,
         details: item.details,
+        completed: false,
+        priority: item.priority || 'normal',
         date: nextDateKey,
       }
 
@@ -339,6 +365,18 @@ function App() {
           <main style={styles.main}>
             <section
               style={styles.weekSection}
+              onPointerDown={(event) => {
+                weekSwipeRef.current = event.clientX
+              }}
+              onPointerUp={(event) => {
+                if (weekSwipeRef.current === null) return
+                const distance = event.clientX - weekSwipeRef.current
+                weekSwipeRef.current = null
+                if (Math.abs(distance) > 60) changeWeek(distance < 0 ? 7 : -7)
+              }}
+              onPointerCancel={() => {
+                weekSwipeRef.current = null
+              }}
               onWheel={(e) => {
                 if (Math.abs(e.deltaY) > 30) {
                   changeWeek(e.deltaY > 0 ? 7 : -7)
@@ -377,7 +415,7 @@ function App() {
                         {dayNames[date.getDay()]}
                       </span>
                       <strong style={styles.dayNumber}>{date.getDate()}</strong>
-                      <span style={styles.dayMeta}>{list.length ? `${list.length}件` : '予定なし'}</span>
+                      <span style={styles.dayMeta}>{list.length ? `${list.length}件` : ''}</span>
                     </button>
                   )
                 })}
@@ -408,7 +446,9 @@ function App() {
                     const timeDisplay = `${item.time || '09:00'} - ${item.endTime || '10:00'}`
                     const timeBoxStyle = hasOverlap
                       ? { ...styles.scheduleTimeBox, color: '#dc2626', background: '#fee2e2' }
-                      : styles.scheduleTimeBox
+                      : item.completed
+                        ? { ...styles.scheduleTimeBox, color: '#6b7280', background: '#d1d5db' }
+                        : styles.scheduleTimeBox
 
                     return (
                     <div
@@ -419,9 +459,9 @@ function App() {
                       onPointerCancel={clearLongPress}
                       onClick={() => {
                         clearLongPress()
-                        openDetail(item)
+                        if (!item.completed) openDetail(item)
                       }}
-                      style={styles.scheduleCard}
+                      style={{ ...styles.scheduleCard, ...(item.completed ? styles.completedScheduleCard : {}) }}
                     >
                       <div style={timeBoxStyle}>
                         <Clock3 size={16} color={hasOverlap ? '#dc2626' : '#2563eb'} />
@@ -430,17 +470,37 @@ function App() {
 
                       <div style={styles.scheduleBody}>
                         <div style={styles.scheduleTitleRow}>
-                          <span style={styles.scheduleTitle}>{item.title}</span>
+                          <div style={styles.scheduleTitleWrap}>
+                            <span style={{ ...styles.scheduleTitle, ...(item.completed ? styles.completedText : {}) }}>{item.title}</span>
+                            {item.priority !== 'normal' && (
+                              <span style={{ ...styles.priorityBadge, ...(item.priority === 'high' ? styles.highPriorityBadge : styles.lowPriorityBadge) }}>
+                                {item.priority === 'high' ? '重要' : '低'}
+                              </span>
+                            )}
+                          </div>
                           <div style={{ display: 'flex', gap: '8px' }}>
+                            <button
+                              type="button"
+                              style={{ ...styles.completeButton, ...(item.completed ? styles.completedButton : {}) }}
+                              aria-label={item.completed ? '完了を取り消す' : '予定を完了にする'}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                toggleCompleted(item)
+                              }}
+                              title={item.completed ? '完了を取り消す' : '完了にする'}
+                            >
+                              <Check size={14} />
+                            </button>
                             <button
                               type="button"
                               style={styles.copyButton}
                               aria-label="翌日にコピー"
                               onClick={(event) => {
                                 event.stopPropagation()
-                                copyToNextDay(item)
+                                if (!item.completed) copyToNextDay(item)
                               }}
                               title="翌日にコピー"
+                              disabled={item.completed}
                             >
                               📋
                             </button>
@@ -487,6 +547,17 @@ function App() {
                   onChange={(e) => setDetailDraft({ ...detailDraft, title: e.target.value })}
                   style={styles.modalInput}
                 />
+
+                <label style={styles.fieldLabel}>重要度</label>
+                <select
+                  value={detailDraft.priority}
+                  onChange={(e) => setDetailDraft({ ...detailDraft, priority: e.target.value })}
+                  style={styles.modalInput}
+                >
+                  <option value="low">低</option>
+                  <option value="normal">通常</option>
+                  <option value="high">重要</option>
+                </select>
 
                 <label style={styles.fieldLabel}>開始時間</label>
                 <input
@@ -786,6 +857,12 @@ const styles = {
     boxShadow: '0 4px 10px rgba(15, 23, 42, 0.02)',
     cursor: 'pointer',
   },
+  completedScheduleCard: {
+    background: '#e5e7eb',
+    borderColor: '#d1d5db',
+    boxShadow: 'none',
+    cursor: 'default',
+  },
   scheduleTimeBox: {
     minWidth: '94px',
     display: 'flex',
@@ -809,11 +886,52 @@ const styles = {
     gap: '12px',
     marginBottom: '8px',
   },
+  scheduleTitleWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    minWidth: 0,
+  },
   scheduleTitle: {
-    fontSize: '18px',
+    fontSize: '15px',
     fontWeight: 700,
     color: '#0f172a',
     wordBreak: 'break-word',
+  },
+  completedText: {
+    color: '#6b7280',
+    textDecoration: 'line-through',
+  },
+  priorityBadge: {
+    flexShrink: 0,
+    borderRadius: '6px',
+    padding: '2px 6px',
+    fontSize: '11px',
+    fontWeight: 700,
+  },
+  highPriorityBadge: {
+    background: '#fee2e2',
+    color: '#b91c1c',
+  },
+  lowPriorityBadge: {
+    background: '#e0f2fe',
+    color: '#0369a1',
+  },
+  completeButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '30px',
+    height: '30px',
+    borderRadius: '8px',
+    border: '1px solid #bbf7d0',
+    background: '#f0fdf4',
+    color: '#16a34a',
+    cursor: 'pointer',
+  },
+  completedButton: {
+    background: '#16a34a',
+    color: '#ffffff',
   },
   deleteButton: {
     display: 'flex',
@@ -841,7 +959,7 @@ const styles = {
     fontSize: '16px',
   },
   scheduleDetailText: {
-    fontSize: '14px',
+    fontSize: '12px',
     color: '#475569',
     whiteSpace: 'pre-wrap',
     lineHeight: 1.6,
