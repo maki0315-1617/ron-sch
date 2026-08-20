@@ -65,6 +65,9 @@ const formatWeekTitle = (date) =>
 const formatMonthTitle = (date) =>
   new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long' }).format(date)
 
+const formatDisplayDate = (date) =>
+  new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' }).format(date)
+
 const escapeHtml = (value = '') => String(value)
   .replaceAll('&', '&amp;')
   .replaceAll('<', '&lt;')
@@ -349,17 +352,19 @@ function App() {
   }
 
   const openWeeklyReport = (reportType) => {
+    const outputDate = new Date()
+    const outputDateKey = formatDateKey(outputDate)
     const reportItems = weekDates.flatMap((date) => {
       const dateKey = formatDateKey(date)
       return (scheduleMap[dateKey] || [])
         .filter((item) => reportType === 'all' || !item.completed)
-        .map((item) => ({ ...item, dateKey, dayName: dayNames[date.getDay()] }))
+        .map((item) => ({ ...item, dateKey, dayName: dayNames[date.getDay()], isPast: dateKey < outputDateKey }))
     })
 
     const reportTitle = reportType === 'all' ? 'スケジュール一覧' : '未完了一覧'
     const rows = reportItems.length
       ? reportItems.map((item) => `
-          <tr>
+          <tr class="${item.isPast ? 'past-schedule' : ''}">
             <td>${escapeHtml(item.dateKey)} (${item.dayName})</td>
             <td>${escapeHtml(`${item.time} - ${item.endTime}`)}</td>
             <td>${escapeHtml(item.title)}</td>
@@ -385,22 +390,26 @@ function App() {
             * { box-sizing: border-box; }
             body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
             h1 { margin: 0 0 5px; font-size: 24px; }
-            .period { color: #64748b; margin-bottom: 18px; font-size: 13px; }
+            .period { color: #64748b; margin-bottom: 4px; font-size: 13px; }
+            .output-date { color: #475569; margin-bottom: 18px; font-size: 13px; }
             table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
             th, td { border: 1px solid #cbd5e1; padding: 7px 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
             th { background: #e8f0ff; color: #1e3a8a; }
+            .past-schedule td { color: #b45309; background: #fff7ed; }
             th:nth-child(1) { width: 15%; } th:nth-child(2) { width: 15%; } th:nth-child(3) { width: 17%; }
             th:nth-child(4) { width: 9%; } th:nth-child(6) { width: 9%; }
             .empty { text-align: center; color: #64748b; padding: 24px; }
-            .actions { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+            .actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 12px; }
             button { border: 0; border-radius: 6px; background: #2563eb; color: white; padding: 8px 14px; cursor: pointer; }
+            .close-button { background: #64748b; }
             @media print { .actions { display: none; } }
           </style>
         </head>
         <body>
-          <div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button></div>
+          <div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
           <h1>${escapeHtml(reportTitle)}</h1>
           <div class="period">対象期間: ${escapeHtml(formatDateKey(weekDates[0]))} ～ ${escapeHtml(formatDateKey(weekDates[6]))}</div>
+          <div class="output-date">出力日: ${escapeHtml(formatDisplayDate(outputDate))}</div>
           <table>
             <thead><tr><th>日付</th><th>時間</th><th>予定名</th><th>重要度</th><th>詳細</th><th>状態</th></tr></thead>
             <tbody>${rows}</tbody>
