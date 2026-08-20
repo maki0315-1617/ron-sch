@@ -77,6 +77,7 @@ function App() {
   const [detailDraft, setDetailDraft] = useState(null)
   const holdTimerRef = useRef(null)
   const weekSwipeRef = useRef(null)
+  const weekTouchRef = useRef(null)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -364,11 +365,22 @@ function App() {
 
           <main style={styles.main}>
             <section
-              style={styles.weekSection}
+              style={{ ...styles.weekSection, touchAction: 'pan-y' }}
+              onTouchStart={(event) => {
+                weekTouchRef.current = event.changedTouches[0].clientX
+              }}
+              onTouchEnd={(event) => {
+                if (weekTouchRef.current === null) return
+                const distance = event.changedTouches[0].clientX - weekTouchRef.current
+                weekTouchRef.current = null
+                if (Math.abs(distance) > 50) changeWeek(distance < 0 ? 7 : -7)
+              }}
               onPointerDown={(event) => {
+                if (event.pointerType === 'touch') return
                 weekSwipeRef.current = event.clientX
               }}
               onPointerUp={(event) => {
+                if (event.pointerType === 'touch') return
                 if (weekSwipeRef.current === null) return
                 const distance = event.clientX - weekSwipeRef.current
                 weekSwipeRef.current = null
@@ -453,6 +465,7 @@ function App() {
                     return (
                     <div
                       key={item.id}
+                      className="schedule-card-mobile"
                       onPointerDown={() => startLongPress(item)}
                       onPointerUp={clearLongPress}
                       onPointerLeave={clearLongPress}
@@ -469,16 +482,16 @@ function App() {
                       </div>
 
                       <div style={styles.scheduleBody}>
-                        <div style={styles.scheduleTitleRow}>
+                        <div className="schedule-title-row-mobile" style={styles.scheduleTitleRow}>
                           <div style={styles.scheduleTitleWrap}>
-                            <span style={{ ...styles.scheduleTitle, ...(item.completed ? styles.completedText : {}) }}>{item.title}</span>
+                            <span className="schedule-title-text" style={{ ...styles.scheduleTitle, ...(item.completed ? styles.completedText : {}) }}>{item.title}</span>
                             {item.priority !== 'normal' && (
                               <span style={{ ...styles.priorityBadge, ...(item.priority === 'high' ? styles.highPriorityBadge : styles.lowPriorityBadge) }}>
                                 {item.priority === 'high' ? '重要' : '低'}
                               </span>
                             )}
                           </div>
-                          <div style={{ display: 'flex', gap: '8px' }}>
+                          <div className="schedule-actions-mobile" style={{ display: 'flex', gap: '8px' }}>
                             <button
                               type="button"
                               style={{ ...styles.completeButton, ...(item.completed ? styles.completedButton : {}) }}

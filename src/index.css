@@ -56,3 +56,36 @@ img {
   display: block;
   max-width: 100%;
 }
+
+@media (max-width: 600px) {
+  .schedule-card-mobile {
+    min-width: 0;
+    display: grid !important;
+    grid-template-columns: 82px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .schedule-card-mobile .schedule-title-row-mobile {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-bottom: 5px;
+  }
+
+  .schedule-card-mobile .schedule-actions-mobile {
+    flex-shrink: 0;
+    gap: 4px !important;
+  }
+
+  .schedule-title-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+
+  .schedule-card-mobile .schedule-actions-mobile button {
+    width: 28px;
+    height: 28px;
+  }
+}
