@@ -315,28 +315,13 @@ function App() {
     }
   }
 
-  const copyToSameWeekdaysInMonth = async (item) => {
+  const copyToFutureFourWeeks = async (item) => {
     if (!session) return
 
     const sourceDate = new Date(`${item.date}T00:00:00`)
-    const year = sourceDate.getFullYear()
-    const month = sourceDate.getMonth()
-    const lastDay = new Date(year, month + 1, 0).getDate()
-    const targetDates = []
+    const targetDates = Array.from({ length: 4 }, (_, index) => formatDateKey(addDays(sourceDate, (index + 1) * 7)))
 
-    for (let day = 1; day <= lastDay; day += 1) {
-      const targetDate = new Date(year, month, day)
-      if (targetDate.getDay() === sourceDate.getDay() && formatDateKey(targetDate) !== item.date) {
-        targetDates.push(formatDateKey(targetDate))
-      }
-    }
-
-    if (targetDates.length === 0) {
-      alert('同じ月にコピー先がありません')
-      return
-    }
-
-    if (!window.confirm(`${targetDates.length}件の同じ曜日に「${item.title}」をコピーしますか？`)) return
+    if (!window.confirm(`未来4週間（${targetDates.length}件）に「${item.title}」をコピーしますか？`)) return
 
     try {
       await Promise.all(targetDates.map((targetDateKey) => {
@@ -356,10 +341,10 @@ function App() {
         return setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
       }))
       await fetchWeekSchedule()
-      alert(`${targetDates.length}件の同じ曜日に予定をコピーしました`)
+      alert(`未来4週間に${targetDates.length}件の予定をコピーしました`)
     } catch (error) {
-      console.error('毎週コピーエラー:', error)
-      alert(`毎週コピーに失敗しました:\n${error.message}`)
+      console.error('未来4週間コピーエラー:', error)
+      alert(`未来4週間コピーに失敗しました:\n${error.message}`)
     }
   }
 
@@ -643,12 +628,12 @@ function App() {
                             <button
                               type="button"
                               style={styles.weeklyCopyButton}
-                              aria-label="同じ月の同じ曜日にコピー"
+                              aria-label="未来4週間にコピー"
                               onClick={(event) => {
                                 event.stopPropagation()
-                                if (!item.completed) copyToSameWeekdaysInMonth(item)
+                                if (!item.completed) copyToFutureFourWeeks(item)
                               }}
-                              title="同じ月の同じ曜日にコピー"
+                              title="未来4週間にコピー"
                               disabled={item.completed}
                             >
                               ↻
