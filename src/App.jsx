@@ -315,6 +315,54 @@ function App() {
     }
   }
 
+  const copyToSameWeekdaysInMonth = async (item) => {
+    if (!session) return
+
+    const sourceDate = new Date(`${item.date}T00:00:00`)
+    const year = sourceDate.getFullYear()
+    const month = sourceDate.getMonth()
+    const lastDay = new Date(year, month + 1, 0).getDate()
+    const targetDates = []
+
+    for (let day = 1; day <= lastDay; day += 1) {
+      const targetDate = new Date(year, month, day)
+      if (targetDate.getDay() === sourceDate.getDay() && formatDateKey(targetDate) !== item.date) {
+        targetDates.push(formatDateKey(targetDate))
+      }
+    }
+
+    if (targetDates.length === 0) {
+      alert('同じ月にコピー先がありません')
+      return
+    }
+
+    if (!window.confirm(`${targetDates.length}件の同じ曜日に「${item.title}」をコピーしますか？`)) return
+
+    try {
+      await Promise.all(targetDates.map((targetDateKey) => {
+        const newItemId = `s-${Date.now()}-${targetDateKey}`
+        const newItem = {
+          id: newItemId,
+          user_id: session.uid,
+          title: item.title,
+          time: item.time,
+          endTime: item.endTime,
+          details: item.details,
+          completed: false,
+          priority: item.priority || 'normal',
+          date: targetDateKey,
+        }
+
+        return setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
+      }))
+      await fetchWeekSchedule()
+      alert(`${targetDates.length}件の同じ曜日に予定をコピーしました`)
+    } catch (error) {
+      console.error('毎週コピーエラー:', error)
+      alert(`毎週コピーに失敗しました:\n${error.message}`)
+    }
+  }
+
   const openWeeklyReport = (reportType) => {
     const reportItems = weekDates.flatMap((date) => {
       const dateKey = formatDateKey(date)
@@ -591,6 +639,19 @@ function App() {
                               disabled={item.completed}
                             >
                               📋
+                            </button>
+                            <button
+                              type="button"
+                              style={styles.weeklyCopyButton}
+                              aria-label="同じ月の同じ曜日にコピー"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (!item.completed) copyToSameWeekdaysInMonth(item)
+                              }}
+                              title="同じ月の同じ曜日にコピー"
+                              disabled={item.completed}
+                            >
+                              ↻
                             </button>
                             <button
                               type="button"
@@ -1063,6 +1124,20 @@ const styles = {
     color: '#6b7280',
     cursor: 'pointer',
     fontSize: '16px',
+  },
+  weeklyCopyButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '30px',
+    height: '30px',
+    borderRadius: '8px',
+    border: '1px solid #c7d2fe',
+    background: '#eef2ff',
+    color: '#4f46e5',
+    cursor: 'pointer',
+    fontSize: '18px',
+    lineHeight: 1,
   },
   scheduleDetailText: {
     fontSize: '12px',

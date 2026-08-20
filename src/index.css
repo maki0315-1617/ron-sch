@@ -98,5 +98,6 @@ img {
   .schedule-card-mobile .schedule-actions-mobile button {
     width: 28px;
     height: 28px;
+    padding: 0;
   }
 }
