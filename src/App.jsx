@@ -65,6 +65,13 @@ const formatWeekTitle = (date) =>
 const formatMonthTitle = (date) =>
   new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long' }).format(date)
 
+const escapeHtml = (value = '') => String(value)
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;')
+  .replaceAll("'", '&#039;')
+
 function App() {
   const [session, setSession] = useState(null)
   const [authMode, setAuthMode] = useState('login')
@@ -308,6 +315,69 @@ function App() {
     }
   }
 
+  const openWeeklyReport = (reportType) => {
+    const reportItems = weekDates.flatMap((date) => {
+      const dateKey = formatDateKey(date)
+      return (scheduleMap[dateKey] || [])
+        .filter((item) => reportType === 'all' || !item.completed)
+        .map((item) => ({ ...item, dateKey, dayName: dayNames[date.getDay()] }))
+    })
+
+    const reportTitle = reportType === 'all' ? 'スケジュール一覧' : '未完了一覧'
+    const rows = reportItems.length
+      ? reportItems.map((item) => `
+          <tr>
+            <td>${escapeHtml(item.dateKey)} (${item.dayName})</td>
+            <td>${escapeHtml(`${item.time} - ${item.endTime}`)}</td>
+            <td>${escapeHtml(item.title)}</td>
+            <td>${escapeHtml(item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常')}</td>
+            <td>${escapeHtml(item.details || '')}</td>
+            <td>${item.completed ? '完了' : '未完了'}</td>
+          </tr>`).join('')
+      : '<tr><td colspan="6" class="empty">該当する予定はありません</td></tr>'
+
+    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
+    if (!reportWindow) {
+      alert('帳票画面を開けませんでした。ポップアップを許可してください。')
+      return
+    }
+
+    reportWindow.document.write(`<!doctype html>
+      <html lang="ja">
+        <head>
+          <meta charset="UTF-8" />
+          <title>${escapeHtml(reportTitle)}</title>
+          <style>
+            @page { size: A4 landscape; margin: 12mm; }
+            * { box-sizing: border-box; }
+            body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
+            h1 { margin: 0 0 5px; font-size: 24px; }
+            .period { color: #64748b; margin-bottom: 18px; font-size: 13px; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+            th, td { border: 1px solid #cbd5e1; padding: 7px 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+            th { background: #e8f0ff; color: #1e3a8a; }
+            th:nth-child(1) { width: 15%; } th:nth-child(2) { width: 15%; } th:nth-child(3) { width: 17%; }
+            th:nth-child(4) { width: 9%; } th:nth-child(6) { width: 9%; }
+            .empty { text-align: center; color: #64748b; padding: 24px; }
+            .actions { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+            button { border: 0; border-radius: 6px; background: #2563eb; color: white; padding: 8px 14px; cursor: pointer; }
+            @media print { .actions { display: none; } }
+          </style>
+        </head>
+        <body>
+          <div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button></div>
+          <h1>${escapeHtml(reportTitle)}</h1>
+          <div class="period">対象期間: ${escapeHtml(formatDateKey(weekDates[0]))} ～ ${escapeHtml(formatDateKey(weekDates[6]))}</div>
+          <table>
+            <thead><tr><th>日付</th><th>時間</th><th>予定名</th><th>重要度</th><th>詳細</th><th>状態</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </body>
+      </html>`)
+    reportWindow.document.close()
+    reportWindow.focus()
+  }
+
   return (
     <>
       {!session ? (
@@ -362,6 +432,11 @@ function App() {
               </button>
             </div>
           </header>
+
+          <div style={styles.reportActions}>
+            <button type="button" style={styles.reportButton} onClick={() => openWeeklyReport('all')}>スケジュール一覧PDF</button>
+            <button type="button" style={styles.reportButton} onClick={() => openWeeklyReport('incomplete')}>未完了一覧PDF</button>
+          </div>
 
           <main style={styles.main}>
             <section
@@ -544,7 +619,7 @@ function App() {
 
           {detailDraft && (
             <div style={styles.modalOverlay} onClick={closeDetail}>
-              <div style={styles.modal} onClick={(event) => event.stopPropagation()}>
+              <div className="schedule-modal" style={styles.modal} onClick={(event) => event.stopPropagation()}>
                 <div style={styles.modalHeader}>
                   <div style={styles.modalTitleWrap}>
                     <PencilLine size={18} color="#2563eb" />
@@ -590,6 +665,7 @@ function App() {
 
                 <label style={styles.fieldLabel}>詳細メモ</label>
                 <textarea
+                  className="schedule-details-input"
                   value={detailDraft.details}
                   onChange={(e) => setDetailDraft({ ...detailDraft, details: e.target.value })}
                   rows={6}
@@ -707,6 +783,23 @@ const styles = {
     marginBottom: '20px',
     paddingBottom: '14px',
     borderBottom: '1px solid #dfeaf7',
+  },
+  reportActions: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
+    gap: '8px',
+    marginBottom: '14px',
+  },
+  reportButton: {
+    border: '1px solid #bfdbfe',
+    borderRadius: '8px',
+    background: '#eff6ff',
+    color: '#1d4ed8',
+    padding: '8px 10px',
+    fontSize: '12px',
+    fontWeight: 700,
+    cursor: 'pointer',
   },
   headerTitleBox: {
     display: 'flex',

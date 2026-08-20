@@ -58,6 +58,17 @@ img {
 }
 
 @media (max-width: 600px) {
+  .schedule-modal {
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    padding: 14px;
+  }
+
+  .schedule-details-input {
+    min-height: 88px !important;
+    height: 88px;
+  }
+
   .schedule-card-mobile {
     min-width: 0;
     display: grid !important;
