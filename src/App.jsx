@@ -60,9 +60,10 @@ const isSameScheduleRelation = (a, b) => {
 }
 
 const isRelatablePreviousSchedule = (candidate, selected) => {
-  if (candidate.date < selected.date) return true
-  if (candidate.date > selected.date) return false
-  return parseTimeValue(candidate.endTime || '10:00') < parseTimeValue(selected.time || '09:00')
+  if (candidate.date === selected.date) {
+    return parseTimeValue(candidate.endTime || '10:00') < parseTimeValue(selected.time || '09:00')
+  }
+  return candidate.date < selected.date
 }
 
 const relationKeyFromItem = (item) => `${item.date}_${item.id}`
