@@ -112,6 +112,8 @@ function App() {
   const holdTimerRef = useRef(null)
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
+  const daySwipeRef = useRef(null)
+  const dayTouchRef = useRef(null)
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -209,6 +211,18 @@ function App() {
   }
 
   const changeWeek = (offset) => {
+    setSelectedDate((current) => addDays(current, offset))
+  }
+
+  const selectNextWeekMonday = () => {
+    setSelectedDate((current) => addDays(getWeekStart(current), 7))
+  }
+
+  const selectPreviousWeekSunday = () => {
+    setSelectedDate((current) => addDays(getWeekStart(current), -1))
+  }
+
+  const changeSelectedDay = (offset) => {
     setSelectedDate((current) => addDays(current, offset))
   }
 
@@ -747,11 +761,11 @@ function App() {
               }}
             >
               <div style={styles.weekNav}>
-                <button type="button" style={styles.navButton} aria-label="前の週" onClick={() => changeWeek(-7)}>
+                <button type="button" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeekSunday}>
                   <ChevronLeft size={18} />
                 </button>
                 <div style={styles.weekTitle}>{formatMonthTitle(weekDates[0])}</div>
-                <button type="button" style={styles.navButton} aria-label="次の週" onClick={() => changeWeek(7)}>
+                <button type="button" style={styles.navButton} aria-label="次の週" onClick={selectNextWeekMonday}>
                   <ChevronRight size={18} />
                 </button>
               </div>
@@ -785,7 +799,38 @@ function App() {
               </div>
             </section>
 
-            <section style={styles.scheduleSection}>
+            <section
+              style={{ ...styles.scheduleSection, touchAction: 'pan-y' }}
+              onTouchStart={(event) => {
+                dayTouchRef.current = event.changedTouches[0].clientX
+              }}
+              onTouchEnd={(event) => {
+                if (dayTouchRef.current === null) return
+                const distance = event.changedTouches[0].clientX - dayTouchRef.current
+                dayTouchRef.current = null
+                if (Math.abs(distance) > 50) {
+                  clearLongPress()
+                  changeSelectedDay(distance < 0 ? 1 : -1)
+                }
+              }}
+              onPointerDown={(event) => {
+                if (event.pointerType === 'touch') return
+                daySwipeRef.current = event.clientX
+              }}
+              onPointerUp={(event) => {
+                if (event.pointerType === 'touch') return
+                if (daySwipeRef.current === null) return
+                const distance = event.clientX - daySwipeRef.current
+                daySwipeRef.current = null
+                if (Math.abs(distance) > 60) {
+                  clearLongPress()
+                  changeSelectedDay(distance < 0 ? 1 : -1)
+                }
+              }}
+              onPointerCancel={() => {
+                daySwipeRef.current = null
+              }}
+            >
               <div style={styles.selectedHeader}>
                 <div>
                   <div style={styles.selectedCaption}>選択中の日</div>
