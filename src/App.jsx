@@ -10,12 +10,15 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   query,
   setDoc,
+  updateDoc,
+  writeBatch,
   where,
 } from 'firebase/firestore'
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Link2, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -43,6 +46,26 @@ const isTimeOverlap = (time1, endTime1, time2, endTime2) => {
 const isValidTimeRange = (startTime, endTime) => {
   return parseTimeValue(startTime) < parseTimeValue(endTime)
 }
+
+const toScheduleRelation = (item) => ({
+  id: item.id,
+  date: item.date,
+  title: item.title || '予定',
+  time: item.time || '09:00',
+  endTime: item.endTime || '10:00',
+})
+
+const isSameScheduleRelation = (a, b) => {
+  return Boolean(a && b && a.id === b.id && a.date === b.date)
+}
+
+const isRelatablePreviousSchedule = (candidate, selected) => {
+  if (candidate.date < selected.date) return true
+  if (candidate.date > selected.date) return false
+  return parseTimeValue(candidate.endTime || '10:00') < parseTimeValue(selected.time || '09:00')
+}
+
+const relationKeyFromItem = (item) => `${item.date}_${item.id}`
 
 const addDays = (date, amount) => {
   const next = new Date(date)
@@ -85,6 +108,7 @@ function App() {
   const [scheduleMap, setScheduleMap] = useState({})
   const [loading, setLoading] = useState(false)
   const [detailDraft, setDetailDraft] = useState(null)
+  const [relationDialog, setRelationDialog] = useState(null)
   const holdTimerRef = useRef(null)
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
@@ -144,6 +168,8 @@ function App() {
             completed: item.completed === true,
             priority: item.priority || 'normal',
             date: dateKey,
+            relatedPrev: item.relatedPrev || null,
+            relatedNext: item.relatedNext || null,
           })
         }
       })
@@ -196,6 +222,8 @@ function App() {
       completed: item.completed === true,
       priority: item.priority || 'normal',
       date: item.date || selectedKey,
+      relatedPrev: item.relatedPrev || null,
+      relatedNext: item.relatedNext || null,
     })
   }
 
@@ -225,6 +253,8 @@ function App() {
         completed: detailDraft.completed === true,
         priority: detailDraft.priority || 'normal',
         date: detailDraft.date || selectedKey,
+        relatedPrev: detailDraft.relatedPrev || null,
+        relatedNext: detailDraft.relatedNext || null,
       }
 
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${itemId}`), item)
@@ -241,7 +271,25 @@ function App() {
     if (!window.confirm(`「${item.title}」を削除しますか？`)) return
 
     try {
-      await deleteDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`))
+      const selectedRef = doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`)
+
+      if (item.relatedPrev?.id && item.relatedPrev?.date) {
+        const previousRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedPrev.date}_${item.relatedPrev.id}`)
+        const previousSnap = await getDoc(previousRef)
+        if (previousSnap.exists() && isSameScheduleRelation(previousSnap.data().relatedNext, toScheduleRelation(item))) {
+          await updateDoc(previousRef, { relatedNext: null })
+        }
+      }
+
+      if (item.relatedNext?.id && item.relatedNext?.date) {
+        const nextRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedNext.date}_${item.relatedNext.id}`)
+        const nextSnap = await getDoc(nextRef)
+        if (nextSnap.exists() && isSameScheduleRelation(nextSnap.data().relatedPrev, toScheduleRelation(item))) {
+          await updateDoc(nextRef, { relatedPrev: null })
+        }
+      }
+
+      await deleteDoc(selectedRef)
       await fetchWeekSchedule()
     } catch (error) {
       console.error('予定削除エラー:', error)
@@ -273,6 +321,8 @@ function App() {
       completed: false,
       priority: 'normal',
       date: selectedKey,
+      relatedPrev: null,
+      relatedNext: null,
     })
   }
 
@@ -280,6 +330,20 @@ function App() {
     if (!session) return
 
     try {
+      if (!item.completed && item.relatedPrev?.id && item.relatedPrev?.date) {
+        const previousRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedPrev.date}_${item.relatedPrev.id}`)
+        const previousSnap = await getDoc(previousRef)
+        if (!previousSnap.exists()) {
+          alert('関連する前の予定が見つかりません。関連付けを解除するか、予定を確認してください。')
+          return
+        }
+        const previousItem = previousSnap.data()
+        if (previousItem.completed !== true) {
+          alert('関連する前の予定が未完了のため、この予定は完了できません。')
+          return
+        }
+      }
+
       const nextItem = { ...item, completed: !item.completed, user_id: session.uid }
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), nextItem)
       await fetchWeekSchedule()
@@ -307,6 +371,8 @@ function App() {
         completed: false,
         priority: item.priority || 'normal',
         date: nextDateKey,
+        relatedPrev: null,
+        relatedNext: null,
       }
 
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${nextDateKey}_${newItemId}`), newItem)
@@ -339,6 +405,8 @@ function App() {
           completed: false,
           priority: item.priority || 'normal',
           date: targetDateKey,
+          relatedPrev: null,
+          relatedNext: null,
         }
 
         return setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
@@ -348,6 +416,129 @@ function App() {
     } catch (error) {
       console.error('未来4週間コピーエラー:', error)
       alert(`未来4週間コピーに失敗しました:\n${error.message}`)
+    }
+  }
+
+  const closeRelationDialog = () => setRelationDialog(null)
+
+  const openRelationDialog = async (item) => {
+    if (!session) return
+
+    try {
+      const q = query(collection(db, 'schedule_items'), where('user_id', '==', session.uid))
+      const snapshot = await getDocs(q)
+      const allItems = []
+
+      snapshot.forEach((docSnap) => {
+        const entry = docSnap.data()
+        allItems.push({
+          id: entry.id || docSnap.id,
+          title: entry.title || '予定',
+          time: entry.time || '09:00',
+          endTime: entry.endTime || '10:00',
+          details: entry.details || '',
+          completed: entry.completed === true,
+          priority: entry.priority || 'normal',
+          date: entry.date,
+          relatedPrev: entry.relatedPrev || null,
+          relatedNext: entry.relatedNext || null,
+        })
+      })
+
+      const candidates = allItems
+        .filter((candidate) => {
+          if (candidate.id === item.id && candidate.date === item.date) return false
+          return isRelatablePreviousSchedule(candidate, item)
+        })
+        .sort((a, b) => {
+          if (a.date !== b.date) return b.date.localeCompare(a.date)
+          return parseTimeValue(b.endTime || '10:00') - parseTimeValue(a.endTime || '10:00')
+        })
+
+      setRelationDialog({
+        item,
+        candidates,
+        selectedCandidateKey: item.relatedPrev ? relationKeyFromItem(item.relatedPrev) : '',
+      })
+    } catch (error) {
+      console.error('関連付け候補取得エラー:', error)
+      alert(`関連付け候補の取得に失敗しました:\n${error.message}`)
+    }
+  }
+
+  const applyScheduleRelation = async () => {
+    if (!session || !relationDialog) return
+    if (!relationDialog.selectedCandidateKey) {
+      alert('関連付け対象の予定を選択してください。')
+      return
+    }
+
+    const selectedItem = relationDialog.item
+    const selectedItemRef = toScheduleRelation(selectedItem)
+    const nextPreviousItem = relationDialog.candidates.find((candidate) => relationKeyFromItem(candidate) === relationDialog.selectedCandidateKey)
+    if (!nextPreviousItem) {
+      alert('選択した関連付け対象が見つかりません。')
+      return
+    }
+
+    const linkedNext = nextPreviousItem.relatedNext
+    if (linkedNext && !isSameScheduleRelation(linkedNext, selectedItemRef)) {
+      alert('選択した予定にはすでに次の予定が関連付いています。別の予定を選択してください。')
+      return
+    }
+
+    try {
+      const selectedRef = doc(db, 'schedule_items', `${session.uid}_${selectedItem.date}_${selectedItem.id}`)
+      const previousRef = doc(db, 'schedule_items', `${session.uid}_${nextPreviousItem.date}_${nextPreviousItem.id}`)
+
+      const batch = writeBatch(db)
+      batch.update(selectedRef, { relatedPrev: toScheduleRelation(nextPreviousItem) })
+      batch.update(previousRef, { relatedNext: selectedItemRef })
+
+      if (selectedItem.relatedPrev && !isSameScheduleRelation(selectedItem.relatedPrev, nextPreviousItem)) {
+        const oldPreviousRef = doc(db, 'schedule_items', `${session.uid}_${selectedItem.relatedPrev.date}_${selectedItem.relatedPrev.id}`)
+        const oldPreviousSnap = await getDoc(oldPreviousRef)
+        if (oldPreviousSnap.exists() && isSameScheduleRelation(oldPreviousSnap.data().relatedNext, selectedItemRef)) {
+          batch.update(oldPreviousRef, { relatedNext: null })
+        }
+      }
+
+      await batch.commit()
+      closeRelationDialog()
+      await fetchWeekSchedule()
+      alert('関連付けを更新しました。')
+    } catch (error) {
+      console.error('関連付け更新エラー:', error)
+      alert(`関連付けの更新に失敗しました:\n${error.message}`)
+    }
+  }
+
+  const clearScheduleRelation = async () => {
+    if (!session || !relationDialog) return
+
+    const selectedItem = relationDialog.item
+    if (!selectedItem.relatedPrev) {
+      closeRelationDialog()
+      return
+    }
+
+    try {
+      const selectedRef = doc(db, 'schedule_items', `${session.uid}_${selectedItem.date}_${selectedItem.id}`)
+      const previousRef = doc(db, 'schedule_items', `${session.uid}_${selectedItem.relatedPrev.date}_${selectedItem.relatedPrev.id}`)
+      const previousSnap = await getDoc(previousRef)
+      const updates = [updateDoc(selectedRef, { relatedPrev: null })]
+
+      if (previousSnap.exists() && isSameScheduleRelation(previousSnap.data().relatedNext, toScheduleRelation(selectedItem))) {
+        updates.push(updateDoc(previousRef, { relatedNext: null }))
+      }
+
+      await Promise.all(updates)
+      closeRelationDialog()
+      await fetchWeekSchedule()
+      alert('関連付けを解除しました。')
+    } catch (error) {
+      console.error('関連付け解除エラー:', error)
+      alert(`関連付けの解除に失敗しました:\n${error.message}`)
     }
   }
 
@@ -591,7 +782,11 @@ function App() {
                         clearLongPress()
                         if (!item.completed) openDetail(item)
                       }}
-                      style={{ ...styles.scheduleCard, ...(item.completed ? styles.completedScheduleCard : {}) }}
+                      style={{
+                        ...styles.scheduleCard,
+                        ...(item.relatedPrev ? styles.relatedScheduleCard : {}),
+                        ...(item.completed ? (item.relatedPrev ? styles.completedRelatedScheduleCard : styles.completedScheduleCard) : {}),
+                      }}
                     >
                       <div style={timeBoxStyle}>
                         <Clock3 size={16} color={hasOverlap ? '#dc2626' : '#2563eb'} />
@@ -649,6 +844,19 @@ function App() {
                             </button>
                             <button
                               type="button"
+                              style={styles.relationButton}
+                              aria-label="前の予定と関連付け"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (!item.completed) openRelationDialog(item)
+                              }}
+                              title="前の予定と関連付け"
+                              disabled={item.completed}
+                            >
+                              <Link2 size={14} />
+                            </button>
+                            <button
+                              type="button"
                               style={styles.deleteButton}
                               aria-label="予定を削除"
                               onClick={(event) => {
@@ -664,6 +872,11 @@ function App() {
                         <div style={styles.scheduleDetailText}>
                           {item.details ? item.details : '詳細なし'}
                         </div>
+                        {item.relatedPrev && (
+                          <div style={styles.relationInfoText}>
+                            関連: {item.relatedPrev.date} {item.relatedPrev.time}-{item.relatedPrev.endTime} {item.relatedPrev.title}
+                          </div>
+                        )}
                       </div>
                     </div>
                     )})}
@@ -671,6 +884,92 @@ function App() {
               )}
             </section>
           </main>
+
+          {relationDialog && (
+            <div style={styles.modalOverlay} onClick={closeRelationDialog}>
+              <div className="schedule-modal" style={{ ...styles.modal, maxWidth: '760px' }} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <Link2 size={18} color="#ca8a04" />
+                    <h3 style={styles.modalTitle}>前の予定との関連付け</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={closeRelationDialog}>閉じる</button>
+                </div>
+
+                <div style={styles.relationTargetBox}>
+                  <strong>{relationDialog.item.title}</strong>
+                  <div style={styles.relationTargetMeta}>
+                    {relationDialog.item.date} {relationDialog.item.time} - {relationDialog.item.endTime}
+                  </div>
+                </div>
+
+                {relationDialog.item.relatedPrev && (
+                  <div style={styles.currentRelationBox}>
+                    現在の関連: {relationDialog.item.relatedPrev.date} {relationDialog.item.relatedPrev.time} - {relationDialog.item.relatedPrev.endTime} {relationDialog.item.relatedPrev.title}
+                  </div>
+                )}
+
+                {relationDialog.candidates.length === 0 ? (
+                  <div style={styles.emptyState}>関連付けできる前の予定がありません。</div>
+                ) : (
+                  <div style={styles.relationTableWrap}>
+                    <table style={styles.relationTable}>
+                      <thead>
+                        <tr>
+                          <th style={styles.relationTableHeadCell}>選択</th>
+                          <th style={styles.relationTableHeadCell}>日付</th>
+                          <th style={styles.relationTableHeadCell}>時間</th>
+                          <th style={styles.relationTableHeadCell}>予定名</th>
+                          <th style={styles.relationTableHeadCell}>状態</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {relationDialog.candidates.map((candidate) => {
+                          const candidateKey = relationKeyFromItem(candidate)
+                          const disabled = Boolean(candidate.relatedNext && !isSameScheduleRelation(candidate.relatedNext, toScheduleRelation(relationDialog.item)))
+                          return (
+                            <tr key={candidateKey} style={disabled ? styles.disabledRelationRow : undefined}>
+                              <td style={styles.relationTableCell}>
+                                <input
+                                  type="radio"
+                                  name="schedule-relation"
+                                  value={candidateKey}
+                                  checked={relationDialog.selectedCandidateKey === candidateKey}
+                                  disabled={disabled}
+                                  onChange={() => setRelationDialog((current) => (current ? { ...current, selectedCandidateKey: candidateKey } : current))}
+                                />
+                              </td>
+                              <td style={styles.relationTableCell}>{candidate.date}</td>
+                              <td style={styles.relationTableCell}>{candidate.time} - {candidate.endTime}</td>
+                              <td style={styles.relationTableCell}>{candidate.title}</td>
+                              <td style={styles.relationTableCell}>
+                                {disabled ? '次予定が設定済み' : candidate.completed ? '完了' : '未完了'}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <div style={styles.modalActionRow}>
+                  {relationDialog.item.relatedPrev && (
+                    <button type="button" style={styles.unlinkButton} onClick={clearScheduleRelation}>関連解除</button>
+                  )}
+                  <button type="button" style={styles.secondaryButton} onClick={closeRelationDialog}>キャンセル</button>
+                  <button
+                    type="button"
+                    style={styles.primaryButton}
+                    onClick={applyScheduleRelation}
+                    disabled={!relationDialog.selectedCandidateKey}
+                  >
+                    関連付けする
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {detailDraft && (
             <div style={styles.modalOverlay} onClick={closeDetail}>
@@ -1024,6 +1323,17 @@ const styles = {
     boxShadow: 'none',
     cursor: 'default',
   },
+  relatedScheduleCard: {
+    background: '#fef9c3',
+    borderColor: '#facc15',
+    boxShadow: '0 6px 16px rgba(202, 138, 4, 0.18)',
+  },
+  completedRelatedScheduleCard: {
+    background: '#fde68a',
+    borderColor: '#f59e0b',
+    boxShadow: 'none',
+    cursor: 'default',
+  },
   scheduleTimeBox: {
     minWidth: '94px',
     display: 'flex',
@@ -1133,12 +1443,33 @@ const styles = {
     fontSize: '18px',
     lineHeight: 1,
   },
+  relationButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '30px',
+    height: '30px',
+    borderRadius: '8px',
+    border: '1px solid #fcd34d',
+    background: '#fef3c7',
+    color: '#a16207',
+    cursor: 'pointer',
+  },
   scheduleDetailText: {
     fontSize: '12px',
     color: '#475569',
     whiteSpace: 'pre-wrap',
     lineHeight: 1.6,
     wordBreak: 'break-word',
+  },
+  relationInfoText: {
+    marginTop: '6px',
+    fontSize: '12px',
+    color: '#a16207',
+    background: '#fef3c7',
+    border: '1px solid #fde68a',
+    borderRadius: '8px',
+    padding: '6px 8px',
   },
   modalOverlay: {
     position: 'fixed',
@@ -1214,6 +1545,66 @@ const styles = {
     justifyContent: 'flex-end',
     gap: '10px',
     marginTop: '18px',
+  },
+  relationTargetBox: {
+    border: '1px solid #e2e8f0',
+    borderRadius: '10px',
+    background: '#f8fafc',
+    padding: '10px 12px',
+    marginBottom: '12px',
+  },
+  relationTargetMeta: {
+    marginTop: '4px',
+    fontSize: '12px',
+    color: '#475569',
+  },
+  currentRelationBox: {
+    border: '1px solid #fcd34d',
+    borderRadius: '10px',
+    background: '#fffbeb',
+    color: '#92400e',
+    fontSize: '12px',
+    padding: '8px 10px',
+    marginBottom: '12px',
+  },
+  relationTableWrap: {
+    maxHeight: '320px',
+    overflowY: 'auto',
+    border: '1px solid #e2e8f0',
+    borderRadius: '10px',
+  },
+  relationTable: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: '13px',
+  },
+  relationTableHeadCell: {
+    background: '#eff6ff',
+    color: '#1e3a8a',
+    position: 'sticky',
+    top: 0,
+    textAlign: 'left',
+    padding: '8px',
+    borderBottom: '1px solid #dbeafe',
+  },
+  relationTableCell: {
+    padding: '8px',
+    borderBottom: '1px solid #f1f5f9',
+    color: '#1e293b',
+  },
+  disabledRelationRow: {
+    opacity: 0.55,
+  },
+  unlinkButton: {
+    marginRight: 'auto',
+    border: '1px solid #fca5a5',
+    borderRadius: '10px',
+    background: '#fef2f2',
+    color: '#b91c1c',
+    padding: '11px 16px',
+    fontSize: '14px',
+    fontWeight: 600,
+    cursor: 'pointer',
   },
 }
 
