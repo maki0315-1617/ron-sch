@@ -542,17 +542,59 @@ function App() {
     }
   }
 
-  const openWeeklyReport = (reportType) => {
+  const openWeeklyReport = async (reportType) => {
+    if (!session) return
+
     const outputDate = new Date()
     const outputDateKey = formatDateKey(outputDate)
-    const reportItems = weekDates.flatMap((date) => {
-      const dateKey = formatDateKey(date)
-      return (scheduleMap[dateKey] || [])
-        .filter((item) => reportType === 'all' || !item.completed)
-        .map((item) => ({ ...item, dateKey, dayName: dayNames[date.getDay()], isPast: dateKey < outputDateKey }))
-    })
-
     const reportTitle = reportType === 'all' ? 'スケジュール一覧' : '未完了一覧'
+
+    let reportItems = []
+    let periodText = `${formatDateKey(weekDates[0])} ～ ${formatDateKey(weekDates[6])}`
+
+    try {
+      if (reportType === 'incomplete') {
+        const q = query(collection(db, 'schedule_items'), where('user_id', '==', session.uid))
+        const snapshot = await getDocs(q)
+
+        reportItems = []
+        snapshot.forEach((docSnap) => {
+          const item = docSnap.data()
+          if (item.completed === true) return
+          const dateKey = item.date
+          const dayDate = new Date(`${dateKey}T00:00:00`)
+          reportItems.push({
+            id: item.id || docSnap.id,
+            title: item.title || '予定',
+            time: item.time || '09:00',
+            endTime: item.endTime || '10:00',
+            details: item.details || '',
+            completed: item.completed === true,
+            priority: item.priority || 'normal',
+            dateKey,
+            dayName: dayNames[dayDate.getDay()],
+            isPast: dateKey < outputDateKey,
+          })
+        })
+
+        reportItems.sort((a, b) => {
+          if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+          return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
+        })
+        periodText = '全期間'
+      } else {
+        reportItems = weekDates.flatMap((date) => {
+          const dateKey = formatDateKey(date)
+          return (scheduleMap[dateKey] || [])
+            .map((item) => ({ ...item, dateKey, dayName: dayNames[date.getDay()], isPast: dateKey < outputDateKey }))
+        })
+      }
+    } catch (error) {
+      console.error('帳票データ取得エラー:', error)
+      alert(`帳票データの取得に失敗しました:\n${error.message}`)
+      return
+    }
+
     const rows = reportItems.length
       ? reportItems.map((item) => `
           <tr class="${item.isPast ? 'past-schedule' : ''}">
@@ -599,7 +641,7 @@ function App() {
         <body>
           <div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
           <h1>${escapeHtml(reportTitle)}</h1>
-          <div class="period">対象期間: ${escapeHtml(formatDateKey(weekDates[0]))} ～ ${escapeHtml(formatDateKey(weekDates[6]))}</div>
+          <div class="period">対象期間: ${escapeHtml(periodText)}</div>
           <div class="output-date">出力日: ${escapeHtml(formatDisplayDate(outputDate))}</div>
           <table>
             <thead><tr><th>日付</th><th>時間</th><th>予定名</th><th>重要度</th><th>詳細</th><th>状態</th></tr></thead>
