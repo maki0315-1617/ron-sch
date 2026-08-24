@@ -448,6 +448,7 @@ function App() {
       const candidates = allItems
         .filter((candidate) => {
           if (candidate.id === item.id && candidate.date === item.date) return false
+          if (candidate.completed) return false
           return isRelatablePreviousSchedule(candidate, item)
         })
         .sort((a, b) => {
@@ -632,8 +633,8 @@ function App() {
             th:nth-child(1) { width: 15%; } th:nth-child(2) { width: 15%; } th:nth-child(3) { width: 17%; }
             th:nth-child(4) { width: 9%; } th:nth-child(6) { width: 9%; }
             .empty { text-align: center; color: #64748b; padding: 24px; }
-            .actions { display: flex; justify-content: flex-end; gap: 8px; margin-bottom: 12px; }
-            button { border: 0; border-radius: 6px; background: #2563eb; color: white; padding: 8px 14px; cursor: pointer; }
+            .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+            button { border: 0; border-radius: 10px; background: #2563eb; color: white; padding: 12px 20px; font-size: 15px; font-weight: 700; cursor: pointer; }
             .close-button { background: #64748b; }
             @media print { .actions { display: none; } }
           </style>
