@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "functions:install": "npm --prefix functions install",
+    "firebase:emulators": "npx firebase emulators:start --only functions",
+    "firebase:deploy:functions": "npx firebase deploy --only functions"
   },
   "dependencies": {
     "@fontsource/noto-sans-jp": "^5.3.0",

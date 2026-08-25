@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { auth, db } from './firebase'
+import { auth, db, deleteFcmToken, getFcmToken, subscribeForegroundNotifications } from './firebase'
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -14,11 +14,11 @@ import {
   getDocs,
   query,
   setDoc,
-  updateDoc,
+  serverTimestamp,
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Link2, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
+import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Link2, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -99,6 +99,32 @@ const escapeHtml = (value = '') => String(value)
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;')
 
+const notificationTokenKey = (userId) => `ron-sch-fcm-token:${userId}`
+
+const isIosDevice = () => typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent)
+
+const isStandaloneDisplay = () => {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+}
+
+const requiresHomeScreenForNotifications = () => isIosDevice() && !isStandaloneDisplay()
+
+const withTimeout = (promise, ms, message) => {
+  let timerId = null
+  const timeout = new Promise((_, reject) => {
+    timerId = window.setTimeout(() => {
+      reject(new Error(message))
+    }, ms)
+  })
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timerId !== null) {
+      window.clearTimeout(timerId)
+    }
+  })
+}
+
 function App() {
   const [session, setSession] = useState(null)
   const [authMode, setAuthMode] = useState('login')
@@ -110,7 +136,15 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [detailDraft, setDetailDraft] = useState(null)
   const [relationDialog, setRelationDialog] = useState(null)
+  const [notificationEnabled, setNotificationEnabled] = useState(false)
+  const [notificationPermission, setNotificationPermission] = useState(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+  )
+  const [notificationBusy, setNotificationBusy] = useState(false)
+  const [notificationHelpOpen, setNotificationHelpOpen] = useState(false)
+  const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const holdTimerRef = useRef(null)
+  const notificationRegistrationRef = useRef(null)
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
   const daySwipeRef = useRef(null)
@@ -122,6 +156,296 @@ function App() {
     })
     return () => unsubscribe()
   }, [])
+
+  useEffect(() => {
+    if (!session || typeof window === 'undefined') return
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+      setNotificationEnabled(false)
+      setNotificationPermission('unsupported')
+      return
+    }
+
+    let cancelled = false
+
+    const loadNotificationState = async () => {
+      setNotificationPermission(Notification.permission)
+
+      if (Notification.permission !== 'granted') {
+        if (!cancelled) {
+          setNotificationEnabled(false)
+        }
+        return
+      }
+
+      const storedToken = window.localStorage.getItem(notificationTokenKey(session.uid))
+      if (!storedToken) {
+        if (!cancelled) {
+          setNotificationEnabled(false)
+        }
+        return
+      }
+
+      const tokenDoc = await getDoc(doc(db, 'fcm_tokens', `${session.uid}_${storedToken}`))
+      if (cancelled) return
+
+      if (!tokenDoc.exists()) {
+        window.localStorage.removeItem(notificationTokenKey(session.uid))
+        setNotificationEnabled(false)
+        return
+      }
+
+      const tokenSnapshot = await getDocs(query(collection(db, 'fcm_tokens'), where('user_id', '==', session.uid)))
+      if (cancelled) return
+
+      const duplicates = tokenSnapshot.docs
+        .map((tokenEntry) => tokenEntry.data().token)
+        .filter((token) => token && token !== storedToken)
+
+      if (duplicates.length > 0) {
+        const batch = writeBatch(db)
+        duplicates.forEach((duplicateToken) => {
+          batch.delete(doc(db, 'fcm_tokens', `${session.uid}_${duplicateToken}`))
+        })
+        await batch.commit()
+      }
+
+      setNotificationEnabled(true)
+    }
+
+    loadNotificationState().catch((error) => {
+      console.error('通知状態の取得エラー:', error)
+    })
+    setNotificationBadgeCount(0)
+
+    return () => {
+      cancelled = true
+    }
+  }, [session])
+
+  const getNotificationRegistration = async () => {
+    if (notificationRegistrationRef.current) return notificationRegistrationRef.current
+    const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js')
+    notificationRegistrationRef.current = registration
+    return registration
+  }
+
+  const setBrowserBadge = async (count) => {
+    if (typeof navigator === 'undefined') return
+
+    if ('setAppBadge' in navigator) {
+      if (count > 0) {
+        await navigator.setAppBadge(count)
+      } else if ('clearAppBadge' in navigator) {
+        await navigator.clearAppBadge()
+      }
+    }
+  }
+
+  const clearNotificationBadge = async () => {
+    setNotificationBadgeCount(0)
+    await setBrowserBadge(0)
+  }
+
+  const enableNotifications = async () => {
+    if (!session) return
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+      throw new Error('このブラウザでは通知を利用できません。')
+    }
+
+    if (requiresHomeScreenForNotifications()) {
+      setNotificationHelpOpen(true)
+      throw new Error('iPhoneのSafariではホーム画面に追加したアプリで通知を有効にしてください。')
+    }
+
+    let permission = Notification.permission
+    setNotificationPermission(permission)
+
+    if (permission !== 'granted') {
+      permission = await Notification.requestPermission()
+      setNotificationPermission(permission)
+      if (permission !== 'granted') {
+        setNotificationHelpOpen(true)
+        if (permission === 'denied') {
+          throw new Error('ブラウザで通知がブロックされています。サイト設定で通知を許可してください。')
+        }
+        throw new Error('ブラウザ設定で通知を許可してから、もう一度お試しください。')
+      }
+    }
+
+    const registration = await withTimeout(
+      getNotificationRegistration(),
+      15000,
+      'Service Worker の登録がタイムアウトしました。'
+    )
+    const token = await withTimeout(
+      getFcmToken(registration),
+      15000,
+      'FCM トークンの取得がタイムアウトしました。'
+    )
+    if (!token) {
+      throw new Error('FCMトークンを取得できませんでした。')
+    }
+
+    window.localStorage.setItem(notificationTokenKey(session.uid), token)
+
+    await withTimeout(setDoc(
+      doc(db, 'fcm_tokens', `${session.uid}_${token}`),
+      {
+        user_id: session.uid,
+        user_email: session.email || '',
+        token,
+        updated_at: serverTimestamp(),
+      },
+      { merge: true }
+    ), 15000, '通知トークンの保存がタイムアウトしました。')
+
+    setNotificationEnabled(true)
+  }
+
+  const disableNotifications = async () => {
+    if (!session) return
+
+    const storedToken = typeof window !== 'undefined'
+      ? window.localStorage.getItem(notificationTokenKey(session.uid))
+      : ''
+
+    if (storedToken) {
+      await deleteDoc(doc(db, 'fcm_tokens', `${session.uid}_${storedToken}`))
+      window.localStorage.removeItem(notificationTokenKey(session.uid))
+    }
+
+    await deleteFcmToken()
+    setNotificationEnabled(false)
+    await clearNotificationBadge()
+  }
+
+  const toggleNotifications = async () => {
+    if (!session || notificationBusy) return
+
+    setNotificationBusy(true)
+    try {
+      if (notificationEnabled) {
+        await disableNotifications()
+      } else {
+        await enableNotifications()
+      }
+    } catch (error) {
+      console.error('通知切替エラー:', error)
+      alert(`通知設定の切り替えに失敗しました:\n${error.message}`)
+    } finally {
+      setNotificationBusy(false)
+    }
+  }
+
+  const notificationHelpSteps = [
+    '右上の鈴ボタンを押して通知をONにします。',
+    'ブラウザの確認が出たら「許可」を選びます。',
+    'ブロック済みの場合は、鍵アイコンやサイト情報から通知を許可してください。',
+  ]
+
+  const safariInstallSteps = isIosDevice()
+    ? [
+        'Safariの共有ボタンから「ホーム画面に追加」を選びます。',
+        '追加したアイコンからアプリを開きます。',
+        'アプリ側で鈴ボタンを押して通知をONにします。',
+      ]
+    : []
+
+  useEffect(() => {
+    if (!session || typeof window === 'undefined') return
+    if (!('Notification' in window)) return
+
+    let unsubscribe = () => {}
+    let active = true
+
+    const attachForegroundListener = async () => {
+      unsubscribe = await subscribeForegroundNotifications((payload) => {
+        if (!active) return
+        if (Notification.permission !== 'granted') return
+
+        const title = payload.notification?.title || '予定の開始時刻です'
+        const body = payload.notification?.body || '開始時間になった予定があります。'
+        setNotificationBadgeCount((current) => {
+          const next = current + 1
+          setBrowserBadge(next).catch((error) => {
+            console.error('バッジ設定エラー:', error)
+          })
+          return next
+        })
+        const notification = new Notification(title, { body })
+        notification.onclick = () => {
+          setNotificationBadgeCount((current) => {
+            const next = Math.max(current - 1, 0)
+            setBrowserBadge(next).catch((error) => {
+              console.error('バッジ減算エラー:', error)
+            })
+            return next
+          })
+          if (window.focus) {
+            window.focus()
+          }
+          notification.close()
+        }
+      })
+    }
+
+    attachForegroundListener().catch((error) => {
+      console.error('フォアグラウンド通知購読エラー:', error)
+    })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [session])
+
+  useEffect(() => {
+    if (!session || typeof window === 'undefined' || !navigator.serviceWorker) return
+
+    const handleMessage = (event) => {
+      if (!event.data) return
+
+      if (event.data.type === 'badge-count') {
+        const nextCount = Math.max(Number(event.data.count || 0), 0)
+        setNotificationBadgeCount(nextCount)
+        setBrowserBadge(nextCount).catch((error) => {
+          console.error('通知件数同期エラー:', error)
+        })
+        return
+      }
+
+      if (event.data.type === 'notification-clicked') {
+        navigator.serviceWorker.ready.then((registration) => {
+          if (registration.active) {
+            registration.active.postMessage({ type: 'get-badge-count' })
+          }
+        }).catch((error) => {
+          console.error('通知件数再取得エラー:', error)
+        })
+      }
+    }
+
+    navigator.serviceWorker.addEventListener('message', handleMessage)
+
+    navigator.serviceWorker.ready.then((registration) => {
+      if (registration.active) {
+        registration.active.postMessage({ type: 'get-badge-count' })
+      }
+    }).catch((error) => {
+      console.error('通知件数取得エラー:', error)
+    })
+
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', handleMessage)
+    }
+  }, [session])
+
+  useEffect(() => {
+    if (!session || typeof document === 'undefined') return
+    document.title = notificationBadgeCount > 0
+      ? `(${notificationBadgeCount}) スケジュール`
+      : 'スケジュール'
+  }, [session, notificationBadgeCount])
 
   const weekDates = useMemo(() => {
     const start = getWeekStart(selectedDate)
@@ -718,6 +1042,79 @@ function App() {
 
             <div style={styles.userArea}>
               <span style={styles.userEmail}>{session.email}</span>
+              <div style={styles.notificationControls}>
+                <button
+                  type="button"
+                  style={{
+                    ...styles.notificationButton,
+                    ...(notificationEnabled ? styles.notificationButtonOn : styles.notificationButtonOff),
+                    ...(notificationBusy ? styles.notificationButtonBusy : {}),
+                  }}
+                  onClick={toggleNotifications}
+                  disabled={notificationBusy}
+                  aria-label={notificationEnabled ? '通知をオフにする' : '通知をオンにする'}
+                  title={notificationEnabled ? '通知をオフにする' : '通知をオンにする'}
+                >
+                  {notificationEnabled ? <Bell size={16} /> : <BellOff size={16} />}
+                  <span>{notificationBusy ? '処理中' : notificationEnabled ? '通知ON' : '通知OFF'}</span>
+                  {notificationBadgeCount > 0 && (
+                    <span style={styles.notificationCountBadge}>{notificationBadgeCount}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  style={styles.notificationHelpButton}
+                  onClick={() => setNotificationHelpOpen((current) => !current)}
+                  aria-expanded={notificationHelpOpen}
+                  aria-label="通知の設定方法を表示"
+                  title="通知の設定方法"
+                >
+                  設定方法
+                </button>
+                {notificationHelpOpen && (
+                  <div style={styles.notificationHelpPanel} role="dialog" aria-label="通知の設定方法">
+                    <div style={styles.notificationHelpHeader}>
+                      <strong style={styles.notificationHelpTitle}>通知を有効にする手順</strong>
+                      <button
+                        type="button"
+                        style={styles.notificationHelpClose}
+                        onClick={() => setNotificationHelpOpen(false)}
+                        aria-label="設定方法を閉じる"
+                      >
+                        ×
+                      </button>
+                    </div>
+                    {notificationBadgeCount > 0 && (
+                      <div style={styles.notificationCountLabel}>
+                      未読 {notificationBadgeCount}
+                      </div>
+                    )}
+                    <ol style={styles.notificationHelpList}>
+                      {notificationHelpSteps.map((step) => (
+                        <li key={step} style={styles.notificationHelpItem}>{step}</li>
+                      ))}
+                    </ol>
+                    {safariInstallSteps.length > 0 && (
+                      <div style={styles.notificationHelpNote}>
+                        <strong>iPhone / Safari の場合</strong>
+                        <ol style={{ ...styles.notificationHelpList, marginTop: '6px' }}>
+                          {safariInstallSteps.map((step) => (
+                            <li key={step} style={styles.notificationHelpItem}>{step}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+                    {notificationPermission === 'denied' && (
+                      <div style={styles.notificationHelpNote}>
+                        現在はブラウザでブロック中です。サイト情報 → 通知 → 許可 に変更してください。
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {notificationPermission === 'denied' && (
+                <span style={styles.notificationNotice}>通知はブラウザ設定でブロックされています。</span>
+              )}
               <button type="button" style={styles.logoutButton} onClick={() => signOut(auth)}>
                 <LogOut size={16} /> ログアウト
               </button>
@@ -1275,6 +1672,127 @@ const styles = {
     padding: '8px 12px',
     borderRadius: '10px',
     cursor: 'pointer',
+  },
+  notificationButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: '1px solid #d9e2f2',
+    background: '#ffffff',
+    color: '#334155',
+    padding: '8px 12px',
+    borderRadius: '10px',
+    cursor: 'pointer',
+  },
+  notificationButtonOn: {
+    borderColor: '#93c5fd',
+    background: '#eff6ff',
+    color: '#1d4ed8',
+  },
+  notificationButtonOff: {
+    background: '#ffffff',
+  },
+  notificationButtonBusy: {
+    opacity: 0.7,
+    cursor: 'wait',
+  },
+  notificationCountBadge: {
+    minWidth: '18px',
+    height: '18px',
+    padding: '0 5px',
+    borderRadius: '999px',
+    background: '#dc2626',
+    color: '#fff',
+    fontSize: '11px',
+    fontWeight: 700,
+    lineHeight: '18px',
+    textAlign: 'center',
+  },
+  notificationControls: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  notificationHelpButton: {
+    border: '1px solid #d9e2f2',
+    background: '#ffffff',
+    color: '#64748b',
+    borderRadius: '999px',
+    padding: '6px 10px',
+    fontSize: '12px',
+    cursor: 'pointer',
+  },
+  notificationHelpPanel: {
+    position: 'absolute',
+    top: 'calc(100% + 8px)',
+    right: '0',
+    width: '280px',
+    background: '#ffffff',
+    border: '1px solid #dbeafe',
+    borderRadius: '12px',
+    boxShadow: '0 14px 32px rgba(15, 23, 42, 0.16)',
+    padding: '12px',
+    zIndex: 20,
+  },
+  notificationHelpHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  notificationHelpTitle: {
+    fontSize: '13px',
+    color: '#0f172a',
+  },
+  notificationCountLabel: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: '8px',
+    padding: '4px 8px',
+    borderRadius: '999px',
+    background: '#eff6ff',
+    color: '#1d4ed8',
+    fontSize: '12px',
+    fontWeight: 700,
+  },
+  notificationHelpClose: {
+    width: '24px',
+    height: '24px',
+    borderRadius: '999px',
+    border: '1px solid #d9e2f2',
+    background: '#f8fbff',
+    color: '#334155',
+    cursor: 'pointer',
+    lineHeight: 1,
+  },
+  notificationHelpList: {
+    margin: '0',
+    paddingLeft: '18px',
+    color: '#334155',
+    fontSize: '12px',
+    lineHeight: 1.6,
+  },
+  notificationHelpItem: {
+    marginBottom: '4px',
+  },
+  notificationHelpNote: {
+    marginTop: '8px',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    background: '#fef3c7',
+    border: '1px solid #fde68a',
+    color: '#92400e',
+    fontSize: '12px',
+    lineHeight: 1.5,
+  },
+  notificationNotice: {
+    color: '#b45309',
+    fontSize: '12px',
+    whiteSpace: 'nowrap',
   },
   main: {
     display: 'flex',
