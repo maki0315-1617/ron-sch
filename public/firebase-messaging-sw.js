@@ -87,6 +87,13 @@ const decrementBadgeCount = async () => {
   });
 };
 
+const clearBadgeCount = async () => {
+  return withBadgeLock(async () => {
+    await writeBadgeCount(0);
+    return 0;
+  });
+};
+
 messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || 'スケジュール通知';
   const body = payload.notification?.body || '予定の開始時間です。';
@@ -126,7 +133,22 @@ self.addEventListener('notificationclick', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (!event.data || event.data.type !== 'get-badge-count') return;
+  if (!event.data) return;
+
+  if (event.data.type === 'clear-badge-count') {
+    event.waitUntil((async () => {
+      const badgeCount = await clearBadgeCount().catch(() => 0);
+      if ('clearAppBadge' in self.registration) {
+        await self.registration.clearAppBadge().catch(() => {});
+      }
+      if (event.source) {
+        event.source.postMessage({ type: 'badge-count', count: badgeCount });
+      }
+    })());
+    return;
+  }
+
+  if (event.data.type !== 'get-badge-count') return;
 
   event.waitUntil((async () => {
     const badgeCount = await readBadgeCount().catch(() => 0);

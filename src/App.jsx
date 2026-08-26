@@ -158,10 +158,22 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!session || typeof window === 'undefined') return
+    if (!session) {
+      clearNotificationBadge().catch((error) => {
+        console.error('ログアウト時の通知バッジクリアエラー:', error)
+      })
+      setNotificationEnabled(false)
+      setNotificationPermission(typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported')
+      return
+    }
+
+    if (typeof window === 'undefined') return
     if (!('Notification' in window) || !('serviceWorker' in navigator)) {
       setNotificationEnabled(false)
       setNotificationPermission('unsupported')
+      clearNotificationBadge().catch((error) => {
+        console.error('通知未対応時のバッジクリアエラー:', error)
+      })
       return
     }
 
@@ -173,6 +185,7 @@ function App() {
       if (Notification.permission !== 'granted') {
         if (!cancelled) {
           setNotificationEnabled(false)
+          await clearNotificationBadge()
         }
         return
       }
@@ -181,6 +194,7 @@ function App() {
       if (!storedToken) {
         if (!cancelled) {
           setNotificationEnabled(false)
+          await clearNotificationBadge()
         }
         return
       }
@@ -191,6 +205,7 @@ function App() {
       if (!tokenDoc.exists()) {
         window.localStorage.removeItem(notificationTokenKey(session.uid))
         setNotificationEnabled(false)
+        await clearNotificationBadge()
         return
       }
 
@@ -215,7 +230,9 @@ function App() {
     loadNotificationState().catch((error) => {
       console.error('通知状態の取得エラー:', error)
     })
-    setNotificationBadgeCount(0)
+    clearNotificationBadge().catch((error) => {
+      console.error('通知バッジ初期化エラー:', error)
+    })
 
     return () => {
       cancelled = true
@@ -244,6 +261,18 @@ function App() {
   const clearNotificationBadge = async () => {
     setNotificationBadgeCount(0)
     await setBrowserBadge(0)
+
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+
+    try {
+      const registration = await navigator.serviceWorker.ready
+      const targetWorker = navigator.serviceWorker.controller || registration.active
+      if (targetWorker) {
+        targetWorker.postMessage({ type: 'clear-badge-count' })
+      }
+    } catch (error) {
+      console.warn('通知バッジの明示クリアに失敗しました:', error)
+    }
   }
 
   const enableNotifications = async () => {
