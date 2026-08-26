@@ -145,7 +145,7 @@ function App() {
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const holdTimerRef = useRef(null)
   const notificationRegistrationRef = useRef(null)
-  const lastAppliedBadgeCountRef = useRef(null)
+  const lastAppliedBrowserBadgeRef = useRef(null)
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
   const daySwipeRef = useRef(null)
@@ -159,22 +159,10 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!session) {
-      clearNotificationBadge().catch((error) => {
-        console.error('ログアウト時の通知バッジクリアエラー:', error)
-      })
-      setNotificationEnabled(false)
-      setNotificationPermission(typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported')
-      return
-    }
-
-    if (typeof window === 'undefined') return
+    if (!session || typeof window === 'undefined') return
     if (!('Notification' in window) || !('serviceWorker' in navigator)) {
       setNotificationEnabled(false)
       setNotificationPermission('unsupported')
-      clearNotificationBadge().catch((error) => {
-        console.error('通知未対応時のバッジクリアエラー:', error)
-      })
       return
     }
 
@@ -186,7 +174,6 @@ function App() {
       if (Notification.permission !== 'granted') {
         if (!cancelled) {
           setNotificationEnabled(false)
-          await clearNotificationBadge()
         }
         return
       }
@@ -195,7 +182,6 @@ function App() {
       if (!storedToken) {
         if (!cancelled) {
           setNotificationEnabled(false)
-          await clearNotificationBadge()
         }
         return
       }
@@ -206,7 +192,6 @@ function App() {
       if (!tokenDoc.exists()) {
         window.localStorage.removeItem(notificationTokenKey(session.uid))
         setNotificationEnabled(false)
-        await clearNotificationBadge()
         return
       }
 
@@ -231,9 +216,7 @@ function App() {
     loadNotificationState().catch((error) => {
       console.error('通知状態の取得エラー:', error)
     })
-    clearNotificationBadge().catch((error) => {
-      console.error('通知バッジ初期化エラー:', error)
-    })
+    setNotificationBadgeCount(0)
 
     return () => {
       cancelled = true
@@ -241,72 +224,31 @@ function App() {
   }, [session])
 
   const getNotificationRegistration = async () => {
-    if (!('serviceWorker' in navigator)) {
-      throw new Error('このブラウザではService Workerを利用できません。')
-    }
-
     if (notificationRegistrationRef.current) return notificationRegistrationRef.current
     const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js')
     notificationRegistrationRef.current = registration
     return registration
   }
 
-  const syncBadgeWithServiceWorker = async (count) => {
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
-
-    try {
-      const registration = await navigator.serviceWorker.ready
-      const targetWorker = navigator.serviceWorker.controller || registration.active
-      if (targetWorker) {
-        targetWorker.postMessage({
-          type: 'sync-badge-count',
-          count: Math.max(Number(count) || 0, 0),
-        })
-      }
-    } catch (error) {
-      console.warn('通知バッジ同期エラー:', error)
-    }
-  }
-
   const setBrowserBadge = async (count) => {
     const safeCount = Math.max(Number(count) || 0, 0)
     if (typeof navigator === 'undefined') return
+    if (lastAppliedBrowserBadgeRef.current === safeCount) return
+    lastAppliedBrowserBadgeRef.current = safeCount
 
-    if (lastAppliedBadgeCountRef.current === safeCount) {
-      return
-    }
-    lastAppliedBadgeCountRef.current = safeCount
-
-    const hasBadgingApi = typeof navigator.setAppBadge === 'function' || typeof navigator.clearAppBadge === 'function'
-    if (hasBadgingApi) {
-      if (safeCount > 0 && typeof navigator.setAppBadge === 'function') {
+    if ('setAppBadge' in navigator) {
+      if (safeCount > 0) {
         await navigator.setAppBadge(safeCount)
-      } else if (typeof navigator.clearAppBadge === 'function') {
+      } else if ('clearAppBadge' in navigator) {
         await navigator.clearAppBadge()
       }
-    }
-
-    if (isStandaloneDisplay()) {
-      await syncBadgeWithServiceWorker(safeCount)
     }
   }
 
   const clearNotificationBadge = async () => {
     setNotificationBadgeCount(0)
-    lastAppliedBadgeCountRef.current = null
+    lastAppliedBrowserBadgeRef.current = null
     await setBrowserBadge(0)
-
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
-
-    try {
-      const registration = await navigator.serviceWorker.ready
-      const targetWorker = navigator.serviceWorker.controller || registration.active
-      if (targetWorker) {
-        targetWorker.postMessage({ type: 'clear-badge-count' })
-      }
-    } catch (error) {
-      console.warn('通知バッジの明示クリアに失敗しました:', error)
-    }
   }
 
   const enableNotifications = async () => {
@@ -511,14 +453,9 @@ function App() {
   }, [session, notificationBadgeCount])
 
   useEffect(() => {
-    if (!session || typeof window === 'undefined' || !('serviceWorker' in navigator) || !isStandaloneDisplay()) return
-
-    getNotificationRegistration().then(() => {
-      setBrowserBadge(notificationBadgeCount).catch((error) => {
-        console.error('ホーム画面バッジ更新エラー:', error)
-      })
-    }).catch((error) => {
-      console.error('ホーム画面用Service Worker登録エラー:', error)
+    if (!session || typeof window === 'undefined' || !isStandaloneDisplay()) return
+    setBrowserBadge(notificationBadgeCount).catch((error) => {
+      console.error('ホーム画面バッジ更新エラー:', error)
     })
   }, [session, notificationBadgeCount])
 
