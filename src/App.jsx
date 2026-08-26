@@ -240,6 +240,10 @@ function App() {
   }, [session])
 
   const getNotificationRegistration = async () => {
+    if (!('serviceWorker' in navigator)) {
+      throw new Error('このブラウザではService Workerを利用できません。')
+    }
+
     if (notificationRegistrationRef.current) return notificationRegistrationRef.current
     const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js')
     notificationRegistrationRef.current = registration
@@ -500,11 +504,16 @@ function App() {
   }, [session, notificationBadgeCount])
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !isStandaloneDisplay()) return
-    setBrowserBadge(notificationBadgeCount).catch((error) => {
-      console.error('ホーム画面バッジ更新エラー:', error)
+    if (!session || typeof window === 'undefined' || !('serviceWorker' in navigator) || !isStandaloneDisplay()) return
+
+    getNotificationRegistration().then(() => {
+      setBrowserBadge(notificationBadgeCount).catch((error) => {
+        console.error('ホーム画面バッジ更新エラー:', error)
+      })
+    }).catch((error) => {
+      console.error('ホーム画面用Service Worker登録エラー:', error)
     })
-  }, [notificationBadgeCount])
+  }, [session, notificationBadgeCount])
 
   const weekDates = useMemo(() => {
     const start = getWeekStart(selectedDate)
