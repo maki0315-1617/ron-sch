@@ -148,6 +148,22 @@ self.addEventListener('message', (event) => {
     return;
   }
 
+  if (event.data.type === 'sync-badge-count') {
+    event.waitUntil((async () => {
+      const safeCount = Math.max(Number(event.data.count) || 0, 0);
+      const badgeCount = await writeBadgeCount(safeCount).catch(() => safeCount);
+      if (badgeCount > 0 && 'setAppBadge' in self.registration) {
+        await self.registration.setAppBadge(badgeCount).catch(() => {});
+      } else if ('clearAppBadge' in self.registration) {
+        await self.registration.clearAppBadge().catch(() => {});
+      }
+      if (event.source) {
+        event.source.postMessage({ type: 'badge-count', count: badgeCount });
+      }
+    })());
+    return;
+  }
+
   if (event.data.type !== 'get-badge-count') return;
 
   event.waitUntil((async () => {
