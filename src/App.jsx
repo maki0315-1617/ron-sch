@@ -220,7 +220,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [session])
+  }, [session?.uid])
 
   const getNotificationRegistration = async () => {
     if (notificationRegistrationRef.current) return notificationRegistrationRef.current
@@ -440,7 +440,7 @@ function App() {
       active = false
       unsubscribe()
     }
-  }, [session])
+  }, [session?.uid])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined' || !navigator.serviceWorker) return
@@ -484,14 +484,14 @@ function App() {
     return () => {
       navigator.serviceWorker.removeEventListener('message', handleMessage)
     }
-  }, [session])
+  }, [session?.uid])
 
   useEffect(() => {
     if (!session || typeof document === 'undefined') return
     document.title = notificationBadgeCount > 0
       ? `(${notificationBadgeCount}) スケジュール`
       : 'スケジュール'
-  }, [session, notificationBadgeCount])
+  }, [session?.uid, notificationBadgeCount])
 
   useEffect(() => {
     if (!session || typeof navigator === 'undefined') return
@@ -500,7 +500,7 @@ function App() {
     setBrowserBadge(notificationBadgeCount).catch((error) => {
       console.error('ホーム画面バッジ更新エラー:', error)
     })
-  }, [session, notificationBadgeCount])
+  }, [session?.uid, notificationBadgeCount])
 
   const weekDates = useMemo(() => {
     const start = getWeekStart(selectedDate)
