@@ -97,6 +97,10 @@ const clearBadgeCount = async () => {
 const syncBadgeCount = async (count) => {
   return withBadgeLock(async () => {
     const safeCount = Math.max(Number(count) || 0, 0);
+    const currentCount = await readBadgeCount().catch(() => 0);
+    if (currentCount === safeCount) {
+      return safeCount;
+    }
     await writeBadgeCount(safeCount);
     return safeCount;
   });
@@ -159,13 +163,14 @@ self.addEventListener('message', (event) => {
   if (event.data.type === 'sync-badge-count') {
     event.waitUntil((async () => {
       const badgeCount = await syncBadgeCount(event.data.count).catch(() => 0);
-      if (badgeCount > 0 && 'setAppBadge' in self.registration) {
-        await self.registration.setAppBadge(badgeCount).catch(() => {});
+      const currentBadgeCount = await readBadgeCount().catch(() => badgeCount);
+      if (currentBadgeCount > 0 && 'setAppBadge' in self.registration) {
+        await self.registration.setAppBadge(currentBadgeCount).catch(() => {});
       } else if ('clearAppBadge' in self.registration) {
         await self.registration.clearAppBadge().catch(() => {});
       }
       if (event.source) {
-        event.source.postMessage({ type: 'badge-count', count: badgeCount });
+        event.source.postMessage({ type: 'badge-count', count: currentBadgeCount });
       }
     })());
     return;

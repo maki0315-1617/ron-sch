@@ -145,6 +145,7 @@ function App() {
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const holdTimerRef = useRef(null)
   const notificationRegistrationRef = useRef(null)
+  const lastAppliedBadgeCountRef = useRef(null)
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
   const daySwipeRef = useRef(null)
@@ -271,6 +272,11 @@ function App() {
     const safeCount = Math.max(Number(count) || 0, 0)
     if (typeof navigator === 'undefined') return
 
+    if (lastAppliedBadgeCountRef.current === safeCount) {
+      return
+    }
+    lastAppliedBadgeCountRef.current = safeCount
+
     const hasBadgingApi = typeof navigator.setAppBadge === 'function' || typeof navigator.clearAppBadge === 'function'
     if (hasBadgingApi) {
       if (safeCount > 0 && typeof navigator.setAppBadge === 'function') {
@@ -287,6 +293,7 @@ function App() {
 
   const clearNotificationBadge = async () => {
     setNotificationBadgeCount(0)
+    lastAppliedBadgeCountRef.current = null
     await setBrowserBadge(0)
 
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
