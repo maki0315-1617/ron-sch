@@ -233,6 +233,8 @@ function App() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
     try {
+      const existing = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js')
+      if (!existing) return
       const registration = await navigator.serviceWorker.ready
       const targetWorker = navigator.serviceWorker.controller || registration.active
       if (targetWorker) {
@@ -268,6 +270,8 @@ function App() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
     try {
+      const existing = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js')
+      if (!existing) return
       const registration = await navigator.serviceWorker.ready
       const targetWorker = navigator.serviceWorker.controller || registration.active
       if (targetWorker) {
@@ -466,10 +470,13 @@ function App() {
 
     navigator.serviceWorker.addEventListener('message', handleMessage)
 
-    navigator.serviceWorker.ready.then((registration) => {
-      if (registration.active) {
-        registration.active.postMessage({ type: 'get-badge-count' })
-      }
+    navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js').then((existing) => {
+      if (!existing) return
+      return navigator.serviceWorker.ready.then((registration) => {
+        if (registration.active) {
+          registration.active.postMessage({ type: 'get-badge-count' })
+        }
+      })
     }).catch((error) => {
       console.error('通知件数取得エラー:', error)
     })
@@ -515,10 +522,12 @@ function App() {
       const startKey = formatDateKey(weekDates[0])
       const endKey = formatDateKey(weekDates[6])
 
-      // user_id のみで検索して、日付フィルタリングはクライアント側で行う
+      // user_id + date 範囲でサーバー側に絞り込ませる（composite index 使用）
       const q = query(
         collection(db, 'schedule_items'),
-        where('user_id', '==', session.uid)
+        where('user_id', '==', session.uid),
+        where('date', '>=', startKey),
+        where('date', '<=', endKey)
       )
 
       const snapshot = await getDocs(q)
@@ -528,25 +537,22 @@ function App() {
         const item = docSnap.data()
         const dateKey = item.date
 
-        // クライアント側で日付範囲をフィルタリング
-        if (dateKey >= startKey && dateKey <= endKey) {
-          if (!nextMap[dateKey]) {
-            nextMap[dateKey] = []
-          }
-
-          nextMap[dateKey].push({
-            id: item.id || docSnap.id,
-            title: item.title || '予定',
-            time: item.time || '09:00',
-            endTime: item.endTime || '10:00',
-            details: item.details || '',
-            completed: item.completed === true,
-            priority: item.priority || 'normal',
-            date: dateKey,
-            relatedPrev: item.relatedPrev || null,
-            relatedNext: item.relatedNext || null,
-          })
+        if (!nextMap[dateKey]) {
+          nextMap[dateKey] = []
         }
+
+        nextMap[dateKey].push({
+          id: item.id || docSnap.id,
+          title: item.title || '予定',
+          time: item.time || '09:00',
+          endTime: item.endTime || '10:00',
+          details: item.details || '',
+          completed: item.completed === true,
+          priority: item.priority || 'normal',
+          date: dateKey,
+          relatedPrev: item.relatedPrev || null,
+          relatedNext: item.relatedNext || null,
+        })
       })
 
       Object.keys(nextMap).forEach((key) => {
