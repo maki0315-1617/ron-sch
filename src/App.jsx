@@ -251,6 +251,13 @@ function App() {
     await setBrowserBadge(0)
   }
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    clearNotificationBadge().catch((error) => {
+      console.error('起動時のバッジクリアエラー:', error)
+    })
+  }, [])
+
   const enableNotifications = async () => {
     if (!session) return
     if (!('Notification' in window) || !('serviceWorker' in navigator)) {
