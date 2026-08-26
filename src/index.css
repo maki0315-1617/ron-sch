@@ -73,12 +73,6 @@ img {
     font-size: 15px !important;
   }
 
-  .week-day-tile .week-day-title-chip {
-    font-size: 8px !important;
-    padding: 1px 3px !important;
-    border-radius: 4px !important;
-  }
-
   .schedule-modal {
     max-height: calc(100vh - 24px);
     overflow-y: auto;

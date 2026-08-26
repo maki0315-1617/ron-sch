@@ -150,6 +150,7 @@ function App() {
   const weekTouchRef = useRef(null)
   const daySwipeRef = useRef(null)
   const dayTouchRef = useRef(null)
+  const loadedWeeksRef = useRef(new Set())
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -157,6 +158,12 @@ function App() {
     })
     return () => unsubscribe()
   }, [])
+
+  useEffect(() => {
+    // アカウント切り替え時は週キャッシュを破棄して再取得させる
+    loadedWeeksRef.current = new Set()
+    setScheduleMap({})
+  }, [session?.uid])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -525,6 +532,8 @@ function App() {
     return Array.from({ length: 7 }, (_, index) => addDays(start, index))
   }, [selectedDate])
 
+  const weekStartKey = useMemo(() => formatDateKey(getWeekStart(selectedDate)), [selectedDate])
+
   const selectedKey = formatDateKey(selectedDate)
 
   const selectedItems = useMemo(() => {
@@ -539,6 +548,7 @@ function App() {
     try {
       const startKey = formatDateKey(weekDates[0])
       const endKey = formatDateKey(weekDates[6])
+      const rangeKeys = weekDates.map((date) => formatDateKey(date))
 
       // user_id + date 範囲でサーバー側に絞り込ませる（composite index 使用）
       const q = query(
@@ -577,7 +587,15 @@ function App() {
         nextMap[key].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
       })
 
-      setScheduleMap(nextMap)
+      // 取得済みの他の週のデータは保持したまま、今回の週の分だけ差し替える
+      setScheduleMap((current) => {
+        const merged = { ...current }
+        rangeKeys.forEach((dateKey) => {
+          merged[dateKey] = nextMap[dateKey] || []
+        })
+        return merged
+      })
+      loadedWeeksRef.current.add(startKey)
     } catch (error) {
       console.error('週予定取得エラー:', error)
       alert(`スケジュール読み込みエラー:\n${error.message}`)
@@ -587,10 +605,11 @@ function App() {
   }
 
   useEffect(() => {
-    if (session) {
-      fetchWeekSchedule()
-    }
-  }, [session?.uid, selectedDate])
+    if (!session) return
+    const weekStartKey = formatDateKey(getWeekStart(selectedDate))
+    if (loadedWeeksRef.current.has(weekStartKey)) return
+    fetchWeekSchedule()
+  }, [session?.uid, weekStartKey])
 
   // 画面表示を即時反映するための楽観的更新（Firestore への書き込みは呼び出し側で実施済み）
   const upsertScheduleItemLocal = (item) => {
@@ -1270,8 +1289,6 @@ function App() {
                   const key = formatDateKey(date)
                   const list = scheduleMap[key] || []
                   const isSelected = key === selectedKey
-                  const visibleItems = list.slice(0, 2)
-                  const hiddenCount = list.length - visibleItems.length
 
                   return (
                     <button
@@ -1290,20 +1307,7 @@ function App() {
                         {dayNames[date.getDay()]}
                       </span>
                       <strong className="week-day-number" style={styles.dayNumber}>{date.getDate()}</strong>
-                      {list.length === 0 ? (
-                        <span style={styles.dayMeta}></span>
-                      ) : (
-                        <div style={styles.dayTitleList}>
-                          {visibleItems.map((scheduleItem) => (
-                            <span key={scheduleItem.id} className="week-day-title-chip" style={styles.dayTitleChip}>
-                              {scheduleItem.title}
-                            </span>
-                          ))}
-                          {hiddenCount > 0 && (
-                            <span style={styles.dayTitleMore}>{`+${hiddenCount}`}</span>
-                          )}
-                        </div>
-                      )}
+                      <span style={styles.dayMeta}>{list.length ? `${list.length}件` : ''}</span>
                     </button>
                   )
                 })}
@@ -1950,13 +1954,13 @@ const styles = {
   dayButton: {
     border: '1px solid #d9e2f2',
     borderRadius: '14px',
-    minHeight: '118px',
-    padding: '10px 6px',
+    minHeight: '110px',
+    padding: '10px 8px',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: '4px',
+    justifyContent: 'center',
+    gap: '6px',
     cursor: 'pointer',
   },
   dayLabel: {
@@ -1970,31 +1974,6 @@ const styles = {
   dayMeta: {
     fontSize: '11px',
     color: '#64748b',
-  },
-  dayTitleList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '3px',
-    width: '100%',
-    alignItems: 'stretch',
-  },
-  dayTitleChip: {
-    display: 'block',
-    width: '100%',
-    fontSize: '10.5px',
-    lineHeight: 1.3,
-    color: '#1d4ed8',
-    background: '#e8f0ff',
-    borderRadius: '5px',
-    padding: '2px 4px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  dayTitleMore: {
-    fontSize: '10px',
-    color: '#64748b',
-    textAlign: 'center',
   },
   scheduleSection: {
     background: '#ffffff',
