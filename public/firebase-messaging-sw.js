@@ -94,6 +94,14 @@ const clearBadgeCount = async () => {
   });
 };
 
+const syncBadgeCount = async (count) => {
+  return withBadgeLock(async () => {
+    const safeCount = Math.max(Number(count) || 0, 0);
+    await writeBadgeCount(safeCount);
+    return safeCount;
+  });
+};
+
 messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || 'スケジュール通知';
   const body = payload.notification?.body || '予定の開始時間です。';
@@ -139,6 +147,21 @@ self.addEventListener('message', (event) => {
     event.waitUntil((async () => {
       const badgeCount = await clearBadgeCount().catch(() => 0);
       if ('clearAppBadge' in self.registration) {
+        await self.registration.clearAppBadge().catch(() => {});
+      }
+      if (event.source) {
+        event.source.postMessage({ type: 'badge-count', count: badgeCount });
+      }
+    })());
+    return;
+  }
+
+  if (event.data.type === 'sync-badge-count') {
+    event.waitUntil((async () => {
+      const badgeCount = await syncBadgeCount(event.data.count).catch(() => 0);
+      if (badgeCount > 0 && 'setAppBadge' in self.registration) {
+        await self.registration.setAppBadge(badgeCount).catch(() => {});
+      } else if ('clearAppBadge' in self.registration) {
         await self.registration.clearAppBadge().catch(() => {});
       }
       if (event.source) {

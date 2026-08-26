@@ -246,16 +246,36 @@ function App() {
     return registration
   }
 
+  const syncBadgeWithServiceWorker = async (count) => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+
+    try {
+      const registration = await navigator.serviceWorker.ready
+      const targetWorker = navigator.serviceWorker.controller || registration.active
+      if (targetWorker) {
+        targetWorker.postMessage({
+          type: 'sync-badge-count',
+          count: Math.max(Number(count) || 0, 0),
+        })
+      }
+    } catch (error) {
+      console.warn('通知バッジ同期エラー:', error)
+    }
+  }
+
   const setBrowserBadge = async (count) => {
+    const safeCount = Math.max(Number(count) || 0, 0)
     if (typeof navigator === 'undefined') return
 
     if ('setAppBadge' in navigator) {
-      if (count > 0) {
-        await navigator.setAppBadge(count)
+      if (safeCount > 0) {
+        await navigator.setAppBadge(safeCount)
       } else if ('clearAppBadge' in navigator) {
         await navigator.clearAppBadge()
       }
     }
+
+    await syncBadgeWithServiceWorker(safeCount)
   }
 
   const clearNotificationBadge = async () => {
