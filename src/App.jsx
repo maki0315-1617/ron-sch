@@ -145,7 +145,6 @@ function App() {
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const holdTimerRef = useRef(null)
   const notificationRegistrationRef = useRef(null)
-  const lastAppliedBrowserBadgeRef = useRef(null)
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
   const daySwipeRef = useRef(null)
@@ -231,14 +230,11 @@ function App() {
   }
 
   const setBrowserBadge = async (count) => {
-    const safeCount = Math.max(Number(count) || 0, 0)
     if (typeof navigator === 'undefined') return
-    if (lastAppliedBrowserBadgeRef.current === safeCount) return
-    lastAppliedBrowserBadgeRef.current = safeCount
 
     if ('setAppBadge' in navigator) {
-      if (safeCount > 0) {
-        await navigator.setAppBadge(safeCount)
+      if (count > 0) {
+        await navigator.setAppBadge(count)
       } else if ('clearAppBadge' in navigator) {
         await navigator.clearAppBadge()
       }
@@ -247,8 +243,19 @@ function App() {
 
   const clearNotificationBadge = async () => {
     setNotificationBadgeCount(0)
-    lastAppliedBrowserBadgeRef.current = null
     await setBrowserBadge(0)
+
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+
+    try {
+      const registration = await navigator.serviceWorker.ready
+      const targetWorker = navigator.serviceWorker.controller || registration.active
+      if (targetWorker) {
+        targetWorker.postMessage({ type: 'clear-badge-count' })
+      }
+    } catch (error) {
+      console.warn('起動時のバッジクリアに失敗しました:', error)
+    }
   }
 
   useEffect(() => {
@@ -457,13 +464,6 @@ function App() {
     document.title = notificationBadgeCount > 0
       ? `(${notificationBadgeCount}) スケジュール`
       : 'スケジュール'
-  }, [session, notificationBadgeCount])
-
-  useEffect(() => {
-    if (!session || typeof window === 'undefined' || !isStandaloneDisplay()) return
-    setBrowserBadge(notificationBadgeCount).catch((error) => {
-      console.error('ホーム画面バッジ更新エラー:', error)
-    })
   }, [session, notificationBadgeCount])
 
   const weekDates = useMemo(() => {

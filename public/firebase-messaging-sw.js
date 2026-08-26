@@ -133,7 +133,22 @@ self.addEventListener('notificationclick', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (!event.data || event.data.type !== 'get-badge-count') return;
+  if (!event.data) return;
+
+  if (event.data.type === 'clear-badge-count') {
+    event.waitUntil((async () => {
+      const badgeCount = await clearBadgeCount().catch(() => 0);
+      if ('clearAppBadge' in self.registration) {
+        await self.registration.clearAppBadge().catch(() => {});
+      }
+      if (event.source) {
+        event.source.postMessage({ type: 'badge-count', count: badgeCount });
+      }
+    })());
+    return;
+  }
+
+  if (event.data.type !== 'get-badge-count') return;
 
   event.waitUntil((async () => {
     const badgeCount = await readBadgeCount().catch(() => 0);
