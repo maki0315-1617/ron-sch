@@ -145,6 +145,7 @@ function App() {
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const holdTimerRef = useRef(null)
   const notificationRegistrationRef = useRef(null)
+  const notificationToggleLockRef = useRef(false)
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
   const daySwipeRef = useRef(null)
@@ -363,7 +364,8 @@ function App() {
   }
 
   const toggleNotifications = async () => {
-    if (!session || notificationBusy) return
+    if (!session || notificationToggleLockRef.current) return
+    notificationToggleLockRef.current = true
 
     setNotificationBusy(true)
     try {
@@ -377,6 +379,7 @@ function App() {
       alert(`通知設定の切り替えに失敗しました:\n${error.message}`)
     } finally {
       setNotificationBusy(false)
+      notificationToggleLockRef.current = false
     }
   }
 
@@ -470,19 +473,34 @@ function App() {
 
     navigator.serviceWorker.addEventListener('message', handleMessage)
 
-    navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js').then((existing) => {
-      if (!existing) return
-      return navigator.serviceWorker.ready.then((registration) => {
-        if (registration.active) {
-          registration.active.postMessage({ type: 'get-badge-count' })
-        }
+    const requestBadgeCount = () => {
+      navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js').then((existing) => {
+        if (!existing) return
+        return navigator.serviceWorker.ready.then((registration) => {
+          if (registration.active) {
+            registration.active.postMessage({ type: 'get-badge-count' })
+          }
+        })
+      }).catch((error) => {
+        console.error('通知件数取得エラー:', error)
       })
-    }).catch((error) => {
-      console.error('通知件数取得エラー:', error)
-    })
+    }
+
+    requestBadgeCount()
+
+    // スリープ復帰やタブ復帰時に SW 側の実カウントと再同期する
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        requestBadgeCount()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', requestBadgeCount)
 
     return () => {
       navigator.serviceWorker.removeEventListener('message', handleMessage)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', requestBadgeCount)
     }
   }, [session?.uid])
 
@@ -572,7 +590,29 @@ function App() {
     if (session) {
       fetchWeekSchedule()
     }
-  }, [session, selectedDate])
+  }, [session?.uid, selectedDate])
+
+  // 画面表示を即時反映するための楽観的更新（Firestore への書き込みは呼び出し側で実施済み）
+  const upsertScheduleItemLocal = (item) => {
+    setScheduleMap((current) => {
+      const next = { ...current }
+      const existingList = next[item.date] || []
+      const filtered = existingList.filter((entry) => entry.id !== item.id)
+      const updatedList = [...filtered, item].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
+      next[item.date] = updatedList
+      return next
+    })
+  }
+
+  const removeScheduleItemLocal = (dateKey, itemId) => {
+    setScheduleMap((current) => {
+      const existingList = current[dateKey]
+      if (!existingList) return current
+      const next = { ...current }
+      next[dateKey] = existingList.filter((entry) => entry.id !== itemId)
+      return next
+    })
+  }
 
   const handleAuth = async (e) => {
     e.preventDefault()
@@ -651,8 +691,9 @@ function App() {
       }
 
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${itemId}`), item)
+      upsertScheduleItemLocal(item)
       setDetailDraft(null)
-      await fetchWeekSchedule()
+      fetchWeekSchedule()
     } catch (error) {
       console.error('予定保存エラー:', error)
       alert(`予定保存に失敗しました:\n${error.message}`)
@@ -683,7 +724,8 @@ function App() {
       }
 
       await deleteDoc(selectedRef)
-      await fetchWeekSchedule()
+      removeScheduleItemLocal(item.date, item.id)
+      fetchWeekSchedule()
     } catch (error) {
       console.error('予定削除エラー:', error)
       alert(`予定削除に失敗しました:\n${error.message}`)
@@ -739,7 +781,8 @@ function App() {
 
       const nextItem = { ...item, completed: !item.completed, user_id: session.uid }
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), nextItem)
-      await fetchWeekSchedule()
+      upsertScheduleItemLocal(nextItem)
+      fetchWeekSchedule()
     } catch (error) {
       console.error('完了状態更新エラー:', error)
       alert(`完了状態の更新に失敗しました:\n${error.message}`)
@@ -769,7 +812,7 @@ function App() {
       }
 
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${nextDateKey}_${newItemId}`), newItem)
-      await fetchWeekSchedule()
+      fetchWeekSchedule()
       alert(`${nextDateKey} に予定をコピーしました`)
     } catch (error) {
       console.error('予定コピーエラー:', error)
@@ -804,7 +847,7 @@ function App() {
 
         return setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
       }))
-      await fetchWeekSchedule()
+      fetchWeekSchedule()
       alert(`未来4週間に${targetDates.length}件の予定をコピーしました`)
     } catch (error) {
       console.error('未来4週間コピーエラー:', error)
@@ -899,7 +942,7 @@ function App() {
 
       await batch.commit()
       closeRelationDialog()
-      await fetchWeekSchedule()
+      fetchWeekSchedule()
       alert('関連付けを更新しました。')
     } catch (error) {
       console.error('関連付け更新エラー:', error)
@@ -928,7 +971,7 @@ function App() {
 
       await Promise.all(updates)
       closeRelationDialog()
-      await fetchWeekSchedule()
+      fetchWeekSchedule()
       alert('関連付けを解除しました。')
     } catch (error) {
       console.error('関連付け解除エラー:', error)
@@ -1227,11 +1270,14 @@ function App() {
                   const key = formatDateKey(date)
                   const list = scheduleMap[key] || []
                   const isSelected = key === selectedKey
+                  const visibleItems = list.slice(0, 2)
+                  const hiddenCount = list.length - visibleItems.length
 
                   return (
                     <button
                       type="button"
                       key={key}
+                      className="week-day-tile"
                       onClick={() => setSelectedDate(date)}
                       style={{
                         ...styles.dayButton,
@@ -1240,11 +1286,24 @@ function App() {
                         boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.16)' : '0 2px 6px rgba(15,23,42,0.04)',
                       }}
                     >
-                      <span style={{ ...styles.dayLabel, color: date.getDay() === 0 ? '#dc2626' : date.getDay() === 6 ? '#2563eb' : '#475569' }}>
+                      <span className="week-day-label" style={{ ...styles.dayLabel, color: date.getDay() === 0 ? '#dc2626' : date.getDay() === 6 ? '#2563eb' : '#475569' }}>
                         {dayNames[date.getDay()]}
                       </span>
-                      <strong style={styles.dayNumber}>{date.getDate()}</strong>
-                      <span style={styles.dayMeta}>{list.length ? `${list.length}件` : ''}</span>
+                      <strong className="week-day-number" style={styles.dayNumber}>{date.getDate()}</strong>
+                      {list.length === 0 ? (
+                        <span style={styles.dayMeta}></span>
+                      ) : (
+                        <div style={styles.dayTitleList}>
+                          {visibleItems.map((scheduleItem) => (
+                            <span key={scheduleItem.id} className="week-day-title-chip" style={styles.dayTitleChip}>
+                              {scheduleItem.title}
+                            </span>
+                          ))}
+                          {hiddenCount > 0 && (
+                            <span style={styles.dayTitleMore}>{`+${hiddenCount}`}</span>
+                          )}
+                        </div>
+                      )}
                     </button>
                   )
                 })}
@@ -1891,13 +1950,13 @@ const styles = {
   dayButton: {
     border: '1px solid #d9e2f2',
     borderRadius: '14px',
-    minHeight: '110px',
-    padding: '10px 8px',
+    minHeight: '118px',
+    padding: '10px 6px',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: '6px',
+    justifyContent: 'flex-start',
+    gap: '4px',
     cursor: 'pointer',
   },
   dayLabel: {
@@ -1911,6 +1970,31 @@ const styles = {
   dayMeta: {
     fontSize: '11px',
     color: '#64748b',
+  },
+  dayTitleList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+    width: '100%',
+    alignItems: 'stretch',
+  },
+  dayTitleChip: {
+    display: 'block',
+    width: '100%',
+    fontSize: '10.5px',
+    lineHeight: 1.3,
+    color: '#1d4ed8',
+    background: '#e8f0ff',
+    borderRadius: '5px',
+    padding: '2px 4px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  dayTitleMore: {
+    fontSize: '10px',
+    color: '#64748b',
+    textAlign: 'center',
   },
   scheduleSection: {
     background: '#ffffff',

@@ -58,6 +58,27 @@ img {
 }
 
 @media (max-width: 600px) {
+  .week-day-tile {
+    min-height: 84px !important;
+    padding: 6px 3px !important;
+    gap: 3px !important;
+    border-radius: 10px !important;
+  }
+
+  .week-day-tile .week-day-label {
+    font-size: 9.5px !important;
+  }
+
+  .week-day-tile .week-day-number {
+    font-size: 15px !important;
+  }
+
+  .week-day-tile .week-day-title-chip {
+    font-size: 8px !important;
+    padding: 1px 3px !important;
+    border-radius: 4px !important;
+  }
+
   .schedule-modal {
     max-height: calc(100vh - 24px);
     overflow-y: auto;
