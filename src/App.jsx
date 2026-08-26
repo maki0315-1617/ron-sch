@@ -267,15 +267,18 @@ function App() {
     const safeCount = Math.max(Number(count) || 0, 0)
     if (typeof navigator === 'undefined') return
 
-    if ('setAppBadge' in navigator) {
-      if (safeCount > 0) {
+    const hasBadgingApi = typeof navigator.setAppBadge === 'function' || typeof navigator.clearAppBadge === 'function'
+    if (hasBadgingApi) {
+      if (safeCount > 0 && typeof navigator.setAppBadge === 'function') {
         await navigator.setAppBadge(safeCount)
-      } else if ('clearAppBadge' in navigator) {
+      } else if (typeof navigator.clearAppBadge === 'function') {
         await navigator.clearAppBadge()
       }
     }
 
-    await syncBadgeWithServiceWorker(safeCount)
+    if (isStandaloneDisplay()) {
+      await syncBadgeWithServiceWorker(safeCount)
+    }
   }
 
   const clearNotificationBadge = async () => {
@@ -495,6 +498,13 @@ function App() {
       ? `(${notificationBadgeCount}) スケジュール`
       : 'スケジュール'
   }, [session, notificationBadgeCount])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !isStandaloneDisplay()) return
+    setBrowserBadge(notificationBadgeCount).catch((error) => {
+      console.error('ホーム画面バッジ更新エラー:', error)
+    })
+  }, [notificationBadgeCount])
 
   const weekDates = useMemo(() => {
     const start = getWeekStart(selectedDate)
