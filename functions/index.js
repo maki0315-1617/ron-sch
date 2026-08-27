@@ -173,15 +173,14 @@ exports.sendScheduleStartNotifications = onSchedule(
       const body = `${title} の開始時間です（${scheduledTime}）`;
       const message = {
         tokens,
-        notification: {
-          title: 'スケジュール通知',
-          body,
-        },
+        // notification フィールドを付けるとブラウザが自動表示し、
+        // SW 側の onBackgroundMessage(バッジ更新処理)が実行されなくなるため data-only にする
         data: {
           scheduleItemId: String(scheduleDoc.id),
           date: dateKey,
           time: scheduledTime,
           title: String(title),
+          body: String(body),
         },
         webpush: {
           fcmOptions: {

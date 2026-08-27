@@ -96,7 +96,7 @@ const clearBadgeCount = async () => {
 
 messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || 'スケジュール通知';
-  const body = payload.notification?.body || '予定の開始時間です。';
+  const body = payload.data?.body || payload.notification?.body || '予定の開始時間です。';
 
   incrementBadgeCount().then((badgeCount) => {
    if ('setAppBadge' in self.registration) {

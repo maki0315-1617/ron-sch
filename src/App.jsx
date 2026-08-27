@@ -416,8 +416,8 @@ function App() {
         if (!active) return
         if (Notification.permission !== 'granted') return
 
-        const title = payload.notification?.title || '予定の開始時刻です'
-        const body = payload.notification?.body || '開始時間になった予定があります。'
+        const title = payload.data?.title ? 'スケジュール通知' : (payload.notification?.title || '予定の開始時刻です')
+        const body = payload.data?.body || payload.notification?.body || '開始時間になった予定があります。'
         setNotificationBadgeCount((current) => {
           const next = current + 1
           setBrowserBadge(next).catch((error) => {
@@ -1289,6 +1289,7 @@ function App() {
                   const key = formatDateKey(date)
                   const list = scheduleMap[key] || []
                   const isSelected = key === selectedKey
+                  const isToday = key === formatDateKey(new Date())
 
                   return (
                     <button
@@ -1298,8 +1299,8 @@ function App() {
                       onClick={() => setSelectedDate(date)}
                       style={{
                         ...styles.dayButton,
-                        background: isSelected ? '#dbeafe' : '#ffffff',
-                        borderColor: isSelected ? '#2563eb' : '#d9e2f2',
+                        background: isSelected ? '#dbeafe' : isToday ? '#e3f6e8' : '#ffffff',
+                        borderColor: isSelected ? '#2563eb' : isToday ? '#86d9a0' : '#d9e2f2',
                         boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.16)' : '0 2px 6px rgba(15,23,42,0.04)',
                       }}
                     >
