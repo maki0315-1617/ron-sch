@@ -135,6 +135,7 @@ function App() {
   const [scheduleMap, setScheduleMap] = useState({})
   const [loading, setLoading] = useState(false)
   const [detailDraft, setDetailDraft] = useState(null)
+  const [savingDraft, setSavingDraft] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
   const [notificationEnabled, setNotificationEnabled] = useState(false)
   const [notificationPermission, setNotificationPermission] = useState(
@@ -460,7 +461,7 @@ function App() {
 
       if (event.data.type === 'badge-count') {
         const nextCount = Math.max(Number(event.data.count || 0), 0)
-        setNotificationBadgeCount(nextCount)
+        setNotificationBadgeCount((current) => (current === nextCount ? current : nextCount))
         setBrowserBadge(nextCount).catch((error) => {
           console.error('通知件数同期エラー:', error)
         })
@@ -682,7 +683,7 @@ function App() {
   const closeDetail = () => setDetailDraft(null)
 
   const saveDetailDraft = async () => {
-    if (!session || !detailDraft) return
+    if (!session || !detailDraft || savingDraft) return
 
     const startTime = detailDraft.time || '09:00'
     const endTime = detailDraft.endTime || '10:00'
@@ -693,6 +694,7 @@ function App() {
       return
     }
 
+    setSavingDraft(true)
     try {
       const itemId = detailDraft.id || `s-${Date.now()}`
       const item = {
@@ -716,6 +718,8 @@ function App() {
     } catch (error) {
       console.error('予定保存エラー:', error)
       alert(`予定保存に失敗しました:\n${error.message}`)
+    } finally {
+      setSavingDraft(false)
     }
   }
 
@@ -1637,8 +1641,15 @@ function App() {
                 />
 
                 <div style={styles.modalActionRow}>
-                  <button type="button" style={styles.secondaryButton} onClick={closeDetail}>キャンセル</button>
-                  <button type="button" style={styles.primaryButton} onClick={saveDetailDraft}>保存</button>
+                  <button type="button" style={styles.secondaryButton} onClick={closeDetail} disabled={savingDraft}>キャンセル</button>
+                  <button
+                    type="button"
+                    style={{ ...styles.primaryButton, opacity: savingDraft ? 0.7 : 1, cursor: savingDraft ? 'wait' : 'pointer' }}
+                    onClick={saveDetailDraft}
+                    disabled={savingDraft}
+                  >
+                    {savingDraft ? '保存中…' : '保存'}
+                  </button>
                 </div>
               </div>
             </div>

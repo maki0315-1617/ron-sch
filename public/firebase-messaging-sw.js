@@ -137,13 +137,11 @@ self.addEventListener('message', (event) => {
 
   if (event.data.type === 'clear-badge-count') {
     event.waitUntil((async () => {
-      const badgeCount = await clearBadgeCount().catch(() => 0);
+      await clearBadgeCount().catch(() => 0);
       if ('clearAppBadge' in self.registration) {
         await self.registration.clearAppBadge().catch(() => {});
       }
-      if (event.source) {
-        event.source.postMessage({ type: 'badge-count', count: badgeCount });
-      }
+      // 呼び出し元は既に0を把握しているため返信しない（返信するとping-pongで無限ループになる）
     })());
     return;
   }
@@ -157,9 +155,7 @@ self.addEventListener('message', (event) => {
       } else if ('clearAppBadge' in self.registration) {
         await self.registration.clearAppBadge().catch(() => {});
       }
-      if (event.source) {
-        event.source.postMessage({ type: 'badge-count', count: badgeCount });
-      }
+      // 呼び出し元は既にこの件数を把握しているため返信しない（返信するとping-pongで無限ループになる）
     })());
     return;
   }
