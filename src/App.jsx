@@ -1150,6 +1150,11 @@ function App() {
         </div>
       ) : (
         <div style={styles.appShell}>
+          {loading && (
+            <div style={styles.progressBarTrack}>
+              <div style={styles.progressBarFill} />
+            </div>
+          )}
           <header style={styles.header}>
             <div style={styles.headerTitleBox}>
               <CalendarDays size={26} color="#2563eb" />
@@ -1357,7 +1362,7 @@ function App() {
                 </button>
               </div>
 
-              {loading ? (
+              {loading && selectedItems.length === 0 ? (
                 <div style={styles.loadingState}>読み込み中...</div>
               ) : selectedItems.length === 0 ? (
                 <div style={styles.emptyState}>この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
@@ -2016,6 +2021,24 @@ const styles = {
     padding: '28px 12px',
     textAlign: 'center',
     color: '#475569',
+  },
+  progressBarTrack: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 60,
+    width: '100%',
+    height: '3px',
+    background: '#dbeafe',
+    borderRadius: '2px',
+    overflow: 'hidden',
+    marginBottom: '8px',
+  },
+  progressBarFill: {
+    height: '100%',
+    width: '40%',
+    background: '#2563eb',
+    borderRadius: '2px',
+    animation: 'schedule-progress-bar 1.1s ease-in-out infinite',
   },
   emptyState: {
     background: '#f8fbff',
