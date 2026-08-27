@@ -47,6 +47,17 @@ const isValidTimeRange = (startTime, endTime) => {
   return parseTimeValue(startTime) < parseTimeValue(endTime)
 }
 
+// 開始時刻までの残り分数から緊急度を判定（5分前=critical, 15分前=warning）
+const getScheduleUrgency = (item, nowMs) => {
+  if (item.completed || !item.date) return 'none'
+  const startAt = new Date(`${item.date}T${item.time || '09:00'}:00`)
+  if (Number.isNaN(startAt.getTime())) return 'none'
+  const minutesUntilStart = (startAt.getTime() - nowMs) / 60000
+  if (minutesUntilStart < 0 || minutesUntilStart > 15) return 'none'
+  if (minutesUntilStart <= 5) return 'critical'
+  return 'warning'
+}
+
 const toScheduleRelation = (item) => ({
   id: item.id,
   date: item.date,
@@ -137,6 +148,7 @@ function App() {
   const [detailDraft, setDetailDraft] = useState(null)
   const [savingDraft, setSavingDraft] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
+  const [nowTick, setNowTick] = useState(() => Date.now())
   const [notificationEnabled, setNotificationEnabled] = useState(false)
   const [notificationPermission, setNotificationPermission] = useState(
     typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
@@ -152,6 +164,12 @@ function App() {
   const daySwipeRef = useRef(null)
   const dayTouchRef = useRef(null)
   const loadedWeeksRef = useRef(new Set())
+
+  useEffect(() => {
+    // 予定の緊急度（15分前/5分前）表示を更新するための定期チェック
+    const interval = setInterval(() => setNowTick(Date.now()), 15000)
+    return () => clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -1382,6 +1400,7 @@ function App() {
                       : item.completed
                         ? { ...styles.scheduleTimeBox, color: '#6b7280', background: '#d1d5db' }
                         : styles.scheduleTimeBox
+                    const urgency = getScheduleUrgency(item, nowTick)
 
                     return (
                     <div
@@ -1409,7 +1428,10 @@ function App() {
                       <div style={styles.scheduleBody}>
                         <div className="schedule-title-row-mobile" style={styles.scheduleTitleRow}>
                           <div style={styles.scheduleTitleWrap}>
-                            <span className="schedule-title-text" style={{ ...styles.scheduleTitle, ...(item.completed ? styles.completedText : {}) }}>{item.title}</span>
+                            <span
+                              className={`schedule-title-text${urgency === 'critical' ? ' schedule-title-urgent-critical' : urgency === 'warning' ? ' schedule-title-urgent-warning' : ''}`}
+                              style={{ ...styles.scheduleTitle, ...(item.completed ? styles.completedText : {}) }}
+                            >{item.title}</span>
                             {item.priority !== 'normal' && (
                               <span style={{ ...styles.priorityBadge, ...(item.priority === 'high' ? styles.highPriorityBadge : styles.lowPriorityBadge) }}>
                                 {item.priority === 'high' ? '重要' : '低'}

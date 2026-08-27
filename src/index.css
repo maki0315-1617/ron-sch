@@ -26,6 +26,37 @@
   }
 }
 
+@keyframes schedule-title-blink-warning {
+  0%, 100% {
+    color: #2563eb;
+    opacity: 1;
+  }
+  50% {
+    color: #2563eb;
+    opacity: 0.35;
+  }
+}
+
+@keyframes schedule-title-blink-critical {
+  0%, 100% {
+    color: #dc2626;
+    opacity: 1;
+  }
+  50% {
+    color: #dc2626;
+    opacity: 0.35;
+  }
+}
+
+.schedule-title-urgent-warning {
+  animation: schedule-title-blink-warning 1.2s ease-in-out infinite;
+}
+
+.schedule-title-urgent-critical {
+  animation: schedule-title-blink-critical 0.8s ease-in-out infinite;
+  font-weight: 700;
+}
+
 html {
   scroll-behavior: smooth;
 }
