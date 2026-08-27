@@ -152,7 +152,7 @@ const sendReminderNotifications = async (scheduleSnapshot, dateKey, timeKey, off
     }
 
     const title = item.title || '予定';
-    const body = `${title} が${label}に開始します（${scheduledTime}）`;
+    const body = `${title} ${label}です`;
     const message = {
       tokens,
       data: {
@@ -311,7 +311,7 @@ exports.sendScheduleStartNotifications = onSchedule(
       }
 
       const title = item.title || '予定';
-      const body = `${title} の開始時間です（${scheduledTime}）`;
+      const body = `${title} 開始時間です`;
       const message = {
         tokens,
         // notification フィールドを付けるとブラウザが自動表示し、
