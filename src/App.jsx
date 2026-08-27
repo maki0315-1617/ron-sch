@@ -18,7 +18,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Link2, LogOut, PencilLine, Plus, Trash2 } from 'lucide-react'
+import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, FileText, Home, Link2, LogOut, Menu, PencilLine, Plus, Trash2, TrendingUp, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -156,6 +156,11 @@ function App() {
   const [notificationBusy, setNotificationBusy] = useState(false)
   const [notificationHelpOpen, setNotificationHelpOpen] = useState(false)
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [view, setView] = useState('home')
+  const [incompleteItems, setIncompleteItems] = useState([])
+  const [incompleteLoading, setIncompleteLoading] = useState(false)
+  const menuRef = useRef(null)
   const holdTimerRef = useRef(null)
   const notificationRegistrationRef = useRef(null)
   const notificationToggleLockRef = useRef(false)
@@ -183,6 +188,24 @@ function App() {
     loadedWeeksRef.current = new Set()
     setScheduleMap({})
   }, [session?.uid])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const handlePointerDown = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) setMenuOpen(false)
+    }
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [menuOpen])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -559,6 +582,24 @@ function App() {
     const items = scheduleMap[selectedKey] || []
     return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
   }, [scheduleMap, selectedKey])
+
+  const scheduleListItems = useMemo(() => {
+    const todayKey = formatDateKey(new Date())
+    return weekDates
+      .flatMap((date) => {
+        const dateKey = formatDateKey(date)
+        return (scheduleMap[dateKey] || []).map((item) => ({
+          ...item,
+          dateKey,
+          dayName: dayNames[date.getDay()],
+          isPast: dateKey < todayKey,
+        }))
+      })
+      .sort((a, b) => {
+        if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+        return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
+      })
+  }, [weekDates, scheduleMap])
 
   const fetchWeekSchedule = async () => {
     if (!session || weekDates.length === 0) return
@@ -1020,45 +1061,80 @@ function App() {
     }
   }
 
+  const fetchIncompleteItemsList = async () => {
+    if (!session) return []
+    const todayKey = formatDateKey(new Date())
+    const q = query(collection(db, 'schedule_items'), where('user_id', '==', session.uid))
+    const snapshot = await getDocs(q)
+
+    const items = []
+    snapshot.forEach((docSnap) => {
+      const item = docSnap.data()
+      if (item.completed === true) return
+      const dateKey = item.date
+      const dayDate = new Date(`${dateKey}T00:00:00`)
+      items.push({
+        id: item.id || docSnap.id,
+        title: item.title || '予定',
+        time: item.time || '09:00',
+        endTime: item.endTime || '10:00',
+        details: item.details || '',
+        completed: item.completed === true,
+        priority: item.priority || 'normal',
+        dateKey,
+        dayName: dayNames[dayDate.getDay()],
+        isPast: dateKey < todayKey,
+      })
+    })
+
+    items.sort((a, b) => {
+      if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+      return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
+    })
+    return items
+  }
+
+  useEffect(() => {
+    if (view !== 'incompleteList' || !session) return
+    let cancelled = false
+    setIncompleteLoading(true)
+    fetchIncompleteItemsList()
+      .then((items) => {
+        if (!cancelled) setIncompleteItems(items)
+      })
+      .catch((error) => {
+        console.error('未完了一覧取得エラー:', error)
+        if (!cancelled) alert(`未完了一覧の取得に失敗しました:\n${error.message}`)
+      })
+      .finally(() => {
+        if (!cancelled) setIncompleteLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [view, session])
+
   const openWeeklyReport = async (reportType) => {
     if (!session) return
 
+    const reportTitle = reportType === 'all' ? 'スケジュール一覧' : '未完了一覧'
+
+    // ポップアップブロック対策: 非同期取得の前にユーザー操作と同じtickでウィンドウを開いておく
+    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
+    if (!reportWindow) {
+      alert('帳票画面を開けませんでした。ポップアップを許可してください。')
+      return
+    }
+
     const outputDate = new Date()
     const outputDateKey = formatDateKey(outputDate)
-    const reportTitle = reportType === 'all' ? 'スケジュール一覧' : '未完了一覧'
 
     let reportItems = []
     let periodText = `${formatDateKey(weekDates[0])} ～ ${formatDateKey(weekDates[6])}`
 
     try {
       if (reportType === 'incomplete') {
-        const q = query(collection(db, 'schedule_items'), where('user_id', '==', session.uid))
-        const snapshot = await getDocs(q)
-
-        reportItems = []
-        snapshot.forEach((docSnap) => {
-          const item = docSnap.data()
-          if (item.completed === true) return
-          const dateKey = item.date
-          const dayDate = new Date(`${dateKey}T00:00:00`)
-          reportItems.push({
-            id: item.id || docSnap.id,
-            title: item.title || '予定',
-            time: item.time || '09:00',
-            endTime: item.endTime || '10:00',
-            details: item.details || '',
-            completed: item.completed === true,
-            priority: item.priority || 'normal',
-            dateKey,
-            dayName: dayNames[dayDate.getDay()],
-            isPast: dateKey < outputDateKey,
-          })
-        })
-
-        reportItems.sort((a, b) => {
-          if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
-          return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
-        })
+        reportItems = await fetchIncompleteItemsList()
         periodText = '全期間'
       } else {
         reportItems = weekDates.flatMap((date) => {
@@ -1069,9 +1145,12 @@ function App() {
       }
     } catch (error) {
       console.error('帳票データ取得エラー:', error)
+      if (!reportWindow.closed) reportWindow.close()
       alert(`帳票データの取得に失敗しました:\n${error.message}`)
       return
     }
+
+    if (reportWindow.closed) return
 
     const rows = reportItems.length
       ? reportItems.map((item) => `
@@ -1085,13 +1164,7 @@ function App() {
           </tr>`).join('')
       : '<tr><td colspan="6" class="empty">該当する予定はありません</td></tr>'
 
-    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
-    if (!reportWindow) {
-      alert('帳票画面を開けませんでした。ポップアップを許可してください。')
-      return
-    }
-
-    reportWindow.document.write(`<!doctype html>
+    const html = `<!doctype html>
       <html lang="ja">
         <head>
           <meta charset="UTF-8" />
@@ -1126,9 +1199,167 @@ function App() {
             <tbody>${rows}</tbody>
           </table>
         </body>
-      </html>`)
-    reportWindow.document.close()
-    reportWindow.focus()
+      </html>`
+
+    // document.write は別オリジン扱いされる環境があるため Blob URL への遷移で表示する
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+    // window.open 直後は新しいウィンドウの初期化が終わっていないことがあるため、遷移を次のtickにずらす
+    setTimeout(() => {
+      if (reportWindow.closed) {
+        URL.revokeObjectURL(blobUrl)
+        return
+      }
+      reportWindow.location.href = blobUrl
+      reportWindow.focus()
+    }, 0)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
+  const openProgressReport = async () => {
+    if (!session) return
+
+    // ポップアップブロック対策: 非同期取得の前にユーザー操作と同じtickでウィンドウを開いておく
+    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
+    if (!reportWindow) {
+      alert('帳票画面を開けませんでした。ポップアップを許可してください。')
+      return
+    }
+
+    let monthlyStats = []
+    try {
+      const q = query(collection(db, 'schedule_items'), where('user_id', '==', session.uid))
+      const snapshot = await getDocs(q)
+      const statsByMonth = {}
+
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data()
+        const monthKey = String(item.date || '').slice(0, 7)
+        if (!monthKey) return
+        if (!statsByMonth[monthKey]) {
+          statsByMonth[monthKey] = { monthKey, planned: 0, completed: 0 }
+        }
+        statsByMonth[monthKey].planned += 1
+        if (item.completed === true) statsByMonth[monthKey].completed += 1
+      })
+
+      monthlyStats = Object.values(statsByMonth)
+        .sort((a, b) => a.monthKey.localeCompare(b.monthKey))
+        .map((row) => ({
+          ...row,
+          rate: row.planned > 0 ? Math.round((row.completed / row.planned) * 1000) / 10 : 0,
+        }))
+    } catch (error) {
+      console.error('進捗率データ取得エラー:', error)
+      if (!reportWindow.closed) reportWindow.close()
+      alert(`進捗率データの取得に失敗しました:\n${error.message}`)
+      return
+    }
+
+    if (reportWindow.closed) return
+
+    const totalPlanned = monthlyStats.reduce((sum, row) => sum + row.planned, 0)
+    const totalCompleted = monthlyStats.reduce((sum, row) => sum + row.completed, 0)
+    const totalRate = totalPlanned > 0 ? Math.round((totalCompleted / totalPlanned) * 1000) / 10 : 0
+
+    const rows = monthlyStats.length
+      ? monthlyStats.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.monthKey)}</td>
+            <td>${row.planned}</td>
+            <td>${row.completed}</td>
+            <td>${row.rate.toFixed(1)}%</td>
+          </tr>`).join('')
+      : '<tr><td colspan="4" class="empty">データがありません</td></tr>'
+
+    const totalRow = `
+          <tr class="total-row">
+            <td>全体</td>
+            <td>${totalPlanned}</td>
+            <td>${totalCompleted}</td>
+            <td>${totalRate.toFixed(1)}%</td>
+          </tr>`
+
+    // 折れ線グラフ用のSVGパスを進捗率(0-100%)から生成する
+    const chartWidth = 760
+    const chartHeight = 260
+    const paddingLeft = 46
+    const paddingRight = 16
+    const paddingTop = 16
+    const paddingBottom = 34
+    const plotWidth = chartWidth - paddingLeft - paddingRight
+    const plotHeight = chartHeight - paddingTop - paddingBottom
+    const pointCount = monthlyStats.length
+
+    const toX = (index) => pointCount <= 1
+      ? paddingLeft + plotWidth / 2
+      : paddingLeft + (plotWidth * index) / (pointCount - 1)
+    const toY = (rate) => paddingTop + plotHeight - (plotHeight * Math.min(100, Math.max(0, rate))) / 100
+
+    const points = monthlyStats.map((row, index) => ({ x: toX(index), y: toY(row.rate), row }))
+    const polylinePoints = points.map((p) => `${p.x},${p.y}`).join(' ')
+    const gridLines = [0, 25, 50, 75, 100].map((tick) => {
+      const y = toY(tick)
+      return `<line x1="${paddingLeft}" y1="${y}" x2="${chartWidth - paddingRight}" y2="${y}" stroke="#e2e8f0" stroke-width="1" />
+              <text x="${paddingLeft - 8}" y="${y + 4}" font-size="10" fill="#94a3b8" text-anchor="end">${tick}%</text>`
+    }).join('')
+    const monthLabels = points.map((p) => `<text x="${p.x}" y="${chartHeight - paddingBottom + 16}" font-size="10" fill="#64748b" text-anchor="middle">${escapeHtml(p.row.monthKey)}</text>`).join('')
+    const dots = points.map((p) => `<circle cx="${p.x}" cy="${p.y}" r="3.5" fill="#2563eb" /><text x="${p.x}" y="${p.y - 8}" font-size="10" fill="#1d4ed8" text-anchor="middle">${p.row.rate.toFixed(0)}%</text>`).join('')
+    const chartSvg = pointCount
+      ? `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" width="100%" style="max-width: ${chartWidth}px;">
+          ${gridLines}
+          <polyline points="${polylinePoints}" fill="none" stroke="#2563eb" stroke-width="2" />
+          ${dots}
+          ${monthLabels}
+        </svg>`
+      : '<p class="empty">データがありません</p>'
+
+    const html = `<!doctype html>
+      <html lang="ja">
+        <head>
+          <meta charset="UTF-8" />
+          <title>進捗率</title>
+          <style>
+            @page { size: A4 landscape; margin: 12mm; }
+            * { box-sizing: border-box; }
+            body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
+            h1 { margin: 0 0 5px; font-size: 24px; }
+            h2 { margin: 24px 0 10px; font-size: 16px; color: #1e3a8a; }
+            .output-date { color: #475569; margin-bottom: 18px; font-size: 13px; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 8px; }
+            th, td { border: 1px solid #cbd5e1; padding: 7px 8px; text-align: left; vertical-align: top; }
+            th { background: #e8f0ff; color: #1e3a8a; }
+            .total-row td { background: #fef9c3; font-weight: 700; }
+            .empty { text-align: center; color: #64748b; padding: 24px; }
+            .chart-box { border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; }
+            .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+            button { border: 0; border-radius: 10px; background: #2563eb; color: white; padding: 12px 20px; font-size: 15px; font-weight: 700; cursor: pointer; }
+            .close-button { background: #64748b; }
+            @media print { .actions { display: none; } }
+          </style>
+        </head>
+        <body>
+          <div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
+          <h1>進捗率</h1>
+          <div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
+          <table>
+            <thead><tr><th>月</th><th>計画数</th><th>完了数</th><th>進捗率</th></tr></thead>
+            <tbody>${rows}${totalRow}</tbody>
+          </table>
+          <h2>進捗率の推移</h2>
+          <div class="chart-box">${chartSvg}</div>
+        </body>
+      </html>`
+
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+    setTimeout(() => {
+      if (reportWindow.closed) {
+        URL.revokeObjectURL(blobUrl)
+        return
+      }
+      reportWindow.location.href = blobUrl
+      reportWindow.focus()
+    }, 0)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
   return (
@@ -1179,12 +1410,108 @@ function App() {
           )}
           <header style={styles.header}>
             <div style={styles.headerTitleBox}>
+              <div style={styles.menuWrapper} ref={menuRef}>
+                <button
+                  type="button"
+                  style={styles.menuButton}
+                  onClick={() => setMenuOpen((current) => !current)}
+                  aria-haspopup="true"
+                  aria-expanded={menuOpen}
+                  aria-label="メニューを開く"
+                >
+                  {menuOpen ? <X size={22} /> : <Menu size={22} />}
+                </button>
+                {menuOpen && (
+                  <div style={styles.menuDropdown} role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        setView('home')
+                        setSelectedDate(new Date())
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <Home size={18} /> ホーム
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        setView('scheduleList')
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <FileText size={18} /> スケジュール一覧
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        setView('incompleteList')
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <ClipboardList size={18} /> 未完了一覧
+                    </button>
+                    <div style={styles.menuDivider} />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        openWeeklyReport('all')
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <FileText size={18} /> スケジュール一覧PDF
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        openWeeklyReport('incomplete')
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <ClipboardList size={18} /> 未完了一覧PDF
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        openProgressReport()
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <TrendingUp size={18} /> 進捗率PDF
+                    </button>
+                    <div style={styles.menuDivider} />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={{ ...styles.menuItem, ...styles.menuItemDanger }}
+                      onClick={() => {
+                        setMenuOpen(false)
+                        signOut(auth)
+                      }}
+                    >
+                      <LogOut size={18} /> ログアウト
+                    </button>
+                  </div>
+                )}
+              </div>
               <CalendarDays size={26} color="#2563eb" />
-              <h1 style={styles.title}>スケジュール</h1>
+              <h1 style={styles.title} className="app-title">スケジュール</h1>
             </div>
 
             <div style={styles.userArea}>
-              <span style={styles.userEmail}>{session.email}</span>
+              <span style={styles.userEmail} className="app-user-email">{session.email}</span>
               <div style={styles.notificationControls}>
                 <button
                   type="button"
@@ -1258,17 +1585,10 @@ function App() {
               {notificationPermission === 'denied' && (
                 <span style={styles.notificationNotice}>通知はブラウザ設定でブロックされています。</span>
               )}
-              <button type="button" style={styles.logoutButton} onClick={() => signOut(auth)}>
-                <LogOut size={16} /> ログアウト
-              </button>
             </div>
           </header>
 
-          <div style={styles.reportActions}>
-            <button type="button" style={styles.reportButton} onClick={() => openWeeklyReport('all')}>スケジュール一覧PDF</button>
-            <button type="button" style={styles.reportButton} onClick={() => openWeeklyReport('incomplete')}>未完了一覧PDF</button>
-          </div>
-
+          {view === 'home' && (
           <main style={styles.main}>
             <section
               style={{ ...styles.weekSection, touchAction: 'pan-y' }}
@@ -1519,6 +1839,79 @@ function App() {
               )}
             </section>
           </main>
+          )}
+
+          {view === 'scheduleList' && (
+            <main style={styles.main}>
+              <section style={styles.listSection}>
+                <h2 style={styles.listSectionTitle}>スケジュール一覧（{formatDateKey(weekDates[0])} ～ {formatDateKey(weekDates[6])}）</h2>
+                {scheduleListItems.length === 0 ? (
+                  <p style={styles.listEmpty}>該当する予定はありません。</p>
+                ) : (
+                  <div style={styles.listTableWrap}>
+                    <table style={styles.listTable}>
+                      <thead>
+                        <tr>
+                          <th style={styles.listTh}>日付</th>
+                          <th style={styles.listTh}>時間</th>
+                          <th style={styles.listTh}>予定名</th>
+                          <th style={styles.listTh}>重要度</th>
+                          <th style={styles.listTh}>状態</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scheduleListItems.map((item) => (
+                          <tr key={`${item.dateKey}_${item.id}`} style={item.isPast ? styles.listRowPast : undefined}>
+                            <td style={styles.listTd}>{item.dateKey} ({item.dayName})</td>
+                            <td style={styles.listTd}>{item.time} - {item.endTime}</td>
+                            <td style={styles.listTd}>{item.title}</td>
+                            <td style={styles.listTd}>{item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常'}</td>
+                            <td style={styles.listTd}>{item.completed ? '完了' : '未完了'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </main>
+          )}
+
+          {view === 'incompleteList' && (
+            <main style={styles.main}>
+              <section style={styles.listSection}>
+                <h2 style={styles.listSectionTitle}>未完了一覧</h2>
+                {incompleteLoading ? (
+                  <p style={styles.listEmpty}>読み込み中...</p>
+                ) : incompleteItems.length === 0 ? (
+                  <p style={styles.listEmpty}>未完了の予定はありません。</p>
+                ) : (
+                  <div style={styles.listTableWrap}>
+                    <table style={styles.listTable}>
+                      <thead>
+                        <tr>
+                          <th style={styles.listTh}>日付</th>
+                          <th style={styles.listTh}>時間</th>
+                          <th style={styles.listTh}>予定名</th>
+                          <th style={styles.listTh}>重要度</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {incompleteItems.map((item) => (
+                          <tr key={`${item.dateKey}_${item.id}`} style={item.isPast ? styles.listRowPast : undefined}>
+                            <td style={styles.listTd}>{item.dateKey} ({item.dayName})</td>
+                            <td style={styles.listTd}>{item.time} - {item.endTime}</td>
+                            <td style={styles.listTd}>{item.title}</td>
+                            <td style={styles.listTd}>{item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </main>
+          )}
 
           {relationDialog && (
             <div style={styles.modalOverlay} onClick={closeRelationDialog}>
@@ -1780,32 +2173,73 @@ const styles = {
     paddingBottom: '14px',
     borderBottom: '1px solid #dfeaf7',
   },
-  reportActions: {
-    display: 'flex',
-    justifyContent: 'flex-end',
-    flexWrap: 'wrap',
-    gap: '8px',
-    marginBottom: '14px',
+  menuWrapper: {
+    position: 'relative',
   },
-  reportButton: {
-    border: '1px solid #bfdbfe',
-    borderRadius: '8px',
-    background: '#eff6ff',
+  menuButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '44px',
+    height: '44px',
+    border: '1px solid #d9e2f2',
+    background: '#ffffff',
     color: '#1d4ed8',
-    padding: '8px 10px',
-    fontSize: '12px',
-    fontWeight: 700,
+    borderRadius: '10px',
     cursor: 'pointer',
+    flexShrink: 0,
+  },
+  menuDropdown: {
+    position: 'absolute',
+    top: 'calc(100% + 8px)',
+    left: '0',
+    minWidth: '220px',
+    background: '#ffffff',
+    border: '1px solid #dbeafe',
+    borderRadius: '12px',
+    boxShadow: '0 14px 32px rgba(15, 23, 42, 0.18)',
+    padding: '6px',
+    zIndex: 30,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  menuItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    color: '#1f2937',
+    padding: '12px 14px',
+    borderRadius: '8px',
+    fontSize: '15px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    textAlign: 'left',
+    minHeight: '44px',
+  },
+  menuItemDanger: {
+    color: '#dc2626',
+  },
+  menuDivider: {
+    height: '1px',
+    background: '#e5eefb',
+    margin: '4px 6px',
   },
   headerTitleBox: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
+    minWidth: 0,
   },
   title: {
     margin: 0,
     fontSize: '28px',
     color: '#0f172a',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   userArea: {
     display: 'flex',
@@ -1817,17 +2251,6 @@ const styles = {
   userEmail: {
     color: '#475569',
     fontSize: '13px',
-  },
-  logoutButton: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    border: '1px solid #d9e2f2',
-    background: '#ffffff',
-    color: '#334155',
-    padding: '8px 12px',
-    borderRadius: '10px',
-    cursor: 'pointer',
   },
   notificationButton: {
     display: 'flex',
@@ -1954,6 +2377,50 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: '18px',
+  },
+  listSection: {
+    background: '#ffffff',
+    border: '1px solid #e8eef7',
+    borderRadius: '18px',
+    padding: '18px',
+  },
+  listSectionTitle: {
+    margin: '0 0 14px',
+    fontSize: '16px',
+    color: '#0f172a',
+  },
+  listEmpty: {
+    margin: 0,
+    color: '#64748b',
+    fontSize: '14px',
+    textAlign: 'center',
+    padding: '24px 0',
+  },
+  listTableWrap: {
+    overflowX: 'auto',
+  },
+  listTable: {
+    width: '100%',
+    minWidth: '520px',
+    borderCollapse: 'collapse',
+    fontSize: '13px',
+  },
+  listTh: {
+    textAlign: 'left',
+    padding: '8px 10px',
+    background: '#eff6ff',
+    color: '#1e3a8a',
+    borderBottom: '1px solid #dbeafe',
+    whiteSpace: 'nowrap',
+  },
+  listTd: {
+    padding: '8px 10px',
+    borderBottom: '1px solid #eef2f7',
+    verticalAlign: 'top',
+  },
+  listRowPast: {
+    background: '#fff7ed',
+    color: '#b45309',
   },
   weekSection: {
     background: '#ffffff',

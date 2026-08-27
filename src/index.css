@@ -101,6 +101,14 @@ img {
 }
 
 @media (max-width: 600px) {
+  .app-title {
+    font-size: 20px !important;
+  }
+
+  .app-user-email {
+    display: none !important;
+  }
+
   .week-day-tile {
     min-height: 84px !important;
     padding: 6px 3px !important;
