@@ -101,12 +101,87 @@ img {
 }
 
 @media (max-width: 600px) {
+  .app-header {
+    flex-wrap: wrap !important;
+    row-gap: 8px !important;
+    padding-bottom: 10px !important;
+    margin-bottom: 12px !important;
+  }
+
+  .app-header-title-box {
+    flex: 1 1 auto;
+  }
+
   .app-title {
     font-size: 20px !important;
   }
 
   .app-user-email {
     display: none !important;
+  }
+
+  .app-user-area {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .app-notification-controls {
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    overflow: visible !important;
+  }
+
+  .notification-label {
+    display: none !important;
+  }
+
+  .notification-toggle-btn {
+    padding: 8px 9px !important;
+    overflow: visible !important;
+  }
+
+  .notification-count-badge {
+    position: absolute !important;
+    top: -6px !important;
+    right: -6px !important;
+    box-shadow: 0 0 0 2px #ffffff;
+    z-index: 1;
+  }
+
+  .notification-help-btn {
+    padding: 6px 8px !important;
+    font-size: 11px !important;
+    white-space: nowrap;
+  }
+
+  .notification-notice {
+    width: 100% !important;
+    white-space: normal !important;
+  }
+
+  .week-section {
+    padding: 10px !important;
+    border-radius: 14px !important;
+  }
+
+  .week-nav {
+    gap: 6px !important;
+    margin-bottom: 8px !important;
+  }
+
+  .week-nav-btn {
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 8px !important;
+  }
+
+  .week-nav-title {
+    font-size: 13px !important;
+  }
+
+  .week-grid {
+    gap: 4px !important;
   }
 
   .week-day-tile {

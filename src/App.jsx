@@ -1408,8 +1408,8 @@ function App() {
               <div style={styles.progressBarFill} />
             </div>
           )}
-          <header style={styles.header}>
-            <div style={styles.headerTitleBox}>
+          <header style={styles.header} className="app-header">
+            <div style={styles.headerTitleBox} className="app-header-title-box">
               <div style={styles.menuWrapper} ref={menuRef}>
                 <button
                   type="button"
@@ -1510,11 +1510,12 @@ function App() {
               <h1 style={styles.title} className="app-title">スケジュール</h1>
             </div>
 
-            <div style={styles.userArea}>
+            <div style={styles.userArea} className="app-user-area">
               <span style={styles.userEmail} className="app-user-email">{session.email}</span>
-              <div style={styles.notificationControls}>
+              <div style={styles.notificationControls} className="app-notification-controls">
                 <button
                   type="button"
+                  className="notification-toggle-btn"
                   style={{
                     ...styles.notificationButton,
                     ...(notificationEnabled ? styles.notificationButtonOn : styles.notificationButtonOff),
@@ -1526,9 +1527,9 @@ function App() {
                   title={notificationEnabled ? '通知をオフにする' : '通知をオンにする'}
                 >
                   {notificationEnabled ? <Bell size={16} /> : <BellOff size={16} />}
-                  <span>{notificationBusy ? '処理中' : notificationEnabled ? '通知ON' : '通知OFF'}</span>
+                  <span className="notification-label">{notificationBusy ? '処理中' : notificationEnabled ? '通知ON' : '通知OFF'}</span>
                   {notificationBadgeCount > 0 && (
-                    <span style={styles.notificationCountBadge}>{notificationBadgeCount}</span>
+                    <span style={styles.notificationCountBadge} className="notification-count-badge">{notificationBadgeCount}</span>
                   )}
                 </button>
                 <button
@@ -1538,6 +1539,7 @@ function App() {
                   aria-expanded={notificationHelpOpen}
                   aria-label="通知の設定方法を表示"
                   title="通知の設定方法"
+                  className="notification-help-btn"
                 >
                   設定方法
                 </button>
@@ -1583,7 +1585,7 @@ function App() {
                 )}
               </div>
               {notificationPermission === 'denied' && (
-                <span style={styles.notificationNotice}>通知はブラウザ設定でブロックされています。</span>
+                <span style={styles.notificationNotice} className="notification-notice">通知はブラウザ設定でブロックされています。</span>
               )}
             </div>
           </header>
@@ -1591,6 +1593,7 @@ function App() {
           {view === 'home' && (
           <main style={styles.main}>
             <section
+              className="week-section"
               style={{ ...styles.weekSection, touchAction: 'pan-y' }}
               onTouchStart={(event) => {
                 weekTouchRef.current = event.changedTouches[0].clientX
@@ -1621,17 +1624,17 @@ function App() {
                 }
               }}
             >
-              <div style={styles.weekNav}>
-                <button type="button" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeekSunday}>
-                  <ChevronLeft size={18} />
+              <div className="week-nav" style={styles.weekNav}>
+                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeekSunday}>
+                  <ChevronLeft size={16} />
                 </button>
-                <div style={styles.weekTitle}>{formatMonthTitle(weekDates[0])}</div>
-                <button type="button" style={styles.navButton} aria-label="次の週" onClick={selectNextWeekMonday}>
-                  <ChevronRight size={18} />
+                <div className="week-nav-title" style={styles.weekTitle}>{formatMonthTitle(weekDates[0])}</div>
+                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="次の週" onClick={selectNextWeekMonday}>
+                  <ChevronRight size={16} />
                 </button>
               </div>
 
-              <div style={styles.weekGrid}>
+              <div className="week-grid" style={styles.weekGrid}>
                 {weekDates.map((date) => {
                   const key = formatDateKey(date)
                   const list = scheduleMap[key] || []
@@ -1912,6 +1915,10 @@ function App() {
               </section>
             </main>
           )}
+
+          <footer style={styles.footer}>
+            © {new Date().getFullYear()} ロン君のスケジュール
+          </footer>
 
           {relationDialog && (
             <div style={styles.modalOverlay} onClick={closeRelationDialog}>
@@ -2253,6 +2260,7 @@ const styles = {
     fontSize: '13px',
   },
   notificationButton: {
+    position: 'relative',
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
@@ -2378,6 +2386,13 @@ const styles = {
     flexDirection: 'column',
     gap: '18px',
   },
+  footer: {
+    marginTop: '24px',
+    padding: '16px 0 4px',
+    textAlign: 'center',
+    fontSize: '12px',
+    color: '#94a3b8',
+  },
   listSection: {
     background: '#ffffff',
     border: '1px solid #e8eef7',
@@ -2426,36 +2441,45 @@ const styles = {
     background: '#ffffff',
     border: '1px solid #e8eef7',
     borderRadius: '18px',
-    padding: '16px',
+    padding: '12px',
     boxShadow: '0 12px 26px rgba(15, 23, 42, 0.04)',
   },
   weekNav: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: '14px',
+    gap: '10px',
+    marginBottom: '10px',
+    padding: '8px 10px',
+    borderRadius: '12px',
+    background: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+    boxShadow: '0 6px 14px rgba(37,99,235,0.22)',
   },
   navButton: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '38px',
-    height: '38px',
-    borderRadius: '12px',
-    border: '1px solid #dfeaf7',
-    background: '#f8fbff',
-    color: '#0f172a',
+    width: '30px',
+    height: '30px',
+    borderRadius: '9px',
+    border: '1px solid rgba(255,255,255,0.4)',
+    background: 'rgba(255,255,255,0.15)',
+    color: '#ffffff',
     cursor: 'pointer',
+    flexShrink: 0,
   },
   weekTitle: {
-    fontSize: '16px',
+    flex: 1,
+    textAlign: 'center',
+    fontSize: '15px',
     fontWeight: 700,
-    color: '#1e293b',
+    color: '#ffffff',
+    letterSpacing: '0.02em',
   },
   weekGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-    gap: '8px',
+    gap: '6px',
   },
   dayButton: {
     border: '1px solid #d9e2f2',
