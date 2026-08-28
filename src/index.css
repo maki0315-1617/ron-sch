@@ -155,6 +155,14 @@ img {
     white-space: nowrap;
   }
 
+  .notification-help-panel {
+    left: 0 !important;
+    right: auto !important;
+    width: min(280px, calc(100vw - 32px)) !important;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+  }
+
   .notification-notice {
     width: 100% !important;
     white-space: normal !important;
