@@ -156,10 +156,12 @@ img {
   }
 
   .notification-help-panel {
-    left: 0 !important;
-    right: auto !important;
-    width: min(280px, calc(100vw - 32px)) !important;
-    max-height: calc(100vh - 140px);
+    position: fixed !important;
+    top: 96px !important;
+    left: 16px !important;
+    right: 16px !important;
+    width: auto !important;
+    max-height: calc(100vh - 112px);
     overflow-y: auto;
   }
 
