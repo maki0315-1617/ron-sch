@@ -24,6 +24,10 @@ service cloud.firestore {
       allow create, read, update, delete: if isOwner(userId);
     }
 
+    match /common_titles/{userId} {
+      allow create, read, update, delete: if isOwner(userId);
+    }
+
     match /notification_logs/{logId} {
       allow read, write: if false;
     }

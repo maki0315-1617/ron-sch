@@ -22,6 +22,8 @@ import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, Clipboar
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
+const MAX_COMMON_TITLES = 20
+
 const formatDateKey = (date) => {
   const d = new Date(date)
   const year = d.getFullYear()
@@ -147,6 +149,8 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [detailDraft, setDetailDraft] = useState(null)
   const [savingDraft, setSavingDraft] = useState(false)
+  const [commonTitles, setCommonTitles] = useState([])
+  const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [notificationEnabled, setNotificationEnabled] = useState(false)
@@ -187,6 +191,30 @@ function App() {
     // アカウント切り替え時は週キャッシュを破棄して再取得させる
     loadedWeeksRef.current = new Set()
     setScheduleMap({})
+  }, [session?.uid])
+
+  useEffect(() => {
+    if (!session) {
+      setCommonTitles([])
+      return
+    }
+
+    let cancelled = false
+
+    const loadCommonTitles = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'common_titles', session.uid))
+        if (cancelled) return
+        setCommonTitles(snap.exists() && Array.isArray(snap.data().titles) ? snap.data().titles : [])
+      } catch (error) {
+        console.error('定例タイトル取得エラー:', error)
+      }
+    }
+
+    loadCommonTitles()
+    return () => {
+      cancelled = true
+    }
   }, [session?.uid])
 
   useEffect(() => {
@@ -725,6 +753,7 @@ function App() {
   }
 
   const openDetail = (item) => {
+    setSaveAsCommonTitle(false)
     setDetailDraft({
       id: item.id,
       title: item.title || '予定',
@@ -740,6 +769,36 @@ function App() {
   }
 
   const closeDetail = () => setDetailDraft(null)
+
+  const persistCommonTitles = async (nextTitles) => {
+    if (!session) return
+    await setDoc(doc(db, 'common_titles', session.uid), { titles: nextTitles })
+    setCommonTitles(nextTitles)
+  }
+
+  const addCommonTitle = async (title) => {
+    const trimmed = title.trim()
+    if (!trimmed || !session) return
+    const withoutDup = commonTitles.filter((t) => t !== trimmed)
+    const nextTitles = [trimmed, ...withoutDup].slice(0, MAX_COMMON_TITLES)
+    try {
+      await persistCommonTitles(nextTitles)
+    } catch (error) {
+      console.error('定例タイトル保存エラー:', error)
+      alert(`定例タイトルの保存に失敗しました:\n${error.message}`)
+    }
+  }
+
+  const removeCommonTitle = async (title) => {
+    if (!session) return
+    const nextTitles = commonTitles.filter((t) => t !== title)
+    try {
+      await persistCommonTitles(nextTitles)
+    } catch (error) {
+      console.error('定例タイトル削除エラー:', error)
+      alert(`定例タイトルの削除に失敗しました:\n${error.message}`)
+    }
+  }
 
   const saveDetailDraft = async () => {
     if (!session || !detailDraft || savingDraft) return
@@ -772,6 +831,10 @@ function App() {
 
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${itemId}`), item)
       upsertScheduleItemLocal(item)
+      if (saveAsCommonTitle) {
+        await addCommonTitle(item.title)
+      }
+      setSaveAsCommonTitle(false)
       setDetailDraft(null)
       fetchWeekSchedule()
     } catch (error) {
@@ -829,6 +892,7 @@ function App() {
   }
 
   const handleAddSchedule = () => {
+    setSaveAsCommonTitle(false)
     setDetailDraft({
       id: `new-${Date.now()}`,
       title: '新規予定',
@@ -2020,10 +2084,51 @@ function App() {
                 <label style={styles.fieldLabel}>タイトル</label>
                 <input
                   type="text"
+                  list="common-title-options"
                   value={detailDraft.title}
                   onChange={(e) => setDetailDraft({ ...detailDraft, title: e.target.value })}
                   style={styles.modalInput}
+                  placeholder="タイトルを入力（定例タイトルから選択も可能）"
                 />
+                <datalist id="common-title-options">
+                  {commonTitles.map((titleOption) => (
+                    <option key={titleOption} value={titleOption} />
+                  ))}
+                </datalist>
+
+                <label style={styles.commonTitleCheckboxRow}>
+                  <input
+                    type="checkbox"
+                    checked={saveAsCommonTitle}
+                    onChange={(e) => setSaveAsCommonTitle(e.target.checked)}
+                    disabled={!detailDraft.title.trim()}
+                  />
+                  この予定名を定例タイトルとして保存する（{commonTitles.length}/{MAX_COMMON_TITLES}件）
+                </label>
+
+                {commonTitles.length > 0 && (
+                  <div style={styles.commonTitleChipRow}>
+                    {commonTitles.map((titleOption) => (
+                      <span key={titleOption} style={styles.commonTitleChip}>
+                        <button
+                          type="button"
+                          style={styles.commonTitleChipLabel}
+                          onClick={() => setDetailDraft({ ...detailDraft, title: titleOption })}
+                        >
+                          {titleOption}
+                        </button>
+                        <button
+                          type="button"
+                          style={styles.commonTitleChipRemove}
+                          aria-label={`定例タイトル「${titleOption}」を削除`}
+                          onClick={() => removeCommonTitle(titleOption)}
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
 
                 <label style={styles.fieldLabel}>重要度</label>
                 <select
@@ -2801,6 +2906,49 @@ const styles = {
     background: '#f8fbff',
     padding: '10px 12px',
     fontSize: '14px',
+  },
+  commonTitleCheckboxRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginTop: '10px',
+    fontSize: '12px',
+    color: '#475569',
+  },
+  commonTitleChipRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginTop: '10px',
+  },
+  commonTitleChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    background: '#eff6ff',
+    border: '1px solid #dbeafe',
+    borderRadius: '999px',
+    padding: '2px 2px 2px 10px',
+  },
+  commonTitleChipLabel: {
+    border: 'none',
+    background: 'transparent',
+    color: '#1d4ed8',
+    fontSize: '12px',
+    cursor: 'pointer',
+    padding: '4px 2px',
+  },
+  commonTitleChipRemove: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    border: 'none',
+    borderRadius: '999px',
+    background: 'transparent',
+    color: '#94a3b8',
+    cursor: 'pointer',
   },
   textarea: {
     width: '100%',
