@@ -15,14 +15,17 @@ import {
   query,
   setDoc,
   serverTimestamp,
+  updateDoc,
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, FileText, Home, Link2, LogOut, Menu, PencilLine, Plus, Trash2, TrendingUp, X } from 'lucide-react'
+import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, FileText, Home, Link2, LogOut, Menu, PencilLine, Plus, Settings, Trash2, TrendingUp, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
 const MAX_COMMON_TITLES = 20
+const WEEK_CALENDAR_FIXED_KEY = 'ron-sch-week-calendar-fixed'
+const WEEK_START_DAY_KEY = 'ron-sch-week-start-day'
 
 const formatDateKey = (date) => {
   const d = new Date(date)
@@ -87,12 +90,12 @@ const addDays = (date, amount) => {
   return next
 }
 
-const getWeekStart = (date) => {
+const getWeekStart = (date, weekStartDay = 1) => {
   const base = new Date(date)
   base.setHours(0, 0, 0, 0)
   const day = base.getDay()
-  const diff = day === 0 ? -6 : 1 - day
-  base.setDate(base.getDate() + diff)
+  const diff = (day - weekStartDay + 7) % 7
+  base.setDate(base.getDate() - diff)
   return base
 }
 
@@ -148,6 +151,7 @@ function App() {
   const [scheduleMap, setScheduleMap] = useState({})
   const [loading, setLoading] = useState(false)
   const [detailDraft, setDetailDraft] = useState(null)
+  const [moveCopyDialog, setMoveCopyDialog] = useState(null)
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
@@ -161,6 +165,14 @@ function App() {
   const [notificationHelpOpen, setNotificationHelpOpen] = useState(false)
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  const [weekCalendarFixed, setWeekCalendarFixed] = useState(() => {
+    return typeof window !== 'undefined' && window.localStorage.getItem(WEEK_CALENDAR_FIXED_KEY) === 'true'
+  })
+  const [weekStartDay, setWeekStartDay] = useState(() => {
+    const storedValue = typeof window !== 'undefined' ? Number(window.localStorage.getItem(WEEK_START_DAY_KEY)) : 1
+    return Number.isInteger(storedValue) && storedValue >= 0 && storedValue <= 6 ? storedValue : 1
+  })
   const [view, setView] = useState('home')
   const [incompleteItems, setIncompleteItems] = useState([])
   const [incompleteLoading, setIncompleteLoading] = useState(false)
@@ -234,6 +246,17 @@ function App() {
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [menuOpen])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(WEEK_CALENDAR_FIXED_KEY, String(weekCalendarFixed))
+  }, [weekCalendarFixed])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(WEEK_START_DAY_KEY, String(weekStartDay))
+    loadedWeeksRef.current = new Set()
+  }, [weekStartDay])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -598,11 +621,11 @@ function App() {
   }, [session?.uid, notificationBadgeCount])
 
   const weekDates = useMemo(() => {
-    const start = getWeekStart(selectedDate)
+    const start = getWeekStart(selectedDate, weekStartDay)
     return Array.from({ length: 7 }, (_, index) => addDays(start, index))
-  }, [selectedDate])
+  }, [selectedDate, weekStartDay])
 
-  const weekStartKey = useMemo(() => formatDateKey(getWeekStart(selectedDate)), [selectedDate])
+  const weekStartKey = useMemo(() => formatDateKey(getWeekStart(selectedDate, weekStartDay)), [selectedDate, weekStartDay])
 
   const selectedKey = formatDateKey(selectedDate)
 
@@ -694,8 +717,8 @@ function App() {
 
   useEffect(() => {
     if (!session) return
-    const weekStartKey = formatDateKey(getWeekStart(selectedDate))
-    if (loadedWeeksRef.current.has(weekStartKey)) return
+    const currentWeekStartKey = formatDateKey(getWeekStart(selectedDate, weekStartDay))
+    if (loadedWeeksRef.current.has(currentWeekStartKey)) return
     fetchWeekSchedule()
   }, [session?.uid, weekStartKey])
 
@@ -709,6 +732,20 @@ function App() {
       next[item.date] = updatedList
       return next
     })
+  }
+
+  const invalidateScheduleWeeks = (dateKeys) => {
+    const weeks = new Set(
+      dateKeys
+        .filter(Boolean)
+        .map((dateKey) => formatDateKey(getWeekStart(new Date(`${dateKey}T00:00:00`), weekStartDay)))
+    )
+    weeks.forEach((weekKey) => loadedWeeksRef.current.delete(weekKey))
+  }
+
+  const clearScheduleCache = () => {
+    loadedWeeksRef.current = new Set()
+    setScheduleMap({})
   }
 
   const removeScheduleItemLocal = (dateKey, itemId) => {
@@ -740,16 +777,196 @@ function App() {
     setSelectedDate((current) => addDays(current, offset))
   }
 
-  const selectNextWeekMonday = () => {
-    setSelectedDate((current) => addDays(getWeekStart(current), 7))
+  const selectNextWeek = () => {
+    setSelectedDate((current) => addDays(getWeekStart(current, weekStartDay), 7))
   }
 
-  const selectPreviousWeekSunday = () => {
-    setSelectedDate((current) => addDays(getWeekStart(current), -1))
+  const selectPreviousWeek = () => {
+    setSelectedDate((current) => addDays(getWeekStart(current, weekStartDay), -1))
   }
 
   const changeSelectedDay = (offset) => {
     setSelectedDate((current) => addDays(current, offset))
+  }
+
+  const hasScheduleRelation = (item) => Boolean(item?.relatedPrev || item?.relatedNext)
+
+  const getDateConflictingItems = async (dateKey, item, ignoreExistingId = null) => {
+    if (!session || !item) return []
+
+    const targetStart = parseTimeValue(item.time || '09:00')
+    const targetEnd = parseTimeValue(item.endTime || '10:00')
+    const ignoredIds = new Set()
+    if (ignoreExistingId) ignoredIds.add(ignoreExistingId)
+    if (item?.id) ignoredIds.add(item.id)
+
+    try {
+      const q = query(
+        collection(db, 'schedule_items'),
+        where('user_id', '==', session.uid),
+        where('date', '==', dateKey)
+      )
+      const snapshot = await getDocs(q)
+      const items = []
+
+      snapshot.forEach((docSnap) => {
+        const candidate = docSnap.data()
+        const candidateId = candidate.id || docSnap.id
+        if (ignoredIds.has(candidateId)) return
+
+        const candidateDate = candidate.date || dateKey
+        if (candidateDate !== dateKey) return
+
+        const candidateStart = parseTimeValue(candidate.time || '09:00')
+        const candidateEnd = parseTimeValue(candidate.endTime || '10:00')
+
+        if (targetStart < candidateEnd && candidateStart < targetEnd) {
+          items.push({
+            id: candidateId,
+            date: candidateDate,
+            time: candidate.time || '09:00',
+            endTime: candidate.endTime || '10:00',
+          })
+        }
+      })
+
+      return items
+    } catch (error) {
+      console.warn('対象日の重複確認に失敗しました:', error)
+      return []
+    }
+  }
+
+  const openMoveCopyDialog = async (item) => {
+    if (!session || !item) return
+
+    const fallbackItem = { ...item, date: item.date || selectedKey }
+    setMoveCopyDialog({
+      item: fallbackItem,
+      targetDate: fallbackItem.date,
+      duplicateConflicts: [],
+      pendingMode: null,
+    })
+
+    try {
+      const latestRef = doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`)
+      const latestSnap = await getDoc(latestRef)
+      const latestItem = latestSnap.exists()
+        ? { ...latestSnap.data(), id: latestSnap.data().id || item.id }
+        : fallbackItem
+
+      setMoveCopyDialog((current) => ({
+        item: latestItem,
+        targetDate: current?.targetDate || latestItem.date || fallbackItem.date,
+        duplicateConflicts: current?.duplicateConflicts || [],
+        pendingMode: current?.pendingMode || null,
+      }))
+    } catch (error) {
+      console.error('予定の最新状態取得エラー:', error)
+    }
+  }
+
+  const closeMoveCopyDialog = () => setMoveCopyDialog(null)
+
+  const proceedMoveOrCopy = async (mode, skipDuplicateCheck = false) => {
+    if (!session || !moveCopyDialog) return
+
+    const { item, targetDate } = moveCopyDialog
+    if (!targetDate) {
+      alert('日付を選択してください。')
+      return
+    }
+
+    if (hasScheduleRelation(item)) {
+      alert('関連を削除してから実行してください。')
+      return
+    }
+
+    if (mode === 'move') {
+      if (targetDate === item.date) {
+        alert('移動先の日付は現在の予定日と異なる日付を選択してください。')
+        return
+      }
+    }
+
+    const targetDateKey = formatDateKey(new Date(`${targetDate}T00:00:00`))
+
+    if (!skipDuplicateCheck) {
+      const conflictingItems = await getDateConflictingItems(targetDateKey, item, mode === 'move' ? item.id : null)
+      if (conflictingItems.length > 0) {
+        setMoveCopyDialog((current) => (current ? {
+          ...current,
+          duplicateConflicts: conflictingItems,
+          pendingMode: mode,
+        } : current))
+        return
+      }
+    }
+
+    try {
+      if (mode === 'copy') {
+        const newItemId = `s-${Date.now()}`
+        const newItem = {
+          ...item,
+          id: newItemId,
+          user_id: session.uid,
+          date: targetDateKey,
+          completed: false,
+          relatedPrev: null,
+          relatedNext: null,
+        }
+
+        await setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
+        setScheduleMap((current) => {
+          const next = { ...current }
+          const targetList = next[targetDateKey] || []
+          next[targetDateKey] = [...targetList, newItem].sort((entryA, entryB) => parseTimeValue(entryA.time) - parseTimeValue(entryB.time))
+          return next
+        })
+        invalidateScheduleWeeks([item.date, targetDateKey])
+        clearScheduleCache()
+        setSelectedDate(new Date(`${targetDateKey}T00:00:00`))
+        closeMoveCopyDialog()
+        await fetchWeekSchedule()
+        alert(`${targetDateKey} に予定を複製しました`)
+        return
+      }
+
+      const sourceRef = doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`)
+      const movedItem = {
+        ...item,
+        user_id: session.uid,
+        date: targetDateKey,
+        completed: item.completed === true,
+        relatedPrev: null,
+        relatedNext: null,
+      }
+
+      await setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${item.id}`), movedItem)
+      await deleteDoc(sourceRef)
+      setScheduleMap((current) => {
+        const next = { ...current }
+        if (next[item.date]) {
+          next[item.date] = next[item.date].filter((entry) => entry.id !== item.id)
+        }
+        const targetList = next[targetDateKey] || []
+        next[targetDateKey] = [...targetList.filter((entry) => entry.id !== item.id), movedItem].sort((entryA, entryB) => parseTimeValue(entryA.time) - parseTimeValue(entryB.time))
+        return next
+      })
+      invalidateScheduleWeeks([item.date, targetDateKey])
+      clearScheduleCache()
+      setSelectedDate(new Date(`${targetDateKey}T00:00:00`))
+      closeMoveCopyDialog()
+      await fetchWeekSchedule()
+      alert(`${item.date} から ${targetDateKey} に予定を移動しました`)
+    } catch (error) {
+      console.error('予定の複製/移動エラー:', error)
+      alert(`予定の${mode === 'copy' ? '複製' : '移動'}に失敗しました:\n${error.message}`)
+    }
+  }
+
+  const executeMoveOrCopy = async (mode) => {
+    await proceedMoveOrCopy(mode, false)
   }
 
   const openDetail = (item) => {
@@ -847,27 +1064,31 @@ function App() {
 
   const deleteScheduleItem = async (item) => {
     if (!session) return
+    const selectedRef = doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`)
+
+    try {
+      const selectedSnap = await getDoc(selectedRef)
+      if (!selectedSnap.exists()) {
+        alert('削除対象の予定が見つかりません。')
+        removeScheduleItemLocal(item.date, item.id)
+        return
+      }
+
+      const currentItem = selectedSnap.data()
+      if (hasScheduleRelation(currentItem)) {
+        alert('関連付けされている予定は削除できません。関連付けを解除してから削除してください。')
+        fetchWeekSchedule()
+        return
+      }
+    } catch (error) {
+      console.error('予定の関連付け確認エラー:', error)
+      alert(`予定の確認に失敗しました:\n${error.message}`)
+      return
+    }
+
     if (!window.confirm(`「${item.title}」を削除しますか？`)) return
 
     try {
-      const selectedRef = doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`)
-
-      if (item.relatedPrev?.id && item.relatedPrev?.date) {
-        const previousRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedPrev.date}_${item.relatedPrev.id}`)
-        const previousSnap = await getDoc(previousRef)
-        if (previousSnap.exists() && isSameScheduleRelation(previousSnap.data().relatedNext, toScheduleRelation(item))) {
-          await updateDoc(previousRef, { relatedNext: null })
-        }
-      }
-
-      if (item.relatedNext?.id && item.relatedNext?.date) {
-        const nextRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedNext.date}_${item.relatedNext.id}`)
-        const nextSnap = await getDoc(nextRef)
-        if (nextSnap.exists() && isSameScheduleRelation(nextSnap.data().relatedPrev, toScheduleRelation(item))) {
-          await updateDoc(nextRef, { relatedPrev: null })
-        }
-      }
-
       await deleteDoc(selectedRef)
       removeScheduleItemLocal(item.date, item.id)
       fetchWeekSchedule()
@@ -932,37 +1153,6 @@ function App() {
     } catch (error) {
       console.error('完了状態更新エラー:', error)
       alert(`完了状態の更新に失敗しました:\n${error.message}`)
-    }
-  }
-
-  const copyToNextDay = async (item) => {
-    if (!session) return
-
-    try {
-      const nextDate = addDays(new Date(item.date), 1)
-      const nextDateKey = formatDateKey(nextDate)
-      const newItemId = `s-${Date.now()}`
-
-      const newItem = {
-        id: newItemId,
-        user_id: session.uid,
-        title: item.title,
-        time: item.time,
-        endTime: item.endTime,
-        details: item.details,
-        completed: false,
-        priority: item.priority || 'normal',
-        date: nextDateKey,
-        relatedPrev: null,
-        relatedNext: null,
-      }
-
-      await setDoc(doc(db, 'schedule_items', `${session.uid}_${nextDateKey}_${newItemId}`), newItem)
-      fetchWeekSchedule()
-      alert(`${nextDateKey} に予定をコピーしました`)
-    } catch (error) {
-      console.error('予定コピーエラー:', error)
-      alert(`予定コピーに失敗しました:\n${error.message}`)
     }
   }
 
@@ -1110,12 +1300,31 @@ function App() {
       const previousRef = doc(db, 'schedule_items', `${session.uid}_${selectedItem.relatedPrev.date}_${selectedItem.relatedPrev.id}`)
       const previousSnap = await getDoc(previousRef)
       const updates = [updateDoc(selectedRef, { relatedPrev: null })]
+      const previousRelation = selectedItem.relatedPrev
+      const clearsPreviousRelation = previousSnap.exists() && isSameScheduleRelation(previousSnap.data().relatedNext, toScheduleRelation(selectedItem))
 
-      if (previousSnap.exists() && isSameScheduleRelation(previousSnap.data().relatedNext, toScheduleRelation(selectedItem))) {
+      if (clearsPreviousRelation) {
         updates.push(updateDoc(previousRef, { relatedNext: null }))
       }
 
       await Promise.all(updates)
+      setScheduleMap((current) => {
+        const next = { ...current }
+        Object.entries(current).forEach(([dateKey, items]) => {
+          next[dateKey] = items.map((item) => {
+            if (item.id === selectedItem.id && item.date === selectedItem.date) {
+              return { ...item, relatedPrev: null }
+            }
+            if (clearsPreviousRelation && item.id === previousRelation.id && item.date === previousRelation.date) {
+              return { ...item, relatedNext: null }
+            }
+            return item
+          })
+        })
+        return next
+      })
+      setRelationDialog((current) => (current ? { ...current, item: { ...current.item, relatedPrev: null } } : current))
+      setMoveCopyDialog(null)
       closeRelationDialog()
       fetchWeekSchedule()
       alert('関連付けを解除しました。')
@@ -1478,7 +1687,10 @@ function App() {
                 <button
                   type="button"
                   style={styles.menuButton}
-                  onClick={() => setMenuOpen((current) => !current)}
+                  onClick={() => {
+                    setMenuOpen((current) => !current)
+                    setSettingsMenuOpen(false)
+                  }}
                   aria-haspopup="true"
                   aria-expanded={menuOpen}
                   aria-label="メニューを開く"
@@ -1521,6 +1733,41 @@ function App() {
                     >
                       <ClipboardList size={18} /> 未完了一覧
                     </button>
+                    <div style={styles.menuDivider} />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => setSettingsMenuOpen((current) => !current)}
+                      aria-expanded={settingsMenuOpen}
+                    >
+                      <Settings size={18} /> 設定
+                    </button>
+                    {settingsMenuOpen && (
+                      <div style={styles.settingsSubmenu} role="group" aria-label="カレンダー設定">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
+                          onClick={() => setWeekCalendarFixed((current) => !current)}
+                        >
+                          <Check size={18} color={weekCalendarFixed ? '#2563eb' : 'transparent'} />
+                          週カレンダー固定と中止
+                        </button>
+                        <label style={styles.settingsSelectLabel}>
+                          週の開始を設定
+                          <select
+                            value={weekStartDay}
+                            onChange={(event) => setWeekStartDay(Number(event.target.value))}
+                            style={styles.settingsSelect}
+                          >
+                            {dayNames.map((dayName, dayIndex) => (
+                              <option key={dayName} value={dayIndex}>{dayName}曜日</option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    )}
                     <div style={styles.menuDivider} />
                     <button
                       type="button"
@@ -1655,10 +1902,10 @@ function App() {
           </header>
 
           {view === 'home' && (
-          <main style={styles.main}>
+          <main style={{ ...styles.main, ...(weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
             <section
               className="week-section"
-              style={{ ...styles.weekSection, touchAction: 'pan-y' }}
+              style={{ ...styles.weekSection, ...(weekCalendarFixed ? styles.fixedWeekSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
                 weekTouchRef.current = event.changedTouches[0].clientX
               }}
@@ -1689,11 +1936,11 @@ function App() {
               }}
             >
               <div className="week-nav" style={styles.weekNav}>
-                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeekSunday}>
+                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeek}>
                   <ChevronLeft size={16} />
                 </button>
                 <div className="week-nav-title" style={styles.weekTitle}>{formatMonthTitle(weekDates[0])}</div>
-                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="次の週" onClick={selectNextWeekMonday}>
+                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="次の週" onClick={selectNextWeek}>
                   <ChevronRight size={16} />
                 </button>
               </div>
@@ -1730,7 +1977,7 @@ function App() {
             </section>
 
             <section
-              style={{ ...styles.scheduleSection, touchAction: 'pan-y' }}
+              style={{ ...styles.scheduleSection, ...(weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
                 dayTouchRef.current = event.changedTouches[0].clientX
               }}
@@ -1841,12 +2088,12 @@ function App() {
                             <button
                               type="button"
                               style={styles.copyButton}
-                              aria-label="翌日にコピー"
+                              aria-label="複製または移動"
                               onClick={(event) => {
                                 event.stopPropagation()
-                                if (!item.completed) copyToNextDay(item)
+                                if (!item.completed) openMoveCopyDialog(item)
                               }}
-                              title="翌日にコピー"
+                              title="複製 / 移動"
                               disabled={item.completed}
                             >
                               📋
@@ -1881,10 +2128,12 @@ function App() {
                               type="button"
                               style={styles.deleteButton}
                               aria-label="予定を削除"
+                              disabled={hasScheduleRelation(item)}
                               onClick={(event) => {
                                 event.stopPropagation()
                                 deleteScheduleItem(item)
                               }}
+                              title={hasScheduleRelation(item) ? '関連付けを解除してから削除してください' : '予定を削除'}
                             >
                               <Trash2 size={14} />
                             </button>
@@ -2065,6 +2314,86 @@ function App() {
                   >
                     関連付けする
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {moveCopyDialog && (
+            <div style={styles.modalOverlay} onClick={closeMoveCopyDialog}>
+              <div className="schedule-modal" style={{ ...styles.modal, maxWidth: '500px' }} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <ClipboardList size={18} color="#2563eb" />
+                    <h3 style={styles.modalTitle}>予定の複製 / 移動</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={closeMoveCopyDialog}>閉じる</button>
+                </div>
+
+                <div style={styles.relationTargetBox}>
+                  <strong>{moveCopyDialog.item.title}</strong>
+                  <div style={styles.relationTargetMeta}>
+                    {moveCopyDialog.item.date} {moveCopyDialog.item.time} - {moveCopyDialog.item.endTime}
+                  </div>
+                </div>
+
+                {hasScheduleRelation(moveCopyDialog.item) ? (
+                  <div style={{ ...styles.currentRelationBox, background: '#fee2e2', borderColor: '#fecaca', color: '#991b1b' }}>
+                    この予定は関連付け済みのため、移動はできません。関連を削除してから実行してください。
+                  </div>
+                ) : null}
+
+                {moveCopyDialog.duplicateConflicts?.length > 0 && (
+                  <div style={{ ...styles.currentRelationBox, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a4d00' }}>
+                    <strong>重複する予定があります</strong>
+                    <div style={{ marginTop: '8px' }}>
+                      {moveCopyDialog.duplicateConflicts.map((conflict) => (
+                        <div key={`${conflict.date}-${conflict.time}-${conflict.id}`}>
+                          {conflict.date} {conflict.time} - {conflict.endTime}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <label style={styles.fieldLabel}>移動先の日付</label>
+                <input
+                  type="date"
+                  value={moveCopyDialog.targetDate}
+                  onChange={(event) => setMoveCopyDialog((current) => current ? { ...current, targetDate: event.target.value, duplicateConflicts: [], pendingMode: null } : current)}
+                  style={styles.modalInput}
+                />
+
+                <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end', marginTop: '16px' }}>
+                  <button type="button" style={styles.secondaryButton} onClick={closeMoveCopyDialog}>キャンセル</button>
+                  <button
+                    type="button"
+                    style={styles.primaryButton}
+                    onClick={() => executeMoveOrCopy('copy')}
+                    disabled={!moveCopyDialog.targetDate}
+                  >
+                    複製
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...styles.primaryButton, background: '#0f766e' }}
+                    onClick={() => executeMoveOrCopy('move')}
+                    disabled={hasScheduleRelation(moveCopyDialog.item) || !moveCopyDialog.targetDate}
+                  >
+                    移動
+                  </button>
+                  {moveCopyDialog.duplicateConflicts?.length > 0 && (
+                    <button
+                      type="button"
+                      style={{ ...styles.primaryButton, background: '#ef4444' }}
+                      onClick={() => {
+                        const nextMode = moveCopyDialog.pendingMode || 'copy'
+                        void proceedMoveOrCopy(nextMode, true)
+                      }}
+                    >
+                      重複を承認して実行
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -2334,6 +2663,32 @@ const styles = {
   menuItemDanger: {
     color: '#dc2626',
   },
+  settingsSubmenu: {
+    margin: '0 6px 4px',
+    padding: '4px',
+    borderLeft: '2px solid #bfdbfe',
+    background: '#f8fbff',
+  },
+  settingsSelectLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    padding: '10px 10px 10px 14px',
+    color: '#1f2937',
+    fontSize: '14px',
+    fontWeight: 600,
+  },
+  settingsSelect: {
+    minWidth: '76px',
+    border: '1px solid #bfdbfe',
+    borderRadius: '6px',
+    background: '#ffffff',
+    color: '#1e3a8a',
+    padding: '6px 8px',
+    fontSize: '14px',
+    fontWeight: 600,
+  },
   menuDivider: {
     height: '1px',
     background: '#e5eefb',
@@ -2493,6 +2848,11 @@ const styles = {
     flexDirection: 'column',
     gap: '18px',
   },
+  mainWithFixedWeek: {
+    height: 'calc(100dvh - 132px)',
+    minHeight: 0,
+    overflow: 'hidden',
+  },
   footer: {
     marginTop: '24px',
     padding: '16px 0 4px',
@@ -2550,6 +2910,9 @@ const styles = {
     borderRadius: '18px',
     padding: '12px',
     boxShadow: '0 12px 26px rgba(15, 23, 42, 0.04)',
+  },
+  fixedWeekSection: {
+    flexShrink: 0,
   },
   weekNav: {
     display: 'flex',
@@ -2618,6 +2981,12 @@ const styles = {
     borderRadius: '18px',
     padding: '16px',
     boxShadow: '0 12px 26px rgba(15, 23, 42, 0.04)',
+  },
+  scrollableScheduleSection: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
   },
   selectedHeader: {
     display: 'flex',
