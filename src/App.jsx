@@ -19,7 +19,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
+import { ArrowUp, Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -170,6 +170,7 @@ function App() {
   const [moveCopyCalendarOpen, setMoveCopyCalendarOpen] = useState(false)
   const [moveCopyCalendarMonth, setMoveCopyCalendarMonth] = useState(null)
   const [scheduleSearchQuery, setScheduleSearchQuery] = useState('')
+  const [searchMonthDate, setSearchMonthDate] = useState(() => new Date())
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
@@ -203,6 +204,32 @@ function App() {
   const daySwipeRef = useRef(null)
   const dayTouchRef = useRef(null)
   const loadedWeeksRef = useRef(new Set())
+  const mainRef = useRef(null)
+  const scheduleSectionRef = useRef(null)
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    if (typeof document !== 'undefined') {
+      if (document.documentElement) {
+        document.documentElement.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+      if (document.body) {
+        document.body.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+      const scrollableElements = document.querySelectorAll('main, section, div')
+      scrollableElements.forEach((el) => {
+        if (el.scrollTop > 0) {
+          el.scrollTo({ top: 0, behavior: 'smooth' })
+        }
+      })
+    }
+    if (mainRef.current) {
+      mainRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+    if (scheduleSectionRef.current) {
+      scheduleSectionRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
 
   useEffect(() => {
     // 予定の緊急度（15分前/5分前）表示を更新するための定期チェック
@@ -673,18 +700,37 @@ function App() {
       })
   }, [weekDates, scheduleMap])
 
+  const searchMonthKey = useMemo(() => {
+    const year = searchMonthDate.getFullYear()
+    const month = String(searchMonthDate.getMonth() + 1).padStart(2, '0')
+    return `${year}-${month}`
+  }, [searchMonthDate])
+
+  const searchMonthTitle = useMemo(() => {
+    return `${searchMonthDate.getFullYear()}年${searchMonthDate.getMonth() + 1}月`
+  }, [searchMonthDate])
+
+  const changeSearchMonth = (offset) => {
+    setSearchMonthDate((prev) => {
+      const next = new Date(prev)
+      next.setMonth(next.getMonth() + offset)
+      return next
+    })
+  }
+
   const scheduleSearchResults = useMemo(() => {
     const normalizedQuery = scheduleSearchQuery.trim().toLocaleLowerCase('ja-JP')
     if (!normalizedQuery) return []
 
     const allItems = Object.entries(scheduleMap).flatMap(([dateKey, list]) => {
+      if (!dateKey.startsWith(searchMonthKey)) return []
       return (list || []).map((item) => ({ ...item, date: item.date || dateKey }))
     })
 
     return allItems
       .filter((item) => (item.title || '予定').toLocaleLowerCase('ja-JP').includes(normalizedQuery))
       .sort((a, b) => (a.date || '').localeCompare(b.date || '') || parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00'))
-  }, [scheduleMap, scheduleSearchQuery])
+  }, [scheduleMap, scheduleSearchQuery, searchMonthKey])
 
   const fetchWeekSchedule = async () => {
     if (!session) return
@@ -1968,20 +2014,43 @@ function App() {
           </header>
 
           {view === 'home' && (
-          <main style={{ ...styles.main, ...(weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
+          <main ref={mainRef} style={{ ...styles.main, ...(weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
             <section className="schedule-search-section" style={styles.scheduleSearchSection} aria-label="スケジュール名を検索">
               <div className="schedule-search-header" style={styles.scheduleSearchHeader}>
                 <div>
                   <h2 className="schedule-search-title" style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
-                  <p className="schedule-search-caption" style={styles.scheduleSearchCaption}>予定名から部分一致で検索できます</p>
+                  <p className="schedule-search-caption" style={styles.scheduleSearchCaption}>{searchMonthTitle}の予定名から部分一致で検索</p>
                 </div>
-                {scheduleSearchQuery && (
-                  <button type="button" className="schedule-search-clear-btn" style={styles.searchClearButton} onClick={() => {
-                    setScheduleSearchQuery('')
-                  }} aria-label="検索をクリア" title="検索をクリア">
-                    <X size={17} />
+                <div className="schedule-search-nav" style={styles.scheduleSearchNav}>
+                  <button
+                    type="button"
+                    className="schedule-search-nav-btn"
+                    style={styles.searchNavButton}
+                    onClick={() => changeSearchMonth(-1)}
+                    aria-label="前月"
+                    title="前月"
+                  >
+                    <ChevronLeft size={16} />
                   </button>
-                )}
+                  <span className="schedule-search-nav-month" style={styles.searchNavMonthText}>{searchMonthTitle}</span>
+                  <button
+                    type="button"
+                    className="schedule-search-nav-btn"
+                    style={styles.searchNavButton}
+                    onClick={() => changeSearchMonth(1)}
+                    aria-label="翌月"
+                    title="翌月"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                  {scheduleSearchQuery && (
+                    <button type="button" className="schedule-search-clear-btn" style={styles.searchClearButton} onClick={() => {
+                      setScheduleSearchQuery('')
+                    }} aria-label="検索をクリア" title="検索をクリア">
+                      <X size={16} />
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="schedule-search-input-row" style={styles.scheduleSearchInputRow}>
                 <Search size={18} color="#2563eb" />
@@ -1990,14 +2059,14 @@ function App() {
                   className="schedule-search-input"
                   value={scheduleSearchQuery}
                   onChange={(event) => setScheduleSearchQuery(event.target.value)}
-                  placeholder="予定名を入力"
+                  placeholder={`${searchMonthTitle}の予定名を入力`}
                   style={styles.scheduleSearchInput}
                 />
               </div>
               {scheduleSearchQuery.trim() && (
                 <div style={styles.scheduleSearchResults}>
                   <div style={styles.scheduleSearchStatus}>
-                    「{scheduleSearchQuery.trim()}」の検索結果: {scheduleSearchResults.length}件
+                    【{searchMonthTitle}】「{scheduleSearchQuery.trim()}」の検索結果: {scheduleSearchResults.length}件
                   </div>
                   {scheduleSearchResults.map((item) => (
                     <button
@@ -2015,7 +2084,7 @@ function App() {
                     </button>
                   ))}
                   {scheduleSearchResults.length === 0 && (
-                    <div style={styles.scheduleSearchEmpty}>該当する予定はありません。</div>
+                    <div style={styles.scheduleSearchEmpty}>{searchMonthTitle}に該当する予定はありません。</div>
                   )}
                 </div>
               )}
@@ -2094,6 +2163,7 @@ function App() {
             </section>
 
             <section
+              ref={scheduleSectionRef}
               className="schedule-section"
               style={{ ...styles.scheduleSection, ...(weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
@@ -2330,6 +2400,17 @@ function App() {
           <footer style={styles.footer}>
             © {new Date().getFullYear()} ロン君のスケジュール
           </footer>
+
+          <button
+            type="button"
+            className="scroll-to-top-button"
+            style={styles.scrollToTopButton}
+            onClick={scrollToTop}
+            aria-label="最上部に戻る"
+            title="最上部に戻る"
+          >
+            <ArrowUp size={20} />
+          </button>
 
           {relationDialog && (
             <div style={styles.modalOverlay} onClick={closeRelationDialog}>
@@ -3025,6 +3106,23 @@ const styles = {
     fontSize: '12px',
     color: '#94a3b8',
   },
+  scrollToTopButton: {
+    position: 'fixed',
+    bottom: '24px',
+    right: '20px',
+    zIndex: 50,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '46px',
+    height: '46px',
+    borderRadius: '50%',
+    border: '1px solid #bfdbfe',
+    background: '#2563eb',
+    color: '#ffffff',
+    boxShadow: '0 4px 14px rgba(37, 99, 235, 0.35)',
+    cursor: 'pointer',
+  },
   listSection: {
     background: '#ffffff',
     border: '1px solid #e8eef7',
@@ -3150,7 +3248,7 @@ const styles = {
   },
   scheduleSearchHeader: {
     display: 'flex',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: '12px',
     marginBottom: '10px',
@@ -3164,17 +3262,43 @@ const styles = {
     fontSize: '12px',
     marginTop: '3px',
   },
+  scheduleSearchNav: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  searchNavButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '28px',
+    height: '28px',
+    border: '1px solid #d9e2f2',
+    borderRadius: '7px',
+    background: '#ffffff',
+    color: '#334155',
+    cursor: 'pointer',
+    padding: 0,
+  },
+  searchNavMonthText: {
+    fontSize: '13px',
+    fontWeight: 700,
+    color: '#1e293b',
+    minWidth: '76px',
+    textAlign: 'center',
+  },
   searchClearButton: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '32px',
-    height: '32px',
+    width: '28px',
+    height: '28px',
     border: '1px solid #d9e2f2',
     borderRadius: '7px',
     background: '#f8fbff',
     color: '#475569',
     cursor: 'pointer',
+    padding: 0,
   },
   scheduleSearchInputRow: {
     display: 'flex',
