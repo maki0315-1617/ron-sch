@@ -19,7 +19,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, FileText, Home, Link2, LogOut, Menu, PencilLine, Plus, Settings, Trash2, TrendingUp, X } from 'lucide-react'
+import { Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -90,6 +90,20 @@ const addDays = (date, amount) => {
   return next
 }
 
+const getMonthCalendarDays = (monthDate) => {
+  const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1)
+  const lastDay = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0)
+  const leadingDays = firstDay.getDay()
+  const daysInMonth = lastDay.getDate()
+  const calendarDays = Array.from({ length: leadingDays + daysInMonth }, (_, index) => {
+    if (index < leadingDays) return null
+    return new Date(monthDate.getFullYear(), monthDate.getMonth(), index - leadingDays + 1)
+  })
+
+  while (calendarDays.length % 7 !== 0) calendarDays.push(null)
+  return calendarDays
+}
+
 const getWeekStart = (date, weekStartDay = 1) => {
   const base = new Date(date)
   base.setHours(0, 0, 0, 0)
@@ -150,8 +164,14 @@ function App() {
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [scheduleMap, setScheduleMap] = useState({})
   const [loading, setLoading] = useState(false)
+  const [schedulePreview, setSchedulePreview] = useState(null)
   const [detailDraft, setDetailDraft] = useState(null)
   const [moveCopyDialog, setMoveCopyDialog] = useState(null)
+  const [moveCopyCalendarOpen, setMoveCopyCalendarOpen] = useState(false)
+  const [moveCopyCalendarMonth, setMoveCopyCalendarMonth] = useState(null)
+  const [scheduleSearchQuery, setScheduleSearchQuery] = useState('')
+  const [scheduleSearchResults, setScheduleSearchResults] = useState([])
+  const [scheduleSearchLoading, setScheduleSearchLoading] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
@@ -627,6 +647,14 @@ function App() {
 
   const weekStartKey = useMemo(() => formatDateKey(getWeekStart(selectedDate, weekStartDay)), [selectedDate, weekStartDay])
 
+  const displayedMonthDate = weekDates[0]
+  const displayedMonthYear = displayedMonthDate.getFullYear()
+  const displayedMonthIndex = displayedMonthDate.getMonth()
+  const displayedMonthStartKey = formatDateKey(new Date(displayedMonthYear, displayedMonthIndex, 1))
+  const displayedMonthEndKey = formatDateKey(new Date(displayedMonthYear, displayedMonthIndex + 1, 0))
+  const displayedMonthKey = displayedMonthStartKey.slice(0, 7)
+  const sessionUserId = session?.uid
+
   const selectedKey = formatDateKey(selectedDate)
 
   const selectedItems = useMemo(() => {
@@ -658,15 +686,13 @@ function App() {
     setLoading(true)
     try {
       const startKey = formatDateKey(weekDates[0])
-      const endKey = formatDateKey(weekDates[6])
       const rangeKeys = weekDates.map((date) => formatDateKey(date))
+      const weekDateKeys = new Set(rangeKeys)
 
-      // user_id + date 範囲でサーバー側に絞り込ませる（composite index 使用）
+      // 検索と同じユーザー単位の取得結果から、表示中の週だけを画面へ反映する
       const q = query(
         collection(db, 'schedule_items'),
-        where('user_id', '==', session.uid),
-        where('date', '>=', startKey),
-        where('date', '<=', endKey)
+        where('user_id', '==', session.uid)
       )
 
       const snapshot = await getDocs(q)
@@ -675,6 +701,7 @@ function App() {
       snapshot.forEach((docSnap) => {
         const item = docSnap.data()
         const dateKey = item.date
+        if (!weekDateKeys.has(dateKey)) return
 
         if (!nextMap[dateKey]) {
           nextMap[dateKey] = []
@@ -721,6 +748,44 @@ function App() {
     if (loadedWeeksRef.current.has(currentWeekStartKey)) return
     fetchWeekSchedule()
   }, [session?.uid, weekStartKey])
+
+  useEffect(() => {
+    const normalizedQuery = scheduleSearchQuery.trim().toLocaleLowerCase('ja-JP')
+    if (!sessionUserId || !normalizedQuery) {
+      setScheduleSearchResults([])
+      setScheduleSearchLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const searchSchedules = async () => {
+      setScheduleSearchLoading(true)
+      try {
+        const snapshot = await getDocs(query(
+          collection(db, 'schedule_items'),
+          where('user_id', '==', sessionUserId)
+        ))
+        if (cancelled) return
+
+        const results = snapshot.docs
+          .map((docSnap) => ({ ...docSnap.data(), id: docSnap.data().id || docSnap.id }))
+          .filter((item) => String(item.date || '').slice(0, 7) === displayedMonthKey)
+          .filter((item) => (item.title || '予定').toLocaleLowerCase('ja-JP').includes(normalizedQuery))
+          .sort((a, b) => a.date.localeCompare(b.date) || parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00'))
+        setScheduleSearchResults(results)
+      } catch (error) {
+        console.error('スケジュール検索エラー:', error)
+        if (!cancelled) setScheduleSearchResults([])
+      } finally {
+        if (!cancelled) setScheduleSearchLoading(false)
+      }
+    }
+
+    searchSchedules()
+    return () => {
+      cancelled = true
+    }
+  }, [displayedMonthKey, scheduleSearchQuery, sessionUserId])
 
   // 画面表示を即時反映するための楽観的更新（Firestore への書き込みは呼び出し側で実施済み）
   const upsertScheduleItemLocal = (item) => {
@@ -841,7 +906,9 @@ function App() {
     if (!session || !item) return
 
     const fallbackItem = { ...item, date: item.date || selectedKey }
+    setMoveCopyCalendarOpen(false)
     setMoveCopyDialog({
+      dialogId: `move-copy-${Date.now()}`,
       item: fallbackItem,
       targetDate: fallbackItem.date,
       duplicateConflicts: [],
@@ -856,6 +923,7 @@ function App() {
         : fallbackItem
 
       setMoveCopyDialog((current) => ({
+        dialogId: current?.dialogId || `move-copy-${Date.now()}`,
         item: latestItem,
         targetDate: current?.targetDate || latestItem.date || fallbackItem.date,
         duplicateConflicts: current?.duplicateConflicts || [],
@@ -866,7 +934,27 @@ function App() {
     }
   }
 
-  const closeMoveCopyDialog = () => setMoveCopyDialog(null)
+  const closeMoveCopyDialog = () => {
+    setMoveCopyCalendarOpen(false)
+    setMoveCopyDialog(null)
+  }
+
+  const openMoveCopyCalendar = () => {
+    if (!moveCopyDialog) return
+    const targetDate = new Date(`${moveCopyDialog.targetDate}T00:00:00`)
+    setMoveCopyCalendarMonth(Number.isNaN(targetDate.getTime()) ? new Date() : targetDate)
+    setMoveCopyCalendarOpen(true)
+  }
+
+  const selectMoveCopyDate = (date) => {
+    setMoveCopyDialog((current) => current ? {
+      ...current,
+      targetDate: formatDateKey(date),
+      duplicateConflicts: [],
+      pendingMode: null,
+    } : current)
+    setMoveCopyCalendarOpen(false)
+  }
 
   const proceedMoveOrCopy = async (mode, skipDuplicateCheck = false) => {
     if (!session || !moveCopyDialog) return
@@ -987,6 +1075,20 @@ function App() {
 
   const closeDetail = () => setDetailDraft(null)
 
+  const openSchedulePreview = (item) => setSchedulePreview(item)
+
+  const closeSchedulePreview = () => setSchedulePreview(null)
+
+  const closeScheduleActionMenu = (event) => {
+    event.currentTarget.closest('details')?.removeAttribute('open')
+  }
+
+  const editScheduleFromPreview = () => {
+    if (!schedulePreview) return
+    openDetail(schedulePreview)
+    closeSchedulePreview()
+  }
+
   const persistCommonTitles = async (nextTitles) => {
     if (!session) return
     await setDoc(doc(db, 'common_titles', session.uid), { titles: nextTitles })
@@ -1099,9 +1201,8 @@ function App() {
   }
 
   const startLongPress = (item) => {
-    if (item.completed) return
     holdTimerRef.current = setTimeout(() => {
-      openDetail(item)
+      openSchedulePreview(item)
     }, 500)
   }
 
@@ -1903,6 +2004,55 @@ function App() {
 
           {view === 'home' && (
           <main style={{ ...styles.main, ...(weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
+            <section style={styles.scheduleSearchSection} aria-label="スケジュール名を検索">
+              <div style={styles.scheduleSearchHeader}>
+                <div>
+                  <h2 style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
+                  <p style={styles.scheduleSearchCaption}>{formatMonthTitle(displayedMonthDate)}の予定名から部分一致で検索できます</p>
+                </div>
+                {scheduleSearchQuery && (
+                  <button type="button" style={styles.searchClearButton} onClick={() => {
+                    setScheduleSearchQuery('')
+                  }} aria-label="検索をクリア" title="検索をクリア">
+                    <X size={17} />
+                  </button>
+                )}
+              </div>
+              <div style={styles.scheduleSearchInputRow}>
+                <Search size={20} color="#2563eb" />
+                <input
+                  type="search"
+                  value={scheduleSearchQuery}
+                  onChange={(event) => setScheduleSearchQuery(event.target.value)}
+                  placeholder="予定名を入力"
+                  style={styles.scheduleSearchInput}
+                />
+              </div>
+              {scheduleSearchQuery.trim() && (
+                <div style={styles.scheduleSearchResults}>
+                  <div style={styles.scheduleSearchStatus}>
+                    {scheduleSearchLoading ? '検索中...' : `「${scheduleSearchQuery.trim()}」の検索結果: ${scheduleSearchResults.length}件`}
+                  </div>
+                  {!scheduleSearchLoading && scheduleSearchResults.map((item) => (
+                    <button
+                      key={`${item.date}_${item.id}`}
+                      type="button"
+                      style={styles.scheduleSearchResult}
+                      onClick={() => {
+                        setSelectedDate(new Date(`${item.date}T00:00:00`))
+                        openSchedulePreview(item)
+                      }}
+                    >
+                      <span style={styles.scheduleSearchResultTitle}>{item.title || '予定'}</span>
+                      <span style={styles.scheduleSearchResultMeta}>{item.date}　{item.time || '09:00'} - {item.endTime || '10:00'}</span>
+                    </button>
+                  ))}
+                  {!scheduleSearchLoading && scheduleSearchResults.length === 0 && (
+                    <div style={styles.scheduleSearchEmpty}>該当する予定はありません。</div>
+                  )}
+                </div>
+              )}
+            </section>
             <section
               className="week-section"
               style={{ ...styles.weekSection, ...(weekCalendarFixed ? styles.fixedWeekSection : {}), touchAction: 'pan-y' }}
@@ -2046,7 +2196,7 @@ function App() {
                       onPointerCancel={clearLongPress}
                       onClick={() => {
                         clearLongPress()
-                        if (!item.completed) openDetail(item)
+                        openSchedulePreview(item)
                       }}
                       style={{
                         ...styles.scheduleCard,
@@ -2085,58 +2235,37 @@ function App() {
                             >
                               <Check size={14} />
                             </button>
-                            <button
-                              type="button"
-                              style={styles.copyButton}
-                              aria-label="複製または移動"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                if (!item.completed) openMoveCopyDialog(item)
-                              }}
-                              title="複製 / 移動"
-                              disabled={item.completed}
-                            >
-                              📋
-                            </button>
-                            <button
-                              type="button"
-                              style={styles.weeklyCopyButton}
-                              aria-label="未来4週間にコピー"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                if (!item.completed) copyToFutureFourWeeks(item)
-                              }}
-                              title="未来4週間にコピー"
-                              disabled={item.completed}
-                            >
-                              ↻
-                            </button>
-                            <button
-                              type="button"
-                              style={styles.relationButton}
-                              aria-label="前の予定と関連付け"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                if (!item.completed) openRelationDialog(item)
-                              }}
-                              title="前の予定と関連付け"
-                              disabled={item.completed}
-                            >
-                              <Link2 size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              style={styles.deleteButton}
-                              aria-label="予定を削除"
-                              disabled={hasScheduleRelation(item)}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                deleteScheduleItem(item)
-                              }}
-                              title={hasScheduleRelation(item) ? '関連付けを解除してから削除してください' : '予定を削除'}
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            <details style={styles.scheduleActionMenu} onClick={(event) => event.stopPropagation()}>
+                              <summary style={styles.scheduleActionMenuButton} aria-label="予定の操作" title="予定の操作">
+                                <MoreHorizontal size={18} />
+                              </summary>
+                              <div style={styles.scheduleActionMenuList}>
+                                <button type="button" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  closeScheduleActionMenu(event)
+                                  if (!item.completed) openMoveCopyDialog(item)
+                                }} disabled={item.completed}>
+                                  <Copy size={15} /> 複製 / 移動
+                                </button>
+                                <button type="button" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  closeScheduleActionMenu(event)
+                                  if (!item.completed) copyToFutureFourWeeks(item)
+                                }} disabled={item.completed}>
+                                  <Repeat2 size={15} /> 未来4週間にコピー
+                                </button>
+                                <button type="button" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  closeScheduleActionMenu(event)
+                                  if (!item.completed) openRelationDialog(item)
+                                }} disabled={item.completed}>
+                                  <Link2 size={15} /> 前の予定と関連付け
+                                </button>
+                                <button type="button" style={{ ...styles.scheduleActionMenuItem, ...styles.scheduleActionDelete }} onClick={(event) => {
+                                  closeScheduleActionMenu(event)
+                                  deleteScheduleItem(item)
+                                }}>
+                                  <Trash2 size={15} /> 予定を削除
+                                </button>
+                              </div>
+                            </details>
                           </div>
                         </div>
 
@@ -2357,12 +2486,50 @@ function App() {
                 )}
 
                 <label style={styles.fieldLabel}>移動先の日付</label>
-                <input
-                  type="date"
-                  value={moveCopyDialog.targetDate}
-                  onChange={(event) => setMoveCopyDialog((current) => current ? { ...current, targetDate: event.target.value, duplicateConflicts: [], pendingMode: null } : current)}
-                  style={styles.modalInput}
-                />
+                <div style={styles.dateInputRow}>
+                  <input
+                    key={moveCopyDialog.dialogId}
+                    type="date"
+                    value={moveCopyDialog.targetDate}
+                    onChange={(event) => setMoveCopyDialog((current) => current ? { ...current, targetDate: event.target.value, duplicateConflicts: [], pendingMode: null } : current)}
+                    style={{ ...styles.modalInput, flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    style={styles.datePickerButton}
+                    aria-label="カレンダーを開く"
+                    title="カレンダーを開く"
+                    onClick={() => moveCopyCalendarOpen ? setMoveCopyCalendarOpen(false) : openMoveCopyCalendar()}
+                  >
+                    <CalendarDays size={19} />
+                  </button>
+                </div>
+                {moveCopyCalendarOpen && moveCopyCalendarMonth && (
+                  <div style={styles.moveCopyCalendar}>
+                    <div style={styles.moveCopyCalendarHeader}>
+                      <button type="button" style={styles.calendarNavButton} aria-label="前の月" onClick={() => setMoveCopyCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>
+                        <ChevronLeft size={18} />
+                      </button>
+                      <strong>{formatMonthTitle(moveCopyCalendarMonth)}</strong>
+                      <button type="button" style={styles.calendarNavButton} aria-label="次の月" onClick={() => setMoveCopyCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}>
+                        <ChevronRight size={18} />
+                      </button>
+                    </div>
+                    <div style={styles.moveCopyCalendarGrid}>
+                      {dayNames.map((dayName) => <span key={dayName} style={styles.calendarDayName}>{dayName}</span>)}
+                      {getMonthCalendarDays(moveCopyCalendarMonth).map((date, index) => date ? (
+                        <button
+                          key={formatDateKey(date)}
+                          type="button"
+                          style={{ ...styles.calendarDateButton, ...(moveCopyDialog.targetDate === formatDateKey(date) ? styles.calendarSelectedDateButton : {}) }}
+                          onClick={() => selectMoveCopyDate(date)}
+                        >
+                          {date.getDate()}
+                        </button>
+                      ) : <span key={`blank-${index}`} />)}
+                    </div>
+                  </div>
+                )}
 
                 <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end', marginTop: '16px' }}>
                   <button type="button" style={styles.secondaryButton} onClick={closeMoveCopyDialog}>キャンセル</button>
@@ -2394,6 +2561,34 @@ function App() {
                       重複を承認して実行
                     </button>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {schedulePreview && (
+            <div style={styles.modalOverlay} onClick={closeSchedulePreview}>
+              <div className="schedule-modal schedule-preview-modal" style={{ ...styles.modal, ...styles.schedulePreviewModal }} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <FileText size={22} color="#2563eb" />
+                    <h3 style={styles.modalTitle}>予定の詳細</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={closeSchedulePreview}>閉じる</button>
+                </div>
+                <div style={styles.previewMeta}>{formatDisplayDate(new Date(`${schedulePreview.date}T00:00:00`))}　{schedulePreview.time || '09:00'} - {schedulePreview.endTime || '10:00'}</div>
+                <h2 style={styles.previewTitle}>{schedulePreview.title || '予定'}</h2>
+                <div style={styles.previewDetails}>{schedulePreview.details || '詳細メモはありません。'}</div>
+                {schedulePreview.relatedPrev && (
+                  <div style={styles.relationInfoText}>
+                    関連: {schedulePreview.relatedPrev.date} {schedulePreview.relatedPrev.time}-{schedulePreview.relatedPrev.endTime} {schedulePreview.relatedPrev.title}
+                  </div>
+                )}
+                <div style={styles.modalActionRow}>
+                  <button type="button" style={styles.secondaryButton} onClick={closeSchedulePreview}>閉じる</button>
+                  <button type="button" style={styles.primaryButton} onClick={editScheduleFromPreview}>
+                    <PencilLine size={17} /> 編集
+                  </button>
                 </div>
               </div>
             </div>
@@ -2851,7 +3046,8 @@ const styles = {
   mainWithFixedWeek: {
     height: 'calc(100dvh - 132px)',
     minHeight: 0,
-    overflow: 'hidden',
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
   },
   footer: {
     marginTop: '24px',
@@ -2975,6 +3171,100 @@ const styles = {
     fontSize: '11px',
     color: '#64748b',
   },
+  scheduleSearchSection: {
+    background: '#ffffff',
+    border: '1px solid #dbeafe',
+    borderRadius: '12px',
+    boxShadow: '0 6px 16px rgba(15, 23, 42, 0.04)',
+    marginBottom: '14px',
+    padding: '14px',
+  },
+  scheduleSearchHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginBottom: '10px',
+  },
+  scheduleSearchTitle: {
+    color: '#0f172a',
+    fontSize: '17px',
+  },
+  scheduleSearchCaption: {
+    color: '#64748b',
+    fontSize: '12px',
+    marginTop: '3px',
+  },
+  searchClearButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '32px',
+    height: '32px',
+    border: '1px solid #d9e2f2',
+    borderRadius: '7px',
+    background: '#f8fbff',
+    color: '#475569',
+    cursor: 'pointer',
+  },
+  scheduleSearchInputRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    border: '1px solid #bfdbfe',
+    borderRadius: '8px',
+    background: '#f8fbff',
+    padding: '0 10px',
+  },
+  scheduleSearchInput: {
+    width: '100%',
+    border: 0,
+    outline: 0,
+    background: 'transparent',
+    color: '#0f172a',
+    fontSize: '15px',
+    padding: '10px 0',
+  },
+  scheduleSearchResults: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    marginTop: '10px',
+  },
+  scheduleSearchStatus: {
+    color: '#475569',
+    fontSize: '13px',
+    padding: '2px 2px 5px',
+  },
+  scheduleSearchResult: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '12px',
+    width: '100%',
+    border: '1px solid #e0eaf7',
+    borderRadius: '8px',
+    background: '#ffffff',
+    color: '#1e293b',
+    cursor: 'pointer',
+    padding: '10px 12px',
+    textAlign: 'left',
+  },
+  scheduleSearchResultTitle: {
+    fontSize: '15px',
+    fontWeight: 700,
+    overflowWrap: 'anywhere',
+  },
+  scheduleSearchResultMeta: {
+    color: '#64748b',
+    flexShrink: 0,
+    fontSize: '12px',
+  },
+  scheduleSearchEmpty: {
+    color: '#64748b',
+    fontSize: '13px',
+    padding: '10px 2px',
+  },
   scheduleSection: {
     background: '#ffffff',
     border: '1px solid #e8eef7',
@@ -2984,7 +3274,7 @@ const styles = {
   },
   scrollableScheduleSection: {
     flex: 1,
-    minHeight: 0,
+    minHeight: '220px',
     overflowY: 'auto',
     overscrollBehavior: 'contain',
   },
@@ -3203,6 +3493,120 @@ const styles = {
     color: '#a16207',
     cursor: 'pointer',
   },
+  scheduleActionMenu: {
+    position: 'relative',
+  },
+  scheduleActionMenuButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '30px',
+    height: '30px',
+    borderRadius: '8px',
+    border: '1px solid #d1d5db',
+    background: '#ffffff',
+    color: '#475569',
+    cursor: 'pointer',
+    listStyle: 'none',
+  },
+  scheduleActionMenuList: {
+    position: 'absolute',
+    top: '36px',
+    right: 0,
+    zIndex: 10,
+    width: '190px',
+    padding: '6px',
+    border: '1px solid #dfeaf7',
+    borderRadius: '8px',
+    background: '#ffffff',
+    boxShadow: '0 10px 22px rgba(15, 23, 42, 0.16)',
+  },
+  scheduleActionMenuItem: {
+    display: 'flex',
+    alignItems: 'center',
+    width: '100%',
+    gap: '8px',
+    border: 0,
+    borderRadius: '5px',
+    background: 'transparent',
+    color: '#334155',
+    padding: '8px',
+    fontSize: '13px',
+    textAlign: 'left',
+    cursor: 'pointer',
+  },
+  scheduleActionDelete: {
+    color: '#dc2626',
+  },
+  dateInputRow: {
+    display: 'flex',
+    alignItems: 'stretch',
+    gap: '8px',
+  },
+  datePickerButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '42px',
+    flexShrink: 0,
+    border: '1px solid #bfdbfe',
+    borderRadius: '8px',
+    background: '#eff6ff',
+    color: '#2563eb',
+    cursor: 'pointer',
+  },
+  moveCopyCalendar: {
+    marginTop: '10px',
+    border: '1px solid #bfdbfe',
+    borderRadius: '8px',
+    background: '#ffffff',
+    padding: '10px',
+  },
+  moveCopyCalendarHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    color: '#1e3a5f',
+    marginBottom: '8px',
+  },
+  calendarNavButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '30px',
+    height: '30px',
+    border: 0,
+    borderRadius: '5px',
+    background: '#eff6ff',
+    color: '#2563eb',
+    cursor: 'pointer',
+  },
+  moveCopyCalendarGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(7, 1fr)',
+    gap: '3px',
+    textAlign: 'center',
+  },
+  calendarDayName: {
+    color: '#64748b',
+    fontSize: '12px',
+    fontWeight: 700,
+    padding: '4px 0',
+  },
+  calendarDateButton: {
+    minWidth: 0,
+    height: '32px',
+    border: 0,
+    borderRadius: '5px',
+    background: 'transparent',
+    color: '#1e293b',
+    cursor: 'pointer',
+  },
+  calendarSelectedDateButton: {
+    background: '#2563eb',
+    color: '#ffffff',
+    fontWeight: 700,
+  },
   scheduleDetailText: {
     fontSize: '12px',
     color: '#475569',
@@ -3236,6 +3640,34 @@ const styles = {
     borderRadius: '18px',
     padding: '18px 18px 16px',
     boxShadow: '0 18px 40px rgba(15, 23, 42, 0.22)',
+  },
+  schedulePreviewModal: {
+    maxWidth: '680px',
+  },
+  previewMeta: {
+    color: '#475569',
+    fontSize: '16px',
+    fontWeight: 700,
+    marginBottom: '16px',
+  },
+  previewTitle: {
+    color: '#0f172a',
+    fontSize: '30px',
+    lineHeight: 1.4,
+    marginBottom: '18px',
+    overflowWrap: 'anywhere',
+  },
+  previewDetails: {
+    minHeight: '150px',
+    border: '1px solid #dfeaf7',
+    borderRadius: '8px',
+    background: '#f8fbff',
+    color: '#1e293b',
+    fontSize: '20px',
+    lineHeight: 1.8,
+    padding: '16px',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
   },
   modalHeader: {
     display: 'flex',

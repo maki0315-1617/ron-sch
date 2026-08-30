@@ -220,6 +220,14 @@ img {
     height: 88px;
   }
 
+  .schedule-preview-modal {
+    padding: 16px !important;
+  }
+
+  .schedule-preview-modal h2 {
+    font-size: 24px !important;
+  }
+
   .schedule-card-mobile {
     min-width: 0;
     display: grid !important;
