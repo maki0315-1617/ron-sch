@@ -312,6 +312,7 @@ function App() {
     }
 
     let cancelled = false
+    let timerId = null
 
     const loadNotificationState = async () => {
       setNotificationPermission(Notification.permission)
@@ -358,13 +359,18 @@ function App() {
       setNotificationEnabled(true)
     }
 
-    loadNotificationState().catch((error) => {
-      console.error('通知状態の取得エラー:', error)
-    })
+    // 初回レンダリングとスケジュール取得を優先するため、通知同期は遅延実行
+    timerId = setTimeout(() => {
+      loadNotificationState().catch((error) => {
+        console.error('通知状態の取得エラー:', error)
+      })
+    }, 1200)
+
     setNotificationBadgeCount(0)
 
     return () => {
       cancelled = true
+      if (timerId) clearTimeout(timerId)
     }
   }, [session?.uid])
 
@@ -548,6 +554,7 @@ function App() {
 
     let unsubscribe = () => {}
     let active = true
+    let timerId = null
 
     const attachForegroundListener = async () => {
       unsubscribe = await subscribeForegroundNotifications((payload) => {
@@ -580,12 +587,15 @@ function App() {
       })
     }
 
-    attachForegroundListener().catch((error) => {
-      console.error('フォアグラウンド通知購読エラー:', error)
-    })
+    timerId = setTimeout(() => {
+      attachForegroundListener().catch((error) => {
+        console.error('フォアグラウンド通知購読エラー:', error)
+      })
+    }, 1500)
 
     return () => {
       active = false
+      if (timerId) clearTimeout(timerId)
       unsubscribe()
     }
   }, [session?.uid])
