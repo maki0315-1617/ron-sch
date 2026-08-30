@@ -170,8 +170,6 @@ function App() {
   const [moveCopyCalendarOpen, setMoveCopyCalendarOpen] = useState(false)
   const [moveCopyCalendarMonth, setMoveCopyCalendarMonth] = useState(null)
   const [scheduleSearchQuery, setScheduleSearchQuery] = useState('')
-  const [scheduleSearchResults, setScheduleSearchResults] = useState([])
-  const [scheduleSearchLoading, setScheduleSearchLoading] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
@@ -675,22 +673,27 @@ function App() {
       })
   }, [weekDates, scheduleMap])
 
+  const scheduleSearchResults = useMemo(() => {
+    const normalizedQuery = scheduleSearchQuery.trim().toLocaleLowerCase('ja-JP')
+    if (!normalizedQuery) return []
+
+    const allItems = Object.entries(scheduleMap).flatMap(([dateKey, list]) => {
+      return (list || []).map((item) => ({ ...item, date: item.date || dateKey }))
+    })
+
+    return allItems
+      .filter((item) => (item.title || '予定').toLocaleLowerCase('ja-JP').includes(normalizedQuery))
+      .sort((a, b) => (a.date || '').localeCompare(b.date || '') || parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00'))
+  }, [scheduleMap, scheduleSearchQuery])
+
   const fetchWeekSchedule = async () => {
-    if (!session || weekDates.length === 0) return
+    if (!session) return
 
     setLoading(true)
     try {
-      const startKey = formatDateKey(weekDates[0])
-      const endKey = formatDateKey(weekDates[6])
-      const rangeKeys = weekDates.map((date) => formatDateKey(date))
-      const weekDateKeys = new Set(rangeKeys)
-
-      // 初期画面は表示中の週だけを読み込む
       const q = query(
         collection(db, 'schedule_items'),
-        where('user_id', '==', session.uid),
-        where('date', '>=', startKey),
-        where('date', '<=', endKey)
+        where('user_id', '==', session.uid)
       )
 
       const snapshot = await getDocs(q)
@@ -699,7 +702,7 @@ function App() {
       snapshot.forEach((docSnap) => {
         const item = docSnap.data()
         const dateKey = item.date
-        if (!weekDateKeys.has(dateKey)) return
+        if (!dateKey) return
 
         if (!nextMap[dateKey]) {
           nextMap[dateKey] = []
@@ -723,15 +726,7 @@ function App() {
         nextMap[key].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
       })
 
-      // 取得済みの他の週のデータは保持したまま、今回の週の分だけ差し替える
-      setScheduleMap((current) => {
-        const merged = { ...current }
-        rangeKeys.forEach((dateKey) => {
-          merged[dateKey] = nextMap[dateKey] || []
-        })
-        return merged
-      })
-      loadedWeeksRef.current.add(startKey)
+      setScheduleMap(nextMap)
     } catch (error) {
       console.error('週予定取得エラー:', error)
       alert(`スケジュール読み込みエラー:\n${error.message}`)
@@ -742,49 +737,8 @@ function App() {
 
   useEffect(() => {
     if (!session) return
-    const currentWeekStartKey = formatDateKey(getWeekStart(selectedDate, weekStartDay))
-    if (loadedWeeksRef.current.has(currentWeekStartKey)) return
     fetchWeekSchedule()
-  }, [session?.uid, weekStartKey])
-
-  useEffect(() => {
-    const normalizedQuery = scheduleSearchQuery.trim().toLocaleLowerCase('ja-JP')
-    if (!sessionUserId || !normalizedQuery) {
-      setScheduleSearchResults([])
-      setScheduleSearchLoading(false)
-      return
-    }
-
-    let cancelled = false
-    const searchSchedules = async () => {
-      setScheduleSearchLoading(true)
-      try {
-        const snapshot = await getDocs(query(
-          collection(db, 'schedule_items'),
-          where('user_id', '==', sessionUserId),
-          where('date', '>=', weekStartKey),
-          where('date', '<=', weekEndKey)
-        ))
-        if (cancelled) return
-
-        const results = snapshot.docs
-          .map((docSnap) => ({ ...docSnap.data(), id: docSnap.data().id || docSnap.id }))
-          .filter((item) => (item.title || '予定').toLocaleLowerCase('ja-JP').includes(normalizedQuery))
-          .sort((a, b) => a.date.localeCompare(b.date) || parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00'))
-        setScheduleSearchResults(results)
-      } catch (error) {
-        console.error('スケジュール検索エラー:', error)
-        if (!cancelled) setScheduleSearchResults([])
-      } finally {
-        if (!cancelled) setScheduleSearchLoading(false)
-      }
-    }
-
-    searchSchedules()
-    return () => {
-      cancelled = true
-    }
-  }, [scheduleSearchQuery, sessionUserId, weekEndKey, weekStartKey])
+  }, [session?.uid])
 
   // 画面表示を即時反映するための楽観的更新（Firestore への書き込みは呼び出し側で実施済み）
   const upsertScheduleItemLocal = (item) => {
@@ -1057,6 +1011,10 @@ function App() {
   }
 
   const openDetail = (item) => {
+    if (item.completed) {
+      alert('完了済みの予定は編集できません。')
+      return
+    }
     setSaveAsCommonTitle(false)
     setDetailDraft({
       id: item.id,
@@ -1084,6 +1042,10 @@ function App() {
 
   const editScheduleFromPreview = () => {
     if (!schedulePreview) return
+    if (schedulePreview.completed) {
+      alert('完了済みの予定は編集できません。')
+      return
+    }
     openDetail(schedulePreview)
     closeSchedulePreview()
   }
@@ -1213,6 +1175,10 @@ function App() {
   }
 
   const handleAddSchedule = () => {
+    const todayKey = formatDateKey(new Date())
+    if (selectedKey < todayKey) {
+      alert('過去の日付に対する予定の追加です。')
+    }
     setSaveAsCommonTitle(false)
     setDetailDraft({
       id: `new-${Date.now()}`,
@@ -1775,7 +1741,7 @@ function App() {
           </div>
         </div>
       ) : (
-        <div style={styles.appShell}>
+        <div style={styles.appShell} className="app-shell">
           {loading && (
             <div style={styles.progressBarTrack}>
               <div style={styles.progressBarFill} />
@@ -2003,24 +1969,25 @@ function App() {
 
           {view === 'home' && (
           <main style={{ ...styles.main, ...(weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
-            <section style={styles.scheduleSearchSection} aria-label="スケジュール名を検索">
-              <div style={styles.scheduleSearchHeader}>
+            <section className="schedule-search-section" style={styles.scheduleSearchSection} aria-label="スケジュール名を検索">
+              <div className="schedule-search-header" style={styles.scheduleSearchHeader}>
                 <div>
-                  <h2 style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
-                  <p style={styles.scheduleSearchCaption}>{weekStartKey} から {weekEndKey} の予定名を部分一致で検索できます</p>
+                  <h2 className="schedule-search-title" style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
+                  <p className="schedule-search-caption" style={styles.scheduleSearchCaption}>予定名から部分一致で検索できます</p>
                 </div>
                 {scheduleSearchQuery && (
-                  <button type="button" style={styles.searchClearButton} onClick={() => {
+                  <button type="button" className="schedule-search-clear-btn" style={styles.searchClearButton} onClick={() => {
                     setScheduleSearchQuery('')
                   }} aria-label="検索をクリア" title="検索をクリア">
                     <X size={17} />
                   </button>
                 )}
               </div>
-              <div style={styles.scheduleSearchInputRow}>
-                <Search size={20} color="#2563eb" />
+              <div className="schedule-search-input-row" style={styles.scheduleSearchInputRow}>
+                <Search size={18} color="#2563eb" />
                 <input
-                  type="search"
+                  type="text"
+                  className="schedule-search-input"
                   value={scheduleSearchQuery}
                   onChange={(event) => setScheduleSearchQuery(event.target.value)}
                   placeholder="予定名を入力"
@@ -2030,9 +1997,9 @@ function App() {
               {scheduleSearchQuery.trim() && (
                 <div style={styles.scheduleSearchResults}>
                   <div style={styles.scheduleSearchStatus}>
-                    {scheduleSearchLoading ? '検索中...' : `「${scheduleSearchQuery.trim()}」の検索結果: ${scheduleSearchResults.length}件`}
+                    「{scheduleSearchQuery.trim()}」の検索結果: {scheduleSearchResults.length}件
                   </div>
-                  {!scheduleSearchLoading && scheduleSearchResults.map((item) => (
+                  {scheduleSearchResults.map((item) => (
                     <button
                       key={`${item.date}_${item.id}`}
                       type="button"
@@ -2047,7 +2014,7 @@ function App() {
                       <span style={styles.scheduleSearchResultMeta}>{item.date}　{item.time || '09:00'} - {item.endTime || '10:00'}</span>
                     </button>
                   ))}
-                  {!scheduleSearchLoading && scheduleSearchResults.length === 0 && (
+                  {scheduleSearchResults.length === 0 && (
                     <div style={styles.scheduleSearchEmpty}>該当する予定はありません。</div>
                   )}
                 </div>
@@ -2127,6 +2094,7 @@ function App() {
             </section>
 
             <section
+              className="schedule-section"
               style={{ ...styles.scheduleSection, ...(weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
                 dayTouchRef.current = event.changedTouches[0].clientX
@@ -2158,12 +2126,12 @@ function App() {
                 daySwipeRef.current = null
               }}
             >
-              <div style={styles.selectedHeader}>
+              <div className="selected-header" style={styles.selectedHeader}>
                 <div>
-                  <div style={styles.selectedCaption}>選択中の日</div>
-                  <h2 style={styles.selectedDateText}>{formatWeekTitle(selectedDate)}</h2>
+                  <div className="selected-caption" style={styles.selectedCaption}>選択中の日</div>
+                  <h2 className="selected-date-text" style={styles.selectedDateText}>{formatWeekTitle(selectedDate)}</h2>
                 </div>
-                <button type="button" style={styles.addButton} onClick={handleAddSchedule}>
+                <button type="button" className="schedule-add-button" style={styles.addButton} onClick={handleAddSchedule}>
                   <Plus size={18} /> 追加
                 </button>
               </div>
@@ -2173,7 +2141,7 @@ function App() {
               ) : selectedItems.length === 0 ? (
                 <div style={styles.emptyState}>この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
               ) : (
-                <div style={styles.scheduleList}>
+                <div className="schedule-list" style={styles.scheduleList}>
                   {selectedItems.map((item) => {
                     const hasOverlap = selectedItems.some((other) => {
                       return other.id !== item.id && isTimeOverlap(item.time || '09:00', item.endTime || '10:00', other.time || '09:00', other.endTime || '10:00')
@@ -2225,6 +2193,7 @@ function App() {
                           <div className="schedule-actions-mobile" style={{ display: 'flex', gap: '8px' }}>
                             <button
                               type="button"
+                              className="schedule-complete-btn"
                               style={{ ...styles.completeButton, ...(item.completed ? styles.completedButton : {}) }}
                               aria-label={item.completed ? '完了を取り消す' : '予定を完了にする'}
                               onClick={(event) => {
@@ -2233,36 +2202,36 @@ function App() {
                               }}
                               title={item.completed ? '完了を取り消す' : '完了にする'}
                             >
-                              <Check size={14} />
+                              <Check size={16} />
                             </button>
-                            <details style={styles.scheduleActionMenu} onClick={(event) => event.stopPropagation()}>
-                              <summary style={styles.scheduleActionMenuButton} aria-label="予定の操作" title="予定の操作">
-                                <MoreHorizontal size={18} />
+                            <details className="schedule-action-menu" style={styles.scheduleActionMenu} onClick={(event) => event.stopPropagation()}>
+                              <summary className="schedule-action-menu-summary" style={styles.scheduleActionMenuButton} aria-label="予定の操作" title="予定の操作">
+                                <MoreHorizontal size={20} />
                               </summary>
-                              <div style={styles.scheduleActionMenuList}>
-                                <button type="button" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                              <div className="schedule-action-menu-list" style={styles.scheduleActionMenuList}>
+                                <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                   closeScheduleActionMenu(event)
                                   if (!item.completed) openMoveCopyDialog(item)
                                 }} disabled={item.completed}>
-                                  <Copy size={15} /> 複製 / 移動
+                                  <Copy size={18} /> <span>複製 / 移動</span>
                                 </button>
-                                <button type="button" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                   closeScheduleActionMenu(event)
                                   if (!item.completed) copyToFutureFourWeeks(item)
                                 }} disabled={item.completed}>
-                                  <Repeat2 size={15} /> 未来4週間にコピー
+                                  <Repeat2 size={18} /> <span>未来4週間にコピー</span>
                                 </button>
-                                <button type="button" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                   closeScheduleActionMenu(event)
                                   if (!item.completed) openRelationDialog(item)
                                 }} disabled={item.completed}>
-                                  <Link2 size={15} /> 前の予定と関連付け
+                                  <Link2 size={18} /> <span>前の予定と関連付け</span>
                                 </button>
-                                <button type="button" style={{ ...styles.scheduleActionMenuItem, ...styles.scheduleActionDelete }} onClick={(event) => {
+                                <button type="button" className="schedule-action-menu-item schedule-action-delete-item" style={{ ...styles.scheduleActionMenuItem, ...styles.scheduleActionDelete }} onClick={(event) => {
                                   closeScheduleActionMenu(event)
                                   deleteScheduleItem(item)
                                 }}>
-                                  <Trash2 size={15} /> 予定を削除
+                                  <Trash2 size={18} /> <span>予定を削除</span>
                                 </button>
                               </div>
                             </details>
@@ -3215,6 +3184,7 @@ const styles = {
     borderRadius: '8px',
     background: '#f8fbff',
     padding: '0 10px',
+    cursor: 'text',
   },
   scheduleSearchInput: {
     width: '100%',
@@ -3222,7 +3192,7 @@ const styles = {
     outline: 0,
     background: 'transparent',
     color: '#0f172a',
-    fontSize: '15px',
+    fontSize: '16px',
     padding: '10px 0',
   },
   scheduleSearchResults: {
@@ -3500,8 +3470,8 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '30px',
-    height: '30px',
+    width: '32px',
+    height: '32px',
     borderRadius: '8px',
     border: '1px solid #d1d5db',
     background: '#ffffff',
@@ -3511,29 +3481,32 @@ const styles = {
   },
   scheduleActionMenuList: {
     position: 'absolute',
-    top: '36px',
+    top: '38px',
     right: 0,
-    zIndex: 10,
-    width: '190px',
-    padding: '6px',
+    zIndex: 50,
+    width: '220px',
+    padding: '8px 6px',
     border: '1px solid #dfeaf7',
-    borderRadius: '8px',
+    borderRadius: '10px',
     background: '#ffffff',
-    boxShadow: '0 10px 22px rgba(15, 23, 42, 0.16)',
+    boxShadow: '0 12px 28px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06)',
   },
   scheduleActionMenuItem: {
     display: 'flex',
     alignItems: 'center',
     width: '100%',
-    gap: '8px',
+    gap: '10px',
     border: 0,
-    borderRadius: '5px',
+    borderRadius: '6px',
     background: 'transparent',
     color: '#334155',
-    padding: '8px',
-    fontSize: '13px',
+    padding: '10px 12px',
+    fontSize: '14px',
+    fontWeight: 500,
     textAlign: 'left',
     cursor: 'pointer',
+    boxSizing: 'border-box',
+    minHeight: '40px',
   },
   scheduleActionDelete: {
     color: '#dc2626',
