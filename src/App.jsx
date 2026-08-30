@@ -647,12 +647,7 @@ function App() {
 
   const weekStartKey = useMemo(() => formatDateKey(getWeekStart(selectedDate, weekStartDay)), [selectedDate, weekStartDay])
 
-  const displayedMonthDate = weekDates[0]
-  const displayedMonthYear = displayedMonthDate.getFullYear()
-  const displayedMonthIndex = displayedMonthDate.getMonth()
-  const displayedMonthStartKey = formatDateKey(new Date(displayedMonthYear, displayedMonthIndex, 1))
-  const displayedMonthEndKey = formatDateKey(new Date(displayedMonthYear, displayedMonthIndex + 1, 0))
-  const displayedMonthKey = displayedMonthStartKey.slice(0, 7)
+  const weekEndKey = formatDateKey(weekDates[6])
   const sessionUserId = session?.uid
 
   const selectedKey = formatDateKey(selectedDate)
@@ -686,13 +681,16 @@ function App() {
     setLoading(true)
     try {
       const startKey = formatDateKey(weekDates[0])
+      const endKey = formatDateKey(weekDates[6])
       const rangeKeys = weekDates.map((date) => formatDateKey(date))
       const weekDateKeys = new Set(rangeKeys)
 
-      // 検索と同じユーザー単位の取得結果から、表示中の週だけを画面へ反映する
+      // 初期画面は表示中の週だけを読み込む
       const q = query(
         collection(db, 'schedule_items'),
-        where('user_id', '==', session.uid)
+        where('user_id', '==', session.uid),
+        where('date', '>=', startKey),
+        where('date', '<=', endKey)
       )
 
       const snapshot = await getDocs(q)
@@ -763,13 +761,14 @@ function App() {
       try {
         const snapshot = await getDocs(query(
           collection(db, 'schedule_items'),
-          where('user_id', '==', sessionUserId)
+          where('user_id', '==', sessionUserId),
+          where('date', '>=', weekStartKey),
+          where('date', '<=', weekEndKey)
         ))
         if (cancelled) return
 
         const results = snapshot.docs
           .map((docSnap) => ({ ...docSnap.data(), id: docSnap.data().id || docSnap.id }))
-          .filter((item) => String(item.date || '').slice(0, 7) === displayedMonthKey)
           .filter((item) => (item.title || '予定').toLocaleLowerCase('ja-JP').includes(normalizedQuery))
           .sort((a, b) => a.date.localeCompare(b.date) || parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00'))
         setScheduleSearchResults(results)
@@ -785,7 +784,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [displayedMonthKey, scheduleSearchQuery, sessionUserId])
+  }, [scheduleSearchQuery, sessionUserId, weekEndKey, weekStartKey])
 
   // 画面表示を即時反映するための楽観的更新（Firestore への書き込みは呼び出し側で実施済み）
   const upsertScheduleItemLocal = (item) => {
@@ -2008,7 +2007,7 @@ function App() {
               <div style={styles.scheduleSearchHeader}>
                 <div>
                   <h2 style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
-                  <p style={styles.scheduleSearchCaption}>{formatMonthTitle(displayedMonthDate)}の予定名から部分一致で検索できます</p>
+                  <p style={styles.scheduleSearchCaption}>{weekStartKey} から {weekEndKey} の予定名を部分一致で検索できます</p>
                 </div>
                 {scheduleSearchQuery && (
                   <button type="button" style={styles.searchClearButton} onClick={() => {
@@ -2039,6 +2038,7 @@ function App() {
                       type="button"
                       style={styles.scheduleSearchResult}
                       onClick={() => {
+                        setScheduleSearchQuery('')
                         setSelectedDate(new Date(`${item.date}T00:00:00`))
                         openSchedulePreview(item)
                       }}
