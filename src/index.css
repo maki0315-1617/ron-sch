@@ -110,6 +110,28 @@ img {
 
   .app-header-title-box {
     flex: 1 1 auto;
+    min-width: 0;
+    position: relative;
+    z-index: 40;
+  }
+
+  .app-header-title-box > div:first-child {
+    display: block !important;
+    flex: 0 0 44px !important;
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    position: relative !important;
+    z-index: 41 !important;
+  }
+
+  .app-header-title-box > div:first-child > button {
+    display: flex !important;
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    visibility: visible !important;
+    opacity: 1 !important;
   }
 
   .app-title {
