@@ -19,9 +19,33 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { ArrowUp, Bell, BellOff, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
+import { ArrowUp, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
+
+const HELP_SITE_URL = 'https://ron-home-app.vercel.app/'
+const HELP_MAIL_ADDRESS = 'ronron210907@gmail.com'
+
+const helpContent = {
+  ja: {
+    langLabel: '日本語',
+    title: 'ヘルプ',
+    appInfo: 'ロンの簡易スケジュール　Ver1.00',
+    siteLabel: '黒猫ロン君のAI検証ハブサイト',
+    mailLabel: 'お問い合わせメール',
+    note: 'なお、誹謗中傷のメールはご遠慮願います。',
+    close: '閉じる',
+  },
+  en: {
+    langLabel: 'English',
+    title: 'Help',
+    appInfo: "Ron's Simple Schedule　Ver1.00",
+    siteLabel: "Black Cat Ron-kun's AI Verification Hub Site",
+    mailLabel: 'Contact Email',
+    note: 'Please refrain from sending abusive or slanderous emails.',
+    close: 'Close',
+  },
+}
 
 const MAX_COMMON_TITLES = 20
 const WEEK_CALENDAR_FIXED_KEY = 'ron-sch-week-calendar-fixed'
@@ -173,6 +197,7 @@ function App() {
   const [searchMonthDate, setSearchMonthDate] = useState(() => new Date())
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
+  const [commonTitlesExpanded, setCommonTitlesExpanded] = useState(false)
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
   const [nowTick, setNowTick] = useState(() => Date.now())
@@ -185,6 +210,8 @@ function App() {
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [helpLang, setHelpLang] = useState('ja')
   const [weekCalendarFixed, setWeekCalendarFixed] = useState(() => {
     return typeof window !== 'undefined' && window.localStorage.getItem(WEEK_CALENDAR_FIXED_KEY) === 'true'
   })
@@ -197,6 +224,7 @@ function App() {
   const [incompleteLoading, setIncompleteLoading] = useState(false)
   const menuRef = useRef(null)
   const holdTimerRef = useRef(null)
+  const lastCardTapRef = useRef({ id: null, time: 0 })
   const notificationRegistrationRef = useRef(null)
   const notificationToggleLockRef = useRef(false)
   const weekSwipeRef = useRef(null)
@@ -228,6 +256,17 @@ function App() {
     }
     if (scheduleSectionRef.current) {
       scheduleSectionRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+    // スマホでピンチズームされていた場合に画面サイズを初期表示幅へ戻す
+    if (typeof document !== 'undefined') {
+      const viewportMeta = document.querySelector('meta[name="viewport"]')
+      if (viewportMeta) {
+        const originalContent = viewportMeta.getAttribute('content')
+        viewportMeta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0')
+        requestAnimationFrame(() => {
+          viewportMeta.setAttribute('content', originalContent)
+        })
+      }
     }
   }
 
@@ -535,7 +574,7 @@ function App() {
   }
 
   const notificationHelpSteps = [
-    '右上の鈴ボタンを押して通知をONにします。',
+    '鈴ボタンを押して通知をONにします。',
     'ブラウザの確認が出たら「許可」を選びます。',
     'ブロック済みの場合は、鍵アイコンやサイト情報から通知を許可してください。',
   ]
@@ -1072,6 +1111,7 @@ function App() {
       return
     }
     setSaveAsCommonTitle(false)
+    setCommonTitlesExpanded(false)
     setDetailDraft({
       id: item.id,
       title: item.title || '予定',
@@ -1087,6 +1127,28 @@ function App() {
   }
 
   const closeDetail = () => setDetailDraft(null)
+
+  const openRelatedSchedule = async (relation) => {
+    if (!relation || !session) return
+    try {
+      const localItem = (scheduleMap[relation.date] || []).find((entry) => entry.id === relation.id)
+      if (localItem) {
+        closeSchedulePreview()
+        openDetail(localItem)
+        return
+      }
+      const snap = await getDoc(doc(db, 'schedule_items', `${session.uid}_${relation.date}_${relation.id}`))
+      if (!snap.exists()) {
+        alert('関連する予定が見つかりません。')
+        return
+      }
+      closeSchedulePreview()
+      openDetail({ id: relation.id, date: relation.date, ...snap.data() })
+    } catch (error) {
+      console.error('関連予定の取得エラー:', error)
+      alert(`関連する予定の取得に失敗しました:\n${error.message}`)
+    }
+  }
 
   const openSchedulePreview = (item) => setSchedulePreview(item)
 
@@ -1217,16 +1279,23 @@ function App() {
     }
   }
 
-  const startLongPress = (item) => {
-    holdTimerRef.current = setTimeout(() => {
-      openSchedulePreview(item)
-    }, 500)
-  }
-
   const clearLongPress = () => {
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current)
       holdTimerRef.current = null
+    }
+  }
+
+  // タップ間隔を自前で判定し、ダブルタップ時のみプレビューを開く（一回の軽いタッチでは開かない）
+  const DOUBLE_TAP_THRESHOLD_MS = 350
+  const handleScheduleCardTap = (item) => {
+    const now = Date.now()
+    const last = lastCardTapRef.current
+    if (last.id === item.id && now - last.time < DOUBLE_TAP_THRESHOLD_MS) {
+      lastCardTapRef.current = { id: null, time: 0 }
+      openSchedulePreview(item)
+    } else {
+      lastCardTapRef.current = { id: item.id, time: now }
     }
   }
 
@@ -1236,6 +1305,7 @@ function App() {
       alert('過去の日付に対する予定の追加です。')
     }
     setSaveAsCommonTitle(false)
+    setCommonTitlesExpanded(false)
     setDetailDraft({
       id: `new-${Date.now()}`,
       title: '新規予定',
@@ -1252,6 +1322,9 @@ function App() {
 
   const toggleCompleted = async (item) => {
     if (!session) return
+
+    const confirmMessage = item.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
+    if (!window.confirm(confirmMessage)) return
 
     try {
       if (!item.completed && item.relatedPrev?.id && item.relatedPrev?.date) {
@@ -1817,7 +1890,7 @@ function App() {
                   aria-expanded={menuOpen}
                   aria-label="メニューを開く"
                 >
-                  {menuOpen ? <X size={22} /> : <Menu size={22} />}
+                  {menuOpen ? <X size={28} /> : <Menu size={28} />}
                 </button>
                 {menuOpen && (
                   <div style={styles.menuDropdown} role="menu">
@@ -1923,6 +1996,18 @@ function App() {
                       }}
                     >
                       <TrendingUp size={18} /> 進捗率PDF
+                    </button>
+                    <div style={styles.menuDivider} />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        setHelpOpen(true)
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <HelpCircle size={18} /> ヘルプ
                     </button>
                     <div style={styles.menuDivider} />
                     <button
@@ -2238,18 +2323,11 @@ function App() {
                     <div
                       key={item.id}
                       className="schedule-card-mobile"
-                      onPointerDown={() => startLongPress(item)}
-                      onPointerUp={clearLongPress}
-                      onPointerLeave={clearLongPress}
-                      onPointerCancel={clearLongPress}
-                      onClick={() => {
-                        clearLongPress()
-                        openSchedulePreview(item)
-                      }}
+                      onClick={() => handleScheduleCardTap(item)}
                       style={{
                         ...styles.scheduleCard,
-                        ...(item.relatedPrev ? styles.relatedScheduleCard : {}),
-                        ...(item.completed ? (item.relatedPrev ? styles.completedRelatedScheduleCard : styles.completedScheduleCard) : {}),
+                        ...(hasScheduleRelation(item) ? styles.relatedScheduleCard : {}),
+                        ...(item.completed ? (hasScheduleRelation(item) ? styles.completedRelatedScheduleCard : styles.completedScheduleCard) : {}),
                       }}
                     >
                       <div style={timeBoxStyle}>
@@ -2322,8 +2400,25 @@ function App() {
                           {item.details ? item.details : '詳細なし'}
                         </div>
                         {item.relatedPrev && (
-                          <div style={styles.relationInfoText}>
+                          <div
+                            style={styles.relationInfoTextLink}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              openRelatedSchedule(item.relatedPrev)
+                            }}
+                          >
                             関連: {item.relatedPrev.date} {item.relatedPrev.time}-{item.relatedPrev.endTime} {item.relatedPrev.title}
+                          </div>
+                        )}
+                        {item.relatedNext && (
+                          <div
+                            style={styles.relationInfoTextLink}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              openRelatedSchedule(item.relatedNext)
+                            }}
+                          >
+                            次の関連: {item.relatedNext.date} {item.relatedNext.time}-{item.relatedNext.endTime} {item.relatedNext.title}
                           </div>
                         )}
                       </div>
@@ -2640,8 +2735,19 @@ function App() {
                 <h2 style={styles.previewTitle}>{schedulePreview.title || '予定'}</h2>
                 <div style={styles.previewDetails}>{schedulePreview.details || '詳細メモはありません。'}</div>
                 {schedulePreview.relatedPrev && (
-                  <div style={styles.relationInfoText}>
+                  <div
+                    style={styles.relationInfoTextLink}
+                    onClick={() => openRelatedSchedule(schedulePreview.relatedPrev)}
+                  >
                     関連: {schedulePreview.relatedPrev.date} {schedulePreview.relatedPrev.time}-{schedulePreview.relatedPrev.endTime} {schedulePreview.relatedPrev.title}
+                  </div>
+                )}
+                {schedulePreview.relatedNext && (
+                  <div
+                    style={styles.relationInfoTextLink}
+                    onClick={() => openRelatedSchedule(schedulePreview.relatedNext)}
+                  >
+                    次の関連: {schedulePreview.relatedNext.date} {schedulePreview.relatedNext.time}-{schedulePreview.relatedNext.endTime} {schedulePreview.relatedNext.title}
                   </div>
                 )}
                 <div style={styles.modalActionRow}>
@@ -2649,6 +2755,53 @@ function App() {
                   <button type="button" style={styles.primaryButton} onClick={editScheduleFromPreview}>
                     <PencilLine size={17} /> 編集
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {helpOpen && (
+            <div style={styles.modalOverlay} onClick={() => setHelpOpen(false)}>
+              <div className="schedule-modal" style={styles.modal} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <HelpCircle size={20} color="#2563eb" />
+                    <h3 style={styles.modalTitle}>{helpContent[helpLang].title}</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={() => setHelpOpen(false)}>{helpContent[helpLang].close}</button>
+                </div>
+
+                <div style={styles.helpLangSwitch} role="group" aria-label="Language / 言語切替">
+                  {Object.keys(helpContent).map((langKey) => (
+                    <button
+                      key={langKey}
+                      type="button"
+                      style={{ ...styles.helpLangButton, ...(helpLang === langKey ? styles.helpLangButtonActive : {}) }}
+                      onClick={() => setHelpLang(langKey)}
+                    >
+                      {helpContent[langKey].langLabel}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={styles.helpBody}>
+                  <p style={styles.helpAppInfo}>{helpContent[helpLang].appInfo}</p>
+                  <a
+                    href={HELP_SITE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={styles.helpLink}
+                  >
+                    {helpContent[helpLang].siteLabel}
+                  </a>
+                  <a href={`mailto:${HELP_MAIL_ADDRESS}`} style={styles.helpLink}>
+                    {helpContent[helpLang].mailLabel}: {HELP_MAIL_ADDRESS}
+                  </a>
+                  <p style={styles.helpNote}>{helpContent[helpLang].note}</p>
+                </div>
+
+                <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
+                  <button type="button" style={styles.secondaryButton} onClick={() => setHelpOpen(false)}>{helpContent[helpLang].close}</button>
                 </div>
               </div>
             </div>
@@ -2692,7 +2845,7 @@ function App() {
 
                 {commonTitles.length > 0 && (
                   <div style={styles.commonTitleChipRow}>
-                    {commonTitles.map((titleOption) => (
+                    {(commonTitlesExpanded ? commonTitles : commonTitles.slice(0, 1)).map((titleOption) => (
                       <span key={titleOption} style={styles.commonTitleChip}>
                         <button
                           type="button"
@@ -2711,6 +2864,16 @@ function App() {
                         </button>
                       </span>
                     ))}
+                    {commonTitles.length > 1 && (
+                      <button
+                        type="button"
+                        style={styles.commonTitleToggleButton}
+                        aria-label={commonTitlesExpanded ? '定例タイトルを折りたたむ' : '定例タイトルをすべて表示'}
+                        onClick={() => setCommonTitlesExpanded((prev) => !prev)}
+                      >
+                        <ChevronDown size={14} style={{ transform: commonTitlesExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -2831,20 +2994,22 @@ const styles = {
     border: 'none',
     borderRadius: '10px',
     color: '#fff',
-    padding: '12px 16px',
-    fontSize: '15px',
+    padding: '14px 18px',
+    fontSize: '16px',
     fontWeight: 700,
     cursor: 'pointer',
+    minHeight: '48px',
   },
   secondaryButton: {
     background: '#eef2ff',
     border: '1px solid #c7d2fe',
     borderRadius: '10px',
     color: '#1e3a8a',
-    padding: '11px 16px',
-    fontSize: '14px',
+    padding: '13px 18px',
+    fontSize: '15px',
     fontWeight: 600,
     cursor: 'pointer',
+    minHeight: '48px',
   },
   textButton: {
     marginTop: '16px',
@@ -2858,15 +3023,15 @@ const styles = {
   appShell: {
     maxWidth: '960px',
     margin: '0 auto',
-    padding: '24px 16px 40px',
+    padding: '12px 10px 20px',
   },
   header: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: '16px',
-    marginBottom: '20px',
-    paddingBottom: '14px',
+    marginBottom: '10px',
+    paddingBottom: '8px',
     borderBottom: '1px solid #dfeaf7',
   },
   menuWrapper: {
@@ -2876,12 +3041,12 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '44px',
-    height: '44px',
+    width: '56px',
+    height: '56px',
     border: '1px solid #d9e2f2',
     background: '#ffffff',
     color: '#1d4ed8',
-    borderRadius: '10px',
+    borderRadius: '12px',
     cursor: 'pointer',
     flexShrink: 0,
   },
@@ -3101,7 +3266,7 @@ const styles = {
   main: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '18px',
+    gap: '10px',
   },
   mainWithFixedWeek: {
     height: 'calc(100dvh - 132px)',
@@ -3110,8 +3275,8 @@ const styles = {
     overscrollBehavior: 'contain',
   },
   footer: {
-    marginTop: '24px',
-    padding: '16px 0 4px',
+    marginTop: '10px',
+    padding: '8px 0 4px',
     textAlign: 'center',
     fontSize: '12px',
     color: '#94a3b8',
@@ -3124,8 +3289,8 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '46px',
-    height: '46px',
+    width: '58px',
+    height: '58px',
     borderRadius: '50%',
     border: '1px solid #bfdbfe',
     background: '#2563eb',
@@ -3202,9 +3367,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '30px',
-    height: '30px',
-    borderRadius: '9px',
+    width: '40px',
+    height: '40px',
+    borderRadius: '10px',
     border: '1px solid rgba(255,255,255,0.4)',
     background: 'rgba(255,255,255,0.15)',
     color: '#ffffff',
@@ -3301,10 +3466,10 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '28px',
-    height: '28px',
+    width: '38px',
+    height: '38px',
     border: '1px solid #d9e2f2',
-    borderRadius: '7px',
+    borderRadius: '9px',
     background: '#f8fbff',
     color: '#475569',
     cursor: 'pointer',
@@ -3373,7 +3538,7 @@ const styles = {
     background: '#ffffff',
     border: '1px solid #e8eef7',
     borderRadius: '18px',
-    padding: '16px',
+    padding: '10px',
     boxShadow: '0 12px 26px rgba(15, 23, 42, 0.04)',
   },
   scrollableScheduleSection: {
@@ -3387,12 +3552,12 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: '16px',
-    marginBottom: '16px',
+    marginBottom: '10px',
   },
   selectedCaption: {
     fontSize: '12px',
     color: '#64748b',
-    marginBottom: '2px',
+    marginBottom: '0',
   },
   selectedDateText: {
     margin: 0,
@@ -3407,9 +3572,11 @@ const styles = {
     color: '#fff',
     border: 'none',
     borderRadius: '10px',
-    padding: '10px 14px',
+    padding: '13px 18px',
+    fontSize: '15px',
     fontWeight: 700,
     cursor: 'pointer',
+    minHeight: '46px',
   },
   loadingState: {
     padding: '28px 12px',
@@ -3446,16 +3613,16 @@ const styles = {
   scheduleList: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '14px',
+    gap: '8px',
   },
   scheduleCard: {
     display: 'flex',
-    gap: '12px',
+    gap: '10px',
     alignItems: 'flex-start',
     background: '#f8fbff',
     border: '1px solid #dfeaf7',
-    borderRadius: '14px',
-    padding: '12px 14px',
+    borderRadius: '12px',
+    padding: '8px 10px',
     boxShadow: '0 4px 10px rgba(15, 23, 42, 0.02)',
     cursor: 'pointer',
   },
@@ -3497,7 +3664,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: '12px',
-    marginBottom: '8px',
+    marginBottom: '4px',
   },
   scheduleTitleWrap: {
     display: 'flex',
@@ -3534,9 +3701,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '30px',
-    height: '30px',
-    borderRadius: '8px',
+    width: '40px',
+    height: '40px',
+    borderRadius: '9px',
     border: '1px solid #bbf7d0',
     background: '#f0fdf4',
     color: '#16a34a',
@@ -3604,9 +3771,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '32px',
-    height: '32px',
-    borderRadius: '8px',
+    width: '40px',
+    height: '40px',
+    borderRadius: '9px',
     border: '1px solid #d1d5db',
     background: '#ffffff',
     color: '#475569',
@@ -3680,10 +3847,10 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '30px',
-    height: '30px',
+    width: '38px',
+    height: '38px',
     border: 0,
-    borderRadius: '5px',
+    borderRadius: '7px',
     background: '#eff6ff',
     color: '#2563eb',
     cursor: 'pointer',
@@ -3729,6 +3896,17 @@ const styles = {
     border: '1px solid #fde68a',
     borderRadius: '8px',
     padding: '6px 8px',
+  },
+  relationInfoTextLink: {
+    marginTop: '6px',
+    fontSize: '12px',
+    color: '#a16207',
+    background: '#fef3c7',
+    border: '1px solid #fde68a',
+    borderRadius: '8px',
+    padding: '6px 8px',
+    cursor: 'pointer',
+    textDecoration: 'underline',
   },
   modalOverlay: {
     position: 'fixed',
@@ -3797,9 +3975,11 @@ const styles = {
     border: '1px solid #dfeaf7',
     background: '#f8fbff',
     color: '#334155',
-    borderRadius: '8px',
+    borderRadius: '9px',
     cursor: 'pointer',
-    padding: '8px 10px',
+    padding: '10px 14px',
+    fontSize: '14px',
+    minHeight: '40px',
   },
   fieldLabel: {
     display: 'block',
@@ -3858,6 +4038,18 @@ const styles = {
     borderRadius: '999px',
     background: 'transparent',
     color: '#94a3b8',
+    cursor: 'pointer',
+  },
+  commonTitleToggleButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '26px',
+    height: '26px',
+    border: '1px solid #dbeafe',
+    borderRadius: '999px',
+    background: '#eff6ff',
+    color: '#1d4ed8',
     cursor: 'pointer',
   },
   textarea: {
@@ -3931,10 +4123,57 @@ const styles = {
     borderRadius: '10px',
     background: '#fef2f2',
     color: '#b91c1c',
-    padding: '11px 16px',
-    fontSize: '14px',
+    padding: '13px 18px',
+    fontSize: '15px',
     fontWeight: 600,
     cursor: 'pointer',
+    minHeight: '48px',
+  },
+  helpLangSwitch: {
+    display: 'flex',
+    gap: '8px',
+    marginBottom: '14px',
+  },
+  helpLangButton: {
+    border: '1px solid #d9e2f2',
+    borderRadius: '999px',
+    background: '#f8fbff',
+    color: '#475569',
+    padding: '6px 14px',
+    fontSize: '13px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  helpLangButtonActive: {
+    border: '1px solid #2563eb',
+    background: '#2563eb',
+    color: '#ffffff',
+  },
+  helpBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  helpAppInfo: {
+    margin: 0,
+    fontSize: '15px',
+    fontWeight: 700,
+    color: '#0f172a',
+  },
+  helpLink: {
+    color: '#2563eb',
+    fontSize: '14px',
+    textDecoration: 'underline',
+    wordBreak: 'break-all',
+  },
+  helpNote: {
+    margin: 0,
+    fontSize: '12px',
+    color: '#b91c1c',
+    background: '#fef2f2',
+    border: '1px solid #fecaca',
+    borderRadius: '8px',
+    padding: '8px 10px',
   },
 }
 
