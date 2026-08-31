@@ -198,6 +198,10 @@ function App() {
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
   const [commonTitlesExpanded, setCommonTitlesExpanded] = useState(false)
+  const [showDoubleTapHint, setShowDoubleTapHint] = useState(false)
+  const [doubleTapHintFading, setDoubleTapHintFading] = useState(false)
+  const [hintMessageIndex, setHintMessageIndex] = useState(0)
+  const doubleTapHintShownRef = useRef(false)
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
   const [nowTick, setNowTick] = useState(() => Date.now())
@@ -282,6 +286,14 @@ function App() {
     })
     return () => unsubscribe()
   }, [])
+
+  useEffect(() => {
+    // アクセス時の最初の一回だけ、ヒントバナーを表示する
+    if (!session || doubleTapHintShownRef.current) return
+    doubleTapHintShownRef.current = true
+    setHintMessageIndex(0)
+    setShowDoubleTapHint(true)
+  }, [session])
 
   useEffect(() => {
     // アカウント切り替え時は週キャッシュを破棄して再取得させる
@@ -730,6 +742,36 @@ function App() {
     const items = scheduleMap[selectedKey] || []
     return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
   }, [scheduleMap, selectedKey])
+
+  // 0件の日は追加方法のみ、1件以上は編集→追加の順で順次表示する
+  const doubleTapHintMessages = useMemo(() => {
+    if (selectedItems.length === 0) {
+      return [{ icon: Plus, text: '右上の追加ボタンから予定を登録できます' }]
+    }
+    return [
+      { icon: PencilLine, text: '予定カードはダブルタップで編集できます' },
+      { icon: Plus, text: '右上の追加ボタンから予定を登録できます' },
+    ]
+  }, [selectedItems.length])
+
+  useEffect(() => {
+    if (!showDoubleTapHint) return
+    setDoubleTapHintFading(false)
+    const fadeTimer = setTimeout(() => setDoubleTapHintFading(true), 3000)
+    const advanceTimer = setTimeout(() => {
+      setHintMessageIndex((current) => {
+        if (current + 1 >= doubleTapHintMessages.length) {
+          setShowDoubleTapHint(false)
+          return current
+        }
+        return current + 1
+      })
+    }, 3600)
+    return () => {
+      clearTimeout(fadeTimer)
+      clearTimeout(advanceTimer)
+    }
+  }, [showDoubleTapHint, hintMessageIndex, doubleTapHintMessages])
 
   const scheduleListItems = useMemo(() => {
     const todayKey = formatDateKey(new Date())
@@ -2300,6 +2342,23 @@ function App() {
                   <Plus size={18} /> 追加
                 </button>
               </div>
+
+              {showDoubleTapHint && doubleTapHintMessages[Math.min(hintMessageIndex, doubleTapHintMessages.length - 1)] && (
+                <div
+                  style={{ ...styles.doubleTapHintBanner, ...(doubleTapHintFading ? styles.doubleTapHintBannerFading : {}) }}
+                  role="status"
+                >
+                  {(() => {
+                    const currentHint = doubleTapHintMessages[Math.min(hintMessageIndex, doubleTapHintMessages.length - 1)]
+                    const HintIcon = currentHint.icon
+                    return (
+                      <>
+                        <HintIcon size={16} /> <span>{currentHint.text}</span>
+                      </>
+                    )
+                  })()}
+                </div>
+              )}
 
               {loading && selectedItems.length === 0 ? (
                 <div style={styles.loadingState}>読み込み中...</div>
@@ -4174,6 +4233,24 @@ const styles = {
     border: '1px solid #fecaca',
     borderRadius: '8px',
     padding: '8px 10px',
+  },
+  doubleTapHintBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '10px',
+    padding: '8px 12px',
+    borderRadius: '10px',
+    background: '#eff6ff',
+    border: '1px solid #bfdbfe',
+    color: '#1d4ed8',
+    fontSize: '13px',
+    fontWeight: 600,
+    transition: 'opacity 0.6s ease',
+    opacity: 1,
+  },
+  doubleTapHintBannerFading: {
+    opacity: 0,
   },
 }
 
