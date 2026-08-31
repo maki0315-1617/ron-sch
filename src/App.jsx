@@ -24,7 +24,7 @@ import { ArrowUp, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
 const HELP_SITE_URL = 'https://ron-home-app.vercel.app/'
-const HELP_MAIL_ADDRESS = 'ronron210907@gmail.com'
+const HELP_MAIL_ADDRESS = 'ronron201907@gmail.com'
 
 const helpContent = {
   ja: {
