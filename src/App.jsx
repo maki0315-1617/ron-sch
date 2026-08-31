@@ -201,6 +201,7 @@ function App() {
   const [showDoubleTapHint, setShowDoubleTapHint] = useState(false)
   const [doubleTapHintFading, setDoubleTapHintFading] = useState(false)
   const [hintMessageIndex, setHintMessageIndex] = useState(0)
+  const [initialScheduleReady, setInitialScheduleReady] = useState(false)
   const doubleTapHintShownRef = useRef(false)
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
@@ -288,12 +289,12 @@ function App() {
   }, [])
 
   useEffect(() => {
-    // アクセス時の最初の一回だけ、ヒントバナーを表示する
-    if (!session || doubleTapHintShownRef.current) return
+    // アクセス時の最初の一回だけ、当日の予定件数が確定してからヒントバナーを表示する
+    if (!session || !initialScheduleReady || doubleTapHintShownRef.current) return
     doubleTapHintShownRef.current = true
     setHintMessageIndex(0)
     setShowDoubleTapHint(true)
-  }, [session])
+  }, [session, initialScheduleReady])
 
   useEffect(() => {
     // アカウント切り替え時は週キャッシュを破棄して再取得させる
@@ -872,8 +873,60 @@ function App() {
     }
   }
 
+  // 初期表示を高速化するため、表示中の週だけを先行取得して即座に反映する（全件取得は従来通りバックグラウンドで継続）
+  const fetchVisibleRangeSchedule = async () => {
+    if (!session || weekDates.length === 0) return
+    try {
+      const startKey = formatDateKey(weekDates[0])
+      const endKey = formatDateKey(weekDates[6])
+      const q = query(
+        collection(db, 'schedule_items'),
+        where('user_id', '==', session.uid),
+        where('date', '>=', startKey),
+        where('date', '<=', endKey)
+      )
+
+      const snapshot = await getDocs(q)
+      const partialMap = {}
+
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data()
+        const dateKey = item.date
+        if (!dateKey) return
+
+        if (!partialMap[dateKey]) {
+          partialMap[dateKey] = []
+        }
+
+        partialMap[dateKey].push({
+          id: item.id || docSnap.id,
+          title: item.title || '予定',
+          time: item.time || '09:00',
+          endTime: item.endTime || '10:00',
+          details: item.details || '',
+          completed: item.completed === true,
+          priority: item.priority || 'normal',
+          date: dateKey,
+          relatedPrev: item.relatedPrev || null,
+          relatedNext: item.relatedNext || null,
+        })
+      })
+
+      Object.keys(partialMap).forEach((key) => {
+        partialMap[key].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
+      })
+
+      setScheduleMap((current) => ({ ...current, ...partialMap }))
+    } catch (error) {
+      console.error('表示週の先行取得エラー:', error)
+    } finally {
+      setInitialScheduleReady(true)
+    }
+  }
+
   useEffect(() => {
     if (!session) return
+    fetchVisibleRangeSchedule()
     fetchWeekSchedule()
   }, [session?.uid])
 
