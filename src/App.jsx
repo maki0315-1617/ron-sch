@@ -19,7 +19,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { ArrowUp, Bell, BellOff, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
+import { ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -159,6 +159,13 @@ const escapeHtml = (value = '') => String(value)
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;')
 
+const escapeCsvField = (value) => {
+  const text = String(value ?? '')
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
+}
+
+const AGGREGATION_MAX_DAYS = 31
+
 const notificationTokenKey = (userId) => `ron-sch-fcm-token:${userId}`
 
 const isIosDevice = () => typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent)
@@ -233,6 +240,12 @@ function App() {
   const [view, setView] = useState('home')
   const [incompleteItems, setIncompleteItems] = useState([])
   const [incompleteLoading, setIncompleteLoading] = useState(false)
+  const [aggregationOpen, setAggregationOpen] = useState(false)
+  const [aggStartDate, setAggStartDate] = useState('')
+  const [aggEndDate, setAggEndDate] = useState('')
+  const [aggFilter, setAggFilter] = useState('all')
+  const [aggError, setAggError] = useState('')
+  const [aggResult, setAggResult] = useState(null)
   const menuRef = useRef(null)
   const holdTimerRef = useRef(null)
   const lastCardTapRef = useRef({ id: null, time: 0 })
@@ -1736,6 +1749,182 @@ function App() {
     }
   }, [view, session])
 
+  const openAggregationModal = () => {
+    // フォームの年月日は週カレンダーで表示中の月を初期値とする
+    const baseDate = selectedDate
+    const monthStart = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)
+    const monthEnd = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0)
+    setAggStartDate(formatDateKey(monthStart))
+    setAggEndDate(formatDateKey(monthEnd))
+    setAggFilter('all')
+    setAggError('')
+    setAggResult(null)
+    setAggregationOpen(true)
+  }
+
+  const closeAggregationModal = () => {
+    setAggregationOpen(false)
+  }
+
+  const runAggregation = async () => {
+    if (!session) return
+    setAggError('')
+    setAggResult(null)
+
+    if (!aggStartDate || !aggEndDate) {
+      setAggError('開始日と終了日を指定してください')
+      return
+    }
+    if (aggStartDate > aggEndDate) {
+      setAggError('開始日は終了日以前の日付を指定してください')
+      return
+    }
+    const diffDays = Math.round(
+      (new Date(`${aggEndDate}T00:00:00`) - new Date(`${aggStartDate}T00:00:00`)) / 86400000
+    ) + 1
+    if (diffDays > AGGREGATION_MAX_DAYS) {
+      setAggError(`集計期間は${AGGREGATION_MAX_DAYS}日以内で指定してください`)
+      return
+    }
+
+    setLoading(true)
+    try {
+      const q = query(
+        collection(db, 'schedule_items'),
+        where('user_id', '==', session.uid),
+        where('date', '>=', aggStartDate),
+        where('date', '<=', aggEndDate)
+      )
+      const snapshot = await getDocs(q)
+      const groups = new Map()
+
+      snapshot.forEach((docSnap) => {
+        const item = docSnap.data()
+        if (aggFilter === 'completed' && item.completed !== true) return
+        const title = item.title || '予定'
+        const minutes = Math.max(0, parseTimeValue(item.endTime || '10:00') - parseTimeValue(item.time || '09:00'))
+        const current = groups.get(title) || { title, count: 0, totalMinutes: 0 }
+        current.count += 1
+        current.totalMinutes += minutes
+        groups.set(title, current)
+      })
+
+      const rows = Array.from(groups.values()).sort((a, b) => {
+        if (b.totalMinutes !== a.totalMinutes) return b.totalMinutes - a.totalMinutes
+        if (b.count !== a.count) return b.count - a.count
+        return a.title.localeCompare(b.title, 'ja')
+      })
+
+      const totalCount = rows.reduce((sum, row) => sum + row.count, 0)
+      const totalMinutes = rows.reduce((sum, row) => sum + row.totalMinutes, 0)
+
+      setAggResult({
+        rows,
+        totalCount,
+        totalMinutes,
+        periodText: `${aggStartDate} ～ ${aggEndDate}`,
+        filterLabel: aggFilter === 'completed' ? '完了のみ' : '全て',
+      })
+    } catch (error) {
+      console.error('スケジュール集計エラー:', error)
+      setAggError(`集計に失敗しました:\n${error.message}`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const outputAggregationPdf = () => {
+    if (!aggResult) return
+
+    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
+    if (!reportWindow) {
+      alert('帳票画面を開けませんでした。ポップアップを許可してください。')
+      return
+    }
+
+    const rows = aggResult.rows.length
+      ? aggResult.rows.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.title)}</td>
+            <td>${row.count}</td>
+            <td>${row.totalMinutes}</td>
+          </tr>`).join('') + `
+          <tr class="total-row">
+            <td>合計</td>
+            <td>${aggResult.totalCount}</td>
+            <td>${aggResult.totalMinutes}</td>
+          </tr>`
+      : '<tr><td colspan="3" class="empty">該当する予定はありません</td></tr>'
+
+    const html = `<!doctype html>
+      <html lang="ja">
+        <head>
+          <meta charset="UTF-8" />
+          <title>スケジュール集計</title>
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            * { box-sizing: border-box; }
+            body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
+            h1 { margin: 0 0 5px; font-size: 24px; }
+            .period { color: #64748b; margin-bottom: 4px; font-size: 13px; }
+            .output-date { color: #475569; margin-bottom: 18px; font-size: 13px; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+            th, td { border: 1px solid #cbd5e1; padding: 7px 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+            th { background: #e8f0ff; color: #1e3a8a; }
+            th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { width: 18%; text-align: right; }
+            .total-row td { font-weight: 700; background: #f1f5f9; }
+            .empty { text-align: center; color: #64748b; padding: 24px; }
+            .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+            button { border: 0; border-radius: 10px; background: #2563eb; color: white; padding: 12px 20px; font-size: 15px; font-weight: 700; cursor: pointer; }
+            .close-button { background: #64748b; }
+            @media print { .actions { display: none; } }
+          </style>
+        </head>
+        <body>
+          <div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
+          <h1>スケジュール集計</h1>
+          <div class="period">対象期間: ${escapeHtml(aggResult.periodText)}（${escapeHtml(aggResult.filterLabel)}）</div>
+          <div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
+          <table>
+            <thead><tr><th>予定名</th><th>件数</th><th>合計時間(分)</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </body>
+      </html>`
+
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+    setTimeout(() => {
+      if (reportWindow.closed) {
+        URL.revokeObjectURL(blobUrl)
+        return
+      }
+      reportWindow.location.href = blobUrl
+      reportWindow.focus()
+    }, 0)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
+  const outputAggregationCsv = () => {
+    if (!aggResult) return
+
+    const lines = [['予定名', '件数', '合計時間(分)'].map(escapeCsvField).join(',')]
+    aggResult.rows.forEach((row) => {
+      lines.push([row.title, row.count, row.totalMinutes].map(escapeCsvField).join(','))
+    })
+    lines.push(['合計', aggResult.totalCount, aggResult.totalMinutes].map(escapeCsvField).join(','))
+
+    // ExcelでもUTF-8として文字化けしないようにBOMを付与する
+    const csvContent = `\uFEFF${lines.join('\r\n')}`
+    const blobUrl = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }))
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = `schedule_summary_${aggStartDate}_${aggEndDate}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
   const openWeeklyReport = async (reportType) => {
     if (!session) return
 
@@ -1897,6 +2086,15 @@ function App() {
               '日々の予定を完了に近づけるための励ましになります。',
             ],
           },
+          {
+            heading: '6. スケジュールを集計する',
+            body: 'メニューの「スケジュール集計」から、期間と「全て / 完了のみ」を指定して、予定名ごとの件数と合計時間(分)を集計できます。集計結果はPDFまたはCSVで保存できます。',
+            points: [
+              '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
+              '予定名が完全一致するものを1件として集計します。表記を揃えたい場合は定例タイトルの利用が便利です。',
+              '集計結果の最下行に合計件数と合計時間が表示されます。',
+            ],
+          },
         ],
         noteTitle: 'ご利用のコツ',
         note: '毎日少しずつ予定を見直し、完了したものを確認することでセルフマネジメントがしやすくなります。通知と進捗チェックを併用すると、予定の見落としを防ぎやすくなります。',
@@ -1951,6 +2149,15 @@ function App() {
               'Progress trends can be saved as a PDF report.',
               'Motivational indicators help maintain momentum.',
               'Daily review makes your plans easier to manage and more realistic.',
+            ],
+          },
+          {
+            heading: '6. Summarize your schedules',
+            body: 'From the menu, open "Schedule Summary" to choose a date range and either "All" or "Completed only", then get the count and total minutes for each task name. Results can be saved as PDF or CSV.',
+            points: [
+              'The date range can be up to 31 days; a message appears if it is exceeded.',
+              'Tasks are grouped by exact title match. Use common titles to keep names consistent.',
+              'The total count and total minutes are shown in the last row of the summary.',
             ],
           },
         ],
@@ -2454,6 +2661,17 @@ function App() {
                       }}
                     >
                       <TrendingUp size={18} /> 進捗率PDF
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        openAggregationModal()
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <ChartColumn size={18} /> スケジュール集計
                     </button>
                     <div style={styles.menuDivider} />
                     <button
@@ -3308,6 +3526,105 @@ function App() {
                 <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
                   <button type="button" style={styles.secondaryButton} onClick={() => setHelpOpen(false)}>{helpContent[helpLang].close}</button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {aggregationOpen && (
+            <div style={styles.modalOverlay} onClick={closeAggregationModal}>
+              <div className="schedule-modal" style={styles.modal} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <ChartColumn size={20} color="#2563eb" />
+                    <h3 style={styles.modalTitle}>スケジュール集計</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={closeAggregationModal}>閉じる</button>
+                </div>
+
+                <label style={styles.fieldLabel}>開始日</label>
+                <input
+                  type="date"
+                  value={aggStartDate}
+                  onChange={(event) => setAggStartDate(event.target.value)}
+                  style={styles.modalInput}
+                />
+
+                <label style={styles.fieldLabel}>終了日</label>
+                <input
+                  type="date"
+                  value={aggEndDate}
+                  onChange={(event) => setAggEndDate(event.target.value)}
+                  style={styles.modalInput}
+                />
+
+                <label style={styles.fieldLabel}>集計対象</label>
+                <div style={styles.aggFilterRow}>
+                  <label style={styles.aggFilterLabel}>
+                    <input
+                      type="radio"
+                      name="agg-filter"
+                      checked={aggFilter === 'all'}
+                      onChange={() => setAggFilter('all')}
+                    />
+                    全て
+                  </label>
+                  <label style={styles.aggFilterLabel}>
+                    <input
+                      type="radio"
+                      name="agg-filter"
+                      checked={aggFilter === 'completed'}
+                      onChange={() => setAggFilter('completed')}
+                    />
+                    完了のみ
+                  </label>
+                </div>
+
+                {aggError && <p style={styles.helpNote}>{aggError}</p>}
+
+                <div style={styles.modalActionRow}>
+                  <button type="button" style={styles.primaryButton} onClick={runAggregation}>集計する</button>
+                </div>
+
+                {aggResult && (
+                  <>
+                    <div style={styles.aggResultMeta}>
+                      対象期間: {aggResult.periodText}（{aggResult.filterLabel}）
+                    </div>
+                    <div style={styles.aggResultTableWrap}>
+                      <table style={styles.aggResultTable}>
+                        <thead>
+                          <tr>
+                            <th style={styles.aggResultHeaderCell}>予定名</th>
+                            <th style={styles.aggResultHeaderCell}>件数</th>
+                            <th style={styles.aggResultHeaderCell}>合計時間(分)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {aggResult.rows.length ? aggResult.rows.map((row) => (
+                            <tr key={row.title}>
+                              <td style={styles.aggResultCell}>{row.title}</td>
+                              <td style={{ ...styles.aggResultCell, textAlign: 'right' }}>{row.count}</td>
+                              <td style={{ ...styles.aggResultCell, textAlign: 'right' }}>{row.totalMinutes}</td>
+                            </tr>
+                          )) : (
+                            <tr><td style={styles.aggResultCell} colSpan={3}>該当する予定はありません</td></tr>
+                          )}
+                          {aggResult.rows.length > 0 && (
+                            <tr>
+                              <td style={{ ...styles.aggResultCell, fontWeight: 700, background: '#f1f5f9' }}>合計</td>
+                              <td style={{ ...styles.aggResultCell, fontWeight: 700, background: '#f1f5f9', textAlign: 'right' }}>{aggResult.totalCount}</td>
+                              <td style={{ ...styles.aggResultCell, fontWeight: 700, background: '#f1f5f9', textAlign: 'right' }}>{aggResult.totalMinutes}</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
+                      <button type="button" style={styles.secondaryButton} onClick={outputAggregationCsv}>CSVで出力</button>
+                      <button type="button" style={styles.primaryButton} onClick={outputAggregationPdf}>PDFで出力</button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -4397,6 +4714,48 @@ const styles = {
     display: 'flex',
     alignItems: 'stretch',
     gap: '8px',
+  },
+  aggFilterRow: {
+    display: 'flex',
+    gap: '18px',
+  },
+  aggFilterLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '14px',
+    color: '#334155',
+  },
+  aggResultMeta: {
+    marginTop: '14px',
+    fontSize: '13px',
+    color: '#475569',
+  },
+  aggResultTableWrap: {
+    marginTop: '8px',
+    maxHeight: '260px',
+    overflowY: 'auto',
+    border: '1px solid #e2e8f0',
+    borderRadius: '10px',
+  },
+  aggResultTable: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: '13px',
+  },
+  aggResultHeaderCell: {
+    position: 'sticky',
+    top: 0,
+    background: '#e8f0ff',
+    color: '#1e3a8a',
+    textAlign: 'left',
+    padding: '8px 10px',
+    borderBottom: '1px solid #cbd5e1',
+  },
+  aggResultCell: {
+    padding: '8px 10px',
+    borderBottom: '1px solid #e2e8f0',
+    overflowWrap: 'anywhere',
   },
   datePickerButton: {
     display: 'flex',
