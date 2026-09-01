@@ -65,6 +65,11 @@ const formatDateKey = (date) => {
   return `${year}-${month}-${day}`
 }
 
+const formatCurrentTime = () => {
+  const now = new Date()
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+}
+
 const parseTimeValue = (time = '09:00') => {
   const [hourText = '9', minuteText = '0'] = String(time).split(':')
   return Number(hourText || 0) * 60 + Number(minuteText || 0)
@@ -3711,20 +3716,38 @@ function App() {
                 </select>
 
                 <label style={styles.fieldLabel}>開始時間</label>
-                <input
-                  type="time"
-                  value={detailDraft.time}
-                  onChange={(e) => setDetailDraft({ ...detailDraft, time: e.target.value })}
-                  style={styles.modalInput}
-                />
+                <div style={styles.timeFieldRow}>
+                  <input
+                    type="time"
+                    value={detailDraft.time}
+                    onChange={(e) => setDetailDraft({ ...detailDraft, time: e.target.value })}
+                    style={{ ...styles.modalInput, ...styles.timeFieldInput }}
+                  />
+                  <button
+                    type="button"
+                    style={styles.currentTimeButton}
+                    onClick={() => setDetailDraft({ ...detailDraft, time: formatCurrentTime() })}
+                  >
+                    現在時刻設定
+                  </button>
+                </div>
 
                 <label style={styles.fieldLabel}>終了時間</label>
-                <input
-                  type="time"
-                  value={detailDraft.endTime}
-                  onChange={(e) => setDetailDraft({ ...detailDraft, endTime: e.target.value })}
-                  style={styles.modalInput}
-                />
+                <div style={styles.timeFieldRow}>
+                  <input
+                    type="time"
+                    value={detailDraft.endTime}
+                    onChange={(e) => setDetailDraft({ ...detailDraft, endTime: e.target.value })}
+                    style={{ ...styles.modalInput, ...styles.timeFieldInput }}
+                  />
+                  <button
+                    type="button"
+                    style={styles.currentTimeButton}
+                    onClick={() => setDetailDraft({ ...detailDraft, endTime: formatCurrentTime() })}
+                  >
+                    現在時刻設定
+                  </button>
+                </div>
 
                 <label style={styles.fieldLabel}>詳細メモ</label>
                 <textarea
@@ -4936,6 +4959,27 @@ const styles = {
     background: '#f8fbff',
     padding: '10px 12px',
     fontSize: '14px',
+  },
+  timeFieldRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  timeFieldInput: {
+    flex: '1 1 auto',
+    minWidth: 0,
+  },
+  currentTimeButton: {
+    flex: '0 0 auto',
+    border: '1px solid #93c5fd',
+    borderRadius: '8px',
+    background: '#eff6ff',
+    color: '#1d4ed8',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontWeight: 700,
+    padding: '10px 12px',
+    whiteSpace: 'nowrap',
   },
   commonTitleCheckboxRow: {
     display: 'flex',
