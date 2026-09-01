@@ -19,7 +19,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
+import { ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -56,6 +56,7 @@ const helpContent = {
 const MAX_COMMON_TITLES = 20
 const WEEK_CALENDAR_FIXED_KEY = 'ron-sch-week-calendar-fixed'
 const WEEK_START_DAY_KEY = 'ron-sch-week-start-day'
+const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 
 const formatDateKey = (date) => {
   const d = new Date(date)
@@ -148,6 +149,20 @@ const getWeekStart = (date, weekStartDay = 1) => {
   return base
 }
 
+// 週の開始曜日設定に合わせて、月初の週から月末の週までを実日付（前後月含む）で埋めた行の配列を返す
+const getMonthGridWeeks = (monthDate, weekStartDay = 1) => {
+  const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1)
+  const lastDay = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0)
+  const gridStart = getWeekStart(firstDay, weekStartDay)
+  const weeks = []
+  let cursor = gridStart
+  while (cursor <= lastDay) {
+    weeks.push(Array.from({ length: 7 }, (_, index) => addDays(cursor, index)))
+    cursor = addDays(cursor, 7)
+  }
+  return weeks
+}
+
 const formatWeekTitle = (date) =>
   new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' }).format(date)
 
@@ -212,7 +227,6 @@ function App() {
   const [moveCopyCalendarOpen, setMoveCopyCalendarOpen] = useState(false)
   const [moveCopyCalendarMonth, setMoveCopyCalendarMonth] = useState(null)
   const [scheduleSearchQuery, setScheduleSearchQuery] = useState('')
-  const [searchMonthDate, setSearchMonthDate] = useState(() => new Date())
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
   const [commonTitlesExpanded, setCommonTitlesExpanded] = useState(false)
@@ -242,6 +256,10 @@ function App() {
     const storedValue = typeof window !== 'undefined' ? Number(window.localStorage.getItem(WEEK_START_DAY_KEY)) : 1
     return Number.isInteger(storedValue) && storedValue >= 0 && storedValue <= 6 ? storedValue : 1
   })
+  const [monthCalendarEnabled, setMonthCalendarEnabled] = useState(() => {
+    return typeof window !== 'undefined' && window.localStorage.getItem(MONTH_CALENDAR_ENABLED_KEY) === 'true'
+  })
+  const [monthCalendarCollapsed, setMonthCalendarCollapsed] = useState(false)
   const [view, setView] = useState('home')
   const [incompleteItems, setIncompleteItems] = useState([])
   const [incompleteLoading, setIncompleteLoading] = useState(false)
@@ -378,6 +396,11 @@ function App() {
     window.localStorage.setItem(WEEK_START_DAY_KEY, String(weekStartDay))
     loadedWeeksRef.current = new Set()
   }, [weekStartDay])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(MONTH_CALENDAR_ENABLED_KEY, String(monthCalendarEnabled))
+  }, [monthCalendarEnabled])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -759,6 +782,23 @@ function App() {
   const weekStartKey = useMemo(() => formatDateKey(getWeekStart(selectedDate, weekStartDay)), [selectedDate, weekStartDay])
 
   const weekEndKey = formatDateKey(weekDates[6])
+
+  // 月カレンダー・週カレンダー・スケジュール検索は selectedDate の月を共通の基準として同期する
+  const monthViewDate = useMemo(
+    () => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1),
+    [selectedDate]
+  )
+
+  const monthGridWeeks = useMemo(
+    () => getMonthGridWeeks(monthViewDate, weekStartDay),
+    [monthViewDate, weekStartDay]
+  )
+
+  const changeSelectedMonth = (offset) => {
+    setSelectedDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1))
+  }
+
+  const changeMonthView = (offset) => changeSelectedMonth(offset)
   const sessionUserId = session?.uid
 
   const selectedKey = formatDateKey(selectedDate)
@@ -864,22 +904,16 @@ function App() {
   }, [scheduleMap, weekDates])
 
   const searchMonthKey = useMemo(() => {
-    const year = searchMonthDate.getFullYear()
-    const month = String(searchMonthDate.getMonth() + 1).padStart(2, '0')
+    const year = selectedDate.getFullYear()
+    const month = String(selectedDate.getMonth() + 1).padStart(2, '0')
     return `${year}-${month}`
-  }, [searchMonthDate])
+  }, [selectedDate])
 
   const searchMonthTitle = useMemo(() => {
-    return `${searchMonthDate.getFullYear()}年${searchMonthDate.getMonth() + 1}月`
-  }, [searchMonthDate])
+    return `${selectedDate.getFullYear()}年${selectedDate.getMonth() + 1}月`
+  }, [selectedDate])
 
-  const changeSearchMonth = (offset) => {
-    setSearchMonthDate((prev) => {
-      const next = new Date(prev)
-      next.setMonth(next.getMonth() + offset)
-      return next
-    })
-  }
+  const changeSearchMonth = (offset) => changeSelectedMonth(offset)
 
   const scheduleSearchResults = useMemo(() => {
     const normalizedQuery = scheduleSearchQuery.trim().toLocaleLowerCase('ja-JP')
@@ -1069,9 +1103,7 @@ function App() {
   }
 
   const goToToday = () => {
-    const today = new Date()
-    setSelectedDate(today)
-    setSearchMonthDate(today)
+    setSelectedDate(new Date())
   }
 
   const hasScheduleRelation = (item) => Boolean(item?.relatedPrev || item?.relatedNext)
@@ -2074,7 +2106,17 @@ function App() {
             ],
           },
           {
-            heading: '4. 通知を使う',
+            heading: '4. 月カレンダーで予定を把握する',
+            body: '設定メニューの「月カレンダー表示」をONにすると、検索欄の上に月カレンダーが表示されます。前月・翌月ボタンで月を移動でき、週カレンダーやスケジュール検索の対象月も自動的に連動します。',
+            points: [
+              '各日にはその日の予定件数だけが数字で表示され、予定がない日は空白になります。',
+              '週カレンダーで表示中の週の範囲は、月カレンダー上でも色付けされて確認できます。',
+              '日付をタップすると選択日が切り替わり、週カレンダーとスケジュールカードにも即座に反映されます。',
+              'ヘッダーの折りたたみボタンで、月カレンダーの表示・非表示を切り替えられます。',
+            ],
+          },
+          {
+            heading: '5. 通知を使う',
             body: '右上の通知ボタンから、予定の開始時刻を通知で受け取れます。ブラウザの通知許可が必要です。',
             points: [
               '通知がオンの場合、予定開始時刻に音や表示で知らせます。',
@@ -2083,7 +2125,7 @@ function App() {
             ],
           },
           {
-            heading: '5. 進捗状況を確認する',
+            heading: '6. 進捗状況を確認する',
             body: 'フッターには連続達成日数と今週の進捗状況が表示されます。達成数を見ながら、自分のペースを把握しやすくなっています。',
             points: [
               '進捗率の推移をPDFとして保存できます。',
@@ -2092,7 +2134,7 @@ function App() {
             ],
           },
           {
-            heading: '6. スケジュールを集計する',
+            heading: '7. スケジュールを集計する',
             body: 'メニューの「スケジュール集計」から、期間と「全て / 完了のみ」を指定して、予定名ごとの件数と合計時間(分)を集計できます。集計結果はPDFまたはCSVで保存できます。',
             points: [
               '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
@@ -2139,7 +2181,17 @@ function App() {
             ],
           },
           {
-            heading: '4. Use notifications',
+            heading: '4. See your schedule on the month calendar',
+            body: 'Turn on "Show Month Calendar" from the settings menu to display a month view above the search box. Use the previous/next month buttons to browse months; the week calendar and schedule search stay in sync with the selected month.',
+            points: [
+              'Each day shows only the number of scheduled tasks, and days with none are left blank.',
+              'The week currently shown in the week calendar is highlighted within the month view.',
+              'Tapping a date switches the selected day, instantly updating the week calendar and schedule card.',
+              'Use the collapse button in the header to show or hide the month calendar.',
+            ],
+          },
+          {
+            heading: '5. Use notifications',
             body: 'Tap the notification button in the upper-right corner to receive reminders when a scheduled task is about to start. Browser notification permission is required.',
             points: [
               'When notifications are enabled, you will receive a reminder at the scheduled time.',
@@ -2148,7 +2200,7 @@ function App() {
             ],
           },
           {
-            heading: '5. Track your progress',
+            heading: '6. Track your progress',
             body: 'The footer shows your streak and weekly progress so it is easy to stay aware of your momentum and keep moving forward.',
             points: [
               'Progress trends can be saved as a PDF report.',
@@ -2157,7 +2209,7 @@ function App() {
             ],
           },
           {
-            heading: '6. Summarize your schedules',
+            heading: '7. Summarize your schedules',
             body: 'From the menu, open "Schedule Summary" to choose a date range and either "All" or "Completed only", then get the count and total minutes for each task name. Results can be saved as PDF or CSV.',
             points: [
               'The date range can be up to 31 days; a message appears if it is exceeded.',
@@ -2619,6 +2671,15 @@ function App() {
                           <Check size={18} color={weekCalendarFixed ? '#2563eb' : 'transparent'} />
                           週カレンダー固定と中止
                         </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
+                          onClick={() => setMonthCalendarEnabled((current) => !current)}
+                        >
+                          <Check size={18} color={monthCalendarEnabled ? '#2563eb' : 'transparent'} />
+                          月カレンダー表示
+                        </button>
                         <label style={styles.settingsSelectLabel}>
                           週の開始を設定
                           <select
@@ -2791,6 +2852,105 @@ function App() {
 
           {view === 'home' && (
           <main ref={mainRef} style={{ ...styles.main, ...(weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
+            {monthCalendarEnabled && (
+              <section className="month-calendar-section" style={styles.monthCalendarSection} aria-label="月カレンダー">
+                <div className="month-calendar-header" style={styles.monthCalendarHeader}>
+                  <button
+                    type="button"
+                    className="month-calendar-collapse-btn"
+                    style={styles.monthCalendarCollapseButton}
+                    onClick={() => setMonthCalendarCollapsed((current) => !current)}
+                    aria-expanded={!monthCalendarCollapsed}
+                    aria-label={monthCalendarCollapsed ? '月カレンダーを開く' : '月カレンダーを閉じる'}
+                  >
+                    {monthCalendarCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                    <span>月カレンダー</span>
+                  </button>
+                  {!monthCalendarCollapsed && (
+                    <div className="month-calendar-nav" style={styles.monthCalendarNav}>
+                      <button
+                        type="button"
+                        className="month-calendar-nav-btn"
+                        style={styles.searchNavButton}
+                        onClick={() => changeMonthView(-1)}
+                        aria-label="前月"
+                        title="前月"
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      <span className="month-calendar-nav-title" style={styles.monthCalendarNavTitle}>{formatMonthTitle(monthViewDate)}</span>
+                      <button
+                        type="button"
+                        className="month-calendar-nav-btn"
+                        style={styles.searchNavButton}
+                        onClick={() => changeMonthView(1)}
+                        aria-label="翌月"
+                        title="翌月"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {!monthCalendarCollapsed && (
+                  <div className="month-calendar-body" style={styles.monthCalendarBody}>
+                    <div className="month-calendar-weekday-row" style={styles.monthCalendarWeekdayRow}>
+                      {Array.from({ length: 7 }, (_, index) => dayNames[(weekStartDay + index) % 7]).map((dayName, index) => (
+                        <span
+                          key={dayName}
+                          style={{
+                            ...styles.monthCalendarWeekdayCell,
+                            color: (weekStartDay + index) % 7 === 0 ? '#dc2626' : (weekStartDay + index) % 7 === 6 ? '#2563eb' : '#64748b',
+                          }}
+                        >
+                          {dayName}
+                        </span>
+                      ))}
+                    </div>
+                    {monthGridWeeks.map((week) => {
+                      const rowWeekKey = formatDateKey(getWeekStart(week[0], weekStartDay))
+                      const isCurrentWeekRow = rowWeekKey === weekStartKey
+                      return (
+                        <div
+                          key={rowWeekKey}
+                          className="month-calendar-week-row"
+                          style={{
+                            ...styles.monthCalendarWeekRow,
+                            ...(isCurrentWeekRow ? styles.monthCalendarCurrentWeekRow : {}),
+                          }}
+                        >
+                          {week.map((date) => {
+                            const dateKey = formatDateKey(date)
+                            const isCurrentMonth = date.getMonth() === monthViewDate.getMonth()
+                            const isToday = dateKey === formatDateKey(new Date())
+                            const isSelected = dateKey === selectedKey
+                            const count = (scheduleMap[dateKey] || []).length
+
+                            return (
+                              <button
+                                type="button"
+                                key={dateKey}
+                                className="month-calendar-day-cell"
+                                onClick={() => setSelectedDate(date)}
+                                style={{
+                                  ...styles.monthCalendarDayCell,
+                                  background: isSelected ? '#dbeafe' : isToday ? '#e3f6e8' : 'transparent',
+                                  borderColor: isSelected ? '#2563eb' : isToday ? '#86d9a0' : 'transparent',
+                                  opacity: isCurrentMonth ? 1 : 0.35,
+                                }}
+                              >
+                                <span style={styles.monthCalendarDayNumber}>{date.getDate()}</span>
+                                <span style={styles.monthCalendarDayCount}>{count > 0 ? count : ''}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
             <section className="schedule-search-section" style={styles.scheduleSearchSection} aria-label="スケジュール名を検索">
               <div className="schedule-search-header" style={styles.scheduleSearchHeader}>
                 <div>
@@ -2901,7 +3061,7 @@ function App() {
                 <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeek}>
                   <ChevronLeft size={16} />
                 </button>
-                <div className="week-nav-title" style={styles.weekTitle}>{formatMonthTitle(weekDates[0])}</div>
+                <div className="week-nav-title" style={styles.weekTitle}>{formatMonthTitle(selectedDate)}</div>
                 <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="次の週" onClick={selectNextWeek}>
                   <ChevronRight size={16} />
                 </button>
@@ -4320,6 +4480,90 @@ const styles = {
     boxShadow: '0 6px 16px rgba(15, 23, 42, 0.04)',
     marginBottom: '14px',
     padding: '14px',
+  },
+  monthCalendarSection: {
+    background: '#ffffff',
+    border: '1px solid #dbeafe',
+    borderRadius: '12px',
+    boxShadow: '0 6px 16px rgba(15, 23, 42, 0.04)',
+    marginBottom: '14px',
+    padding: '14px',
+  },
+  monthCalendarHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+  },
+  monthCalendarCollapseButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: 'none',
+    background: 'transparent',
+    color: '#0f172a',
+    fontSize: '15px',
+    fontWeight: 600,
+    padding: '4px 2px',
+    cursor: 'pointer',
+  },
+  monthCalendarNav: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  monthCalendarNavTitle: {
+    fontSize: '14px',
+    fontWeight: 600,
+    color: '#1e293b',
+    minWidth: '110px',
+    textAlign: 'center',
+  },
+  monthCalendarBody: {
+    marginTop: '10px',
+  },
+  monthCalendarWeekdayRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(7, 1fr)',
+    marginBottom: '4px',
+  },
+  monthCalendarWeekdayCell: {
+    textAlign: 'center',
+    fontSize: '11px',
+    fontWeight: 600,
+  },
+  monthCalendarWeekRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(7, 1fr)',
+    borderRadius: '8px',
+  },
+  monthCalendarCurrentWeekRow: {
+    background: '#eef2ff',
+    boxShadow: 'inset 0 0 0 1px #c7d2fe',
+  },
+  monthCalendarDayCell: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '2px',
+    border: '1px solid transparent',
+    borderRadius: '8px',
+    background: 'transparent',
+    padding: '6px 2px',
+    minHeight: '46px',
+    cursor: 'pointer',
+  },
+  monthCalendarDayNumber: {
+    fontSize: '13px',
+    fontWeight: 600,
+    color: '#1e293b',
+  },
+  monthCalendarDayCount: {
+    fontSize: '11px',
+    color: '#2563eb',
+    fontWeight: 600,
+    minHeight: '13px',
   },
   scheduleSearchHeader: {
     display: 'flex',
