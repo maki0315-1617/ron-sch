@@ -1050,6 +1050,12 @@ function App() {
     setSelectedDate((current) => addDays(current, offset))
   }
 
+  const goToToday = () => {
+    const today = new Date()
+    setSelectedDate(today)
+    setSearchMonthDate(today)
+  }
+
   const hasScheduleRelation = (item) => Boolean(item?.relatedPrev || item?.relatedNext)
 
   const getDateConflictingItems = async (dateKey, item, ignoreExistingId = null) => {
@@ -2748,9 +2754,16 @@ function App() {
                   <div className="selected-caption" style={styles.selectedCaption}>選択中の日</div>
                   <h2 className="selected-date-text" style={styles.selectedDateText}>{formatWeekTitle(selectedDate)}</h2>
                 </div>
-                <button type="button" className="schedule-add-button" style={styles.addButton} onClick={handleAddSchedule}>
-                  <Plus size={18} /> 追加
-                </button>
+                <div style={styles.selectedHeaderActions}>
+                  {formatDateKey(selectedDate) !== formatDateKey(new Date()) && (
+                    <button type="button" className="today-reset-button" style={styles.todayResetButton} onClick={goToToday}>
+                      今日へ戻る
+                    </button>
+                  )}
+                  <button type="button" className="schedule-add-button" style={styles.addButton} onClick={handleAddSchedule}>
+                    <Plus size={18} /> 追加
+                  </button>
+                </div>
               </div>
 
               {showDoubleTapHint && doubleTapHintMessages[Math.min(hintMessageIndex, doubleTapHintMessages.length - 1)] && (
@@ -4101,6 +4114,13 @@ const styles = {
     gap: '16px',
     marginBottom: '10px',
   },
+  selectedHeaderActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
   selectedCaption: {
     fontSize: '12px',
     color: '#64748b',
@@ -4110,6 +4130,20 @@ const styles = {
     margin: 0,
     fontSize: '26px',
     color: '#0f172a',
+  },
+  todayResetButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: '#ecfeff',
+    color: '#0f766e',
+    border: '1px solid #99f6e4',
+    borderRadius: '999px',
+    padding: '8px 14px',
+    fontSize: '13px',
+    fontWeight: 700,
+    cursor: 'pointer',
+    boxShadow: '0 4px 10px rgba(13, 148, 136, 0.08)',
   },
   addButton: {
     display: 'flex',
