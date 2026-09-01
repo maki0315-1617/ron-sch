@@ -30,20 +30,26 @@ const helpContent = {
   ja: {
     langLabel: '日本語',
     title: 'ヘルプ',
-    appInfo: 'ロンの簡易スケジュール　Ver1.00',
+    appInfo: 'ロン君のスケジュール　Ver1.00',
     siteLabel: '黒猫ロン君のAI検証ハブサイト',
     mailLabel: 'お問い合わせメール',
     note: 'なお、誹謗中傷のメールはご遠慮願います。',
     close: '閉じる',
+    guideButton: '利用ガイドPDFを開く',
+    about: '『ロン君のスケジュール』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。',
+    summary: '予定の登録から通知、進捗確認まで、日々の生活に沿った使い方をサポートします。',
   },
   en: {
     langLabel: 'English',
     title: 'Help',
-    appInfo: "Ron's Simple Schedule　Ver1.00",
-    siteLabel: "Black Cat Ron-kun's AI Verification Hub Site",
+    appInfo: "Ron’s Schedule Ver1.00",
+    siteLabel: "Black Cat Ron-kun's AI Verification Hub",
     mailLabel: 'Contact Email',
-    note: 'Please refrain from sending abusive or slanderous emails.',
+    note: 'Please avoid sending abusive or defamatory emails.',
     close: 'Close',
+    guideButton: 'Open User Guide (PDF)',
+    about: 'Ron’s Schedule is a simple planning app designed to make daily scheduling easier and help you stay consistent over time.',
+    summary: 'From adding tasks to checking progress and managing reminders, it supports a smoother daily routine.',
   },
 }
 
@@ -791,6 +797,53 @@ function App() {
         return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
       })
   }, [weekDates, scheduleMap])
+
+  // 連続達成日数・週間バッジ・ロン君の表情を予定データから算出（追加のDB読み込みなし）
+  const achievementStats = useMemo(() => {
+    const todayKey = formatDateKey(new Date())
+
+    const isDayAchieved = (dateKey) => {
+      const items = scheduleMap[dateKey] || []
+      return items.length > 0 && items.every((item) => item.completed === true)
+    }
+
+    let streak = 0
+    let streakCursor = isDayAchieved(todayKey) ? new Date(`${todayKey}T00:00:00`) : addDays(new Date(`${todayKey}T00:00:00`), -1)
+    while (isDayAchieved(formatDateKey(streakCursor))) {
+      streak += 1
+      streakCursor = addDays(streakCursor, -1)
+    }
+
+    const todayItems = scheduleMap[todayKey] || []
+    const todayRate = todayItems.length > 0 ? todayItems.filter((item) => item.completed).length / todayItems.length : null
+
+    // マスコットは黒猫統一（🐈‍⬛）で表情のみ変化
+    let mascotEmoji = '🐈‍⬛'
+    let mascotMessage = '今日の予定を登録してみましょう'
+    if (todayRate !== null) {
+      if (todayRate >= 0.8) {
+        mascotEmoji = '🐈‍⬛✨'
+        mascotMessage = '今日も完璧！ロン君もご機嫌です'
+      } else if (todayRate >= 0.4) {
+        mascotEmoji = '🐈‍⬛'
+        mascotMessage = 'いい調子！あと少しでコンプリート'
+      } else {
+        mascotEmoji = '🐈‍⬛💦'
+        mascotMessage = 'ロン君が応援してます、ぼちぼち進めよう'
+      }
+    }
+
+    const weekItems = weekDates.flatMap((date) => scheduleMap[formatDateKey(date)] || [])
+    const weekRate = weekItems.length > 0 ? weekItems.filter((item) => item.completed).length / weekItems.length : null
+    let weekBadge = null
+    if (weekRate !== null) {
+      if (weekRate >= 1) weekBadge = { icon: '🏆', label: '皆勤賞' }
+      else if (weekRate >= 0.7) weekBadge = { icon: '🌟', label: 'がんばり屋さん' }
+      else if (weekRate >= 0.4) weekBadge = { icon: '👍', label: '順調ペース' }
+    }
+
+    return { streak, mascotEmoji, mascotMessage, weekBadge }
+  }, [scheduleMap, weekDates])
 
   const searchMonthKey = useMemo(() => {
     const year = searchMonthDate.getFullYear()
@@ -1778,6 +1831,310 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
+  const openUserGuidePdf = (lang = 'ja') => {
+    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
+    if (!reportWindow) {
+      const alertText = lang === 'en'
+        ? 'The user guide could not be opened. Please allow pop-ups and try again.'
+        : 'ユーザー案内の画面を開けませんでした。ポップアップを許可してください。'
+      alert(alertText)
+      return
+    }
+
+    const guideContent = {
+      ja: {
+        title: 'ロン君のスケジュール 利用ガイド',
+        subtitle: '予定の追加から進捗管理まで、日々の計画をすっきり整理して使えるガイドです。',
+        sections: [
+          {
+            heading: '1. 予定を登録する',
+            body: '画面の「追加」ボタンを押すと、予定の入力フォームが開きます。タイトル、開始時刻、終了時刻、重要度、詳細メモを入力して保存できます。定例タイトルを使えば、繰り返し同じ予定を素早く入力できます。',
+            points: [
+              '定例タイトルを使うと、よく使う予定名をすぐに選べます。',
+              '重要度を「重要」にすると、視認性が高くなります。',
+              '詳細メモには、会議内容や持ち物などを残せます。',
+            ],
+          },
+          {
+            heading: '2. 予定を管理する',
+            body: '各予定カードでは、完了、複製、移動、削除、前の予定との関連付けを行えます。カードをダブルタップすると、詳細プレビューを確認できます。',
+            points: [
+              '予定の重複がある場合は、事前に確認メッセージが表示されます。',
+              '「複製 / 移動」機能で別の日付への移動が簡単です。',
+              '関連付け機能で、連続して行う予定を流れとして管理できます。',
+            ],
+          },
+          {
+            heading: '3. 週ごとの一覧と未完了の確認',
+            body: 'メニューから「スケジュール一覧」や「未完了一覧」を開くと、今週の予定や未完了の作業をまとめて確認できます。月ごとの検索機能も使えます。',
+            points: [
+              '検索機能で、予定名からすぐに目的の予定を見つけられます。',
+              'スケジュール一覧PDFで、外出先でも簡単に確認できます。',
+              '未完了一覧PDFで、やるべきことを整理しやすくなります。',
+            ],
+          },
+          {
+            heading: '4. 通知を使う',
+            body: '右上の通知ボタンから、予定の開始時刻を通知で受け取れます。ブラウザの通知許可が必要です。',
+            points: [
+              '通知がオンの場合、予定開始時刻に音や表示で知らせます。',
+              'iPhone / Safari はホーム画面に追加後に設定してください。',
+              '通知がブロックされている場合は、ブラウザ設定から許可を切り替えてください。',
+            ],
+          },
+          {
+            heading: '5. 進捗状況を確認する',
+            body: 'フッターには連続達成日数と今週の進捗状況が表示されます。達成数を見ながら、自分のペースを把握しやすくなっています。',
+            points: [
+              '進捗率の推移をPDFとして保存できます。',
+              '継続のサポートとして、達成感を感じやすくなります。',
+              '日々の予定を完了に近づけるための励ましになります。',
+            ],
+          },
+        ],
+        noteTitle: 'ご利用のコツ',
+        note: '毎日少しずつ予定を見直し、完了したものを確認することでセルフマネジメントがしやすくなります。通知と進捗チェックを併用すると、予定の見落としを防ぎやすくなります。',
+        footer: '作成日: ' + new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' }),
+        saveLabel: 'PDFとして保存 / 印刷',
+        closeLabel: '閉じる',
+      },
+      en: {
+        title: 'Ron’s Schedule User Guide',
+        subtitle: 'A simple guide to planning ahead, managing tasks, and tracking your progress in daily life.',
+        sections: [
+          {
+            heading: '1. Create a schedule',
+            body: 'Tap the Add button to open the schedule form. Enter the title, start time, end time, priority, and notes, then save. Reusing saved common titles helps you add recurring tasks quickly.',
+            points: [
+              'Common titles let you reuse familiar task names in seconds.',
+              'Setting a task to High priority makes it stand out more clearly.',
+              'Notes are useful for keeping meeting details, packing lists, or reminders.',
+            ],
+          },
+          {
+            heading: '2. Manage your schedule',
+            body: 'Each schedule card lets you mark tasks as complete, duplicate them, move them to another date, delete them, or link them to related tasks. Double-tapping a card opens a detailed preview.',
+            points: [
+              'Overlapping schedules are checked automatically before saving.',
+              'The copy and move tools make it easy to reschedule tasks.',
+              'Related tasks can be linked to show a clear sequence of work.',
+            ],
+          },
+          {
+            heading: '3. Review weekly and incomplete tasks',
+            body: 'From the menu, you can open the weekly schedule and incomplete-task list to review what is coming up or still needs attention. You can also search by task name.',
+            points: [
+              'Search helps you find the task you need in seconds.',
+              'Weekly and incomplete-task PDF exports make review easy anywhere.',
+              'Lists help you focus on what still requires action.',
+            ],
+          },
+          {
+            heading: '4. Use notifications',
+            body: 'Tap the notification button in the upper-right corner to receive reminders when a scheduled task is about to start. Browser notification permission is required.',
+            points: [
+              'When notifications are enabled, you will receive a reminder at the scheduled time.',
+              'For iPhone and Safari, add the app to your home screen before enabling alerts.',
+              'If notifications are blocked, change the browser settings to allow them.',
+            ],
+          },
+          {
+            heading: '5. Track your progress',
+            body: 'The footer shows your streak and weekly progress so it is easy to stay aware of your momentum and keep moving forward.',
+            points: [
+              'Progress trends can be saved as a PDF report.',
+              'Motivational indicators help maintain momentum.',
+              'Daily review makes your plans easier to manage and more realistic.',
+            ],
+          },
+        ],
+        noteTitle: 'Helpful tip',
+        note: 'Take a few minutes each day to review your schedule and confirm what you have completed. Combining notifications with progress checks helps reduce missed tasks and keeps you motivated.',
+        footer: 'Created on: ' + new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+        saveLabel: 'Save / Print as PDF',
+        closeLabel: 'Close',
+      },
+    }
+
+    const guide = guideContent[lang] || guideContent.ja
+    const sectionsHtml = guide.sections.map((section, index) => `
+      <section class="card">
+        <div class="step-badge">${index + 1}</div>
+        <h2>${section.heading}</h2>
+        <p>${section.body}</p>
+        <ul>
+          ${section.points.map((point) => `<li>${point}</li>`).join('')}
+        </ul>
+      </section>
+    `).join('')
+
+    const guideHtml = `<!doctype html>
+      <html lang="${lang}">
+        <head>
+          <meta charset="UTF-8" />
+          <title>${guide.title}</title>
+          <style>
+            @page { size: A4 portrait; margin: 12mm; }
+            * { box-sizing: border-box; }
+            body {
+              margin: 0;
+              background: linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%);
+              color: #172033;
+              font-family: "Noto Sans JP", "Segoe UI", "Yu Gothic", Meiryo, sans-serif;
+            }
+            .page {
+              max-width: 820px;
+              margin: 0 auto;
+              padding: 24px 20px 40px;
+            }
+            .topbar {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              gap: 12px;
+              margin-bottom: 18px;
+            }
+            .brand {
+              display: inline-flex;
+              align-items: center;
+              gap: 10px;
+              background: #eff6ff;
+              border: 1px solid #bfdbfe;
+              border-radius: 999px;
+              padding: 8px 14px;
+              color: #1d4ed8;
+              font-weight: 700;
+              font-size: 12px;
+            }
+            .actions {
+              display: flex;
+              justify-content: flex-end;
+              gap: 10px;
+              margin-bottom: 12px;
+            }
+            button {
+              border: 0;
+              border-radius: 10px;
+              background: #2563eb;
+              color: white;
+              padding: 12px 20px;
+              font-size: 15px;
+              font-weight: 700;
+              cursor: pointer;
+            }
+            .close-button { background: #64748b; }
+            .sheet {
+              background: #ffffff;
+              border: 1px solid #dfeaf7;
+              border-radius: 18px;
+              box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+              padding: 28px 24px;
+            }
+            h1 {
+              margin: 0;
+              font-size: 30px;
+              line-height: 1.2;
+              color: #0f172a;
+            }
+            .subtitle {
+              margin: 10px 0 0;
+              color: #475569;
+              font-size: 14px;
+              line-height: 1.7;
+            }
+            .card {
+              background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+              border: 1px solid #dbeafe;
+              border-radius: 12px;
+              padding: 18px 18px 14px;
+              margin-top: 18px;
+            }
+            .step-badge {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 28px;
+              height: 28px;
+              border-radius: 999px;
+              background: #dbeafe;
+              color: #1d4ed8;
+              font-size: 12px;
+              font-weight: 800;
+              margin-bottom: 10px;
+            }
+            h2 {
+              margin: 0 0 8px;
+              font-size: 18px;
+              color: #1e3a8a;
+            }
+            p, li {
+              font-size: 14px;
+              line-height: 1.8;
+              color: #334155;
+            }
+            ul {
+              margin: 12px 0 0;
+              padding-left: 20px;
+            }
+            .tip {
+              margin-top: 24px;
+              background: #eff6ff;
+              border: 1px solid #bfdbfe;
+              border-radius: 12px;
+              padding: 16px 18px;
+            }
+            .tip-title {
+              margin: 0 0 6px;
+              font-size: 14px;
+              color: #1e3a8a;
+              font-weight: 800;
+            }
+            .footer {
+              margin-top: 20px;
+              padding-top: 14px;
+              border-top: 1px solid #e2e8f0;
+              color: #64748b;
+              font-size: 12px;
+              text-align: right;
+            }
+            @media print { .actions { display: none; } }
+          </style>
+        </head>
+        <body>
+          <div class="page">
+            <div class="actions">
+              <button onclick="window.print()">${guide.saveLabel}</button>
+              <button class="close-button" onclick="window.close()">${guide.closeLabel}</button>
+            </div>
+            <div class="sheet">
+              <div class="topbar">
+                <div class="brand">RON SCH</div>
+              </div>
+              <h1>${guide.title}</h1>
+              <p class="subtitle">${guide.subtitle}</p>
+              ${sectionsHtml}
+              <div class="tip">
+                <div class="tip-title">${guide.noteTitle}</div>
+                <div>${guide.note}</div>
+              </div>
+              <div class="footer">${guide.footer}</div>
+            </div>
+          </div>
+        </body>
+      </html>`
+
+    const blobUrl = URL.createObjectURL(new Blob([guideHtml], { type: 'text/html' }))
+    setTimeout(() => {
+      if (reportWindow.closed) {
+        URL.revokeObjectURL(blobUrl)
+        return
+      }
+      reportWindow.location.href = blobUrl
+      reportWindow.focus()
+    }, 0)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
   const openProgressReport = async () => {
     if (!session) return
 
@@ -2615,7 +2972,23 @@ function App() {
           )}
 
           <footer style={styles.footer}>
-            © {new Date().getFullYear()} ロン君のスケジュール
+            <section className="achievement-bar" style={{ ...styles.achievementBar, ...styles.footerAchievementBar }} aria-label="達成状況">
+              <div className="achievement-item" style={styles.achievementItem}>
+                <span style={styles.achievementIcon} aria-hidden="true">🔥</span>
+                <span style={styles.achievementLabel}>{achievementStats.streak}日連続達成</span>
+              </div>
+              <div className="achievement-item" style={styles.achievementItem}>
+                <span style={styles.achievementIcon} aria-hidden="true">{achievementStats.mascotEmoji}</span>
+                <span style={styles.achievementLabel}>{achievementStats.mascotMessage}</span>
+              </div>
+              {achievementStats.weekBadge && (
+                <div className="achievement-item" style={styles.achievementBadge}>
+                  <span style={styles.achievementIcon} aria-hidden="true">{achievementStats.weekBadge.icon}</span>
+                  <span style={styles.achievementLabel}>今週: {achievementStats.weekBadge.label}</span>
+                </div>
+              )}
+            </section>
+            <div>© {new Date().getFullYear()} ロン君のスケジュール</div>
           </footer>
 
           <button
@@ -2909,6 +3282,13 @@ function App() {
                   <a href={`mailto:${HELP_MAIL_ADDRESS}`} style={styles.helpLink}>
                     {helpContent[helpLang].mailLabel}: {HELP_MAIL_ADDRESS}
                   </a>
+                  <button
+                    type="button"
+                    style={{ ...styles.secondaryButton, width: '100%' }}
+                    onClick={() => openUserGuidePdf(helpLang)}
+                  >
+                    {helpContent[helpLang].guideButton}
+                  </button>
                   <p style={styles.helpNote}>{helpContent[helpLang].note}</p>
                 </div>
 
@@ -3388,10 +3768,28 @@ const styles = {
   },
   footer: {
     marginTop: '10px',
-    padding: '8px 0 4px',
+    padding: '12px 14px 10px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '10px',
     textAlign: 'center',
     fontSize: '12px',
-    color: '#94a3b8',
+    color: '#475569',
+    background: 'linear-gradient(180deg, rgba(239,246,255,0.9) 0%, rgba(248,250,252,1) 100%)',
+    border: '1px solid #dbeafe',
+    borderRadius: '16px',
+    boxShadow: '0 -6px 18px rgba(15,23,42,0.04)',
+  },
+  footerAchievementBar: {
+    width: '100%',
+    margin: 0,
+    justifyContent: 'center',
+    background: 'linear-gradient(135deg, #fff7ed 0%, #fffbeb 100%)',
+    border: '1px solid #fed7aa',
+    borderRadius: '12px',
+    padding: '10px 12px',
+    boxShadow: '0 6px 14px rgba(251,146,60,0.08)',
   },
   scrollToTopButton: {
     position: 'fixed',
@@ -3524,6 +3922,43 @@ const styles = {
   dayMeta: {
     fontSize: '11px',
     color: '#64748b',
+  },
+  achievementBar: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '10px',
+    background: 'linear-gradient(135deg, #fff7ed 0%, #fffbeb 100%)',
+    border: '1px solid #fed7aa',
+    borderRadius: '12px',
+    marginBottom: '14px',
+    padding: '10px 14px',
+    boxShadow: '0 6px 18px rgba(251,146,60,0.08)',
+  },
+  achievementItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '13px',
+    color: '#7c2d12',
+  },
+  achievementBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '13px',
+    color: '#7c2d12',
+    background: '#ffedd5',
+    borderRadius: '999px',
+    padding: '3px 10px',
+  },
+  achievementIcon: {
+    fontSize: '16px',
+  },
+  achievementLabel: {
+    whiteSpace: 'normal',
+    lineHeight: 1.4,
   },
   scheduleSearchSection: {
     background: '#ffffff',

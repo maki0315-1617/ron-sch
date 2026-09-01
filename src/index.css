@@ -242,6 +242,33 @@ img {
     font-size: 11px !important;
   }
 
+  .achievement-bar {
+    gap: 6px !important;
+    padding: 6px 8px !important;
+    margin-bottom: 8px !important;
+    border-radius: 10px !important;
+  }
+
+  .achievement-item {
+    font-size: 11px !important;
+    gap: 4px !important;
+  }
+
+  .achievement-badge {
+    font-size: 11px !important;
+    padding: 2px 8px !important;
+    gap: 4px !important;
+  }
+
+  .achievement-icon {
+    font-size: 13px !important;
+  }
+
+  .achievement-label {
+    white-space: normal !important;
+    line-height: 1.2 !important;
+  }
+
   .schedule-search-section {
     padding: 8px 10px !important;
     margin-bottom: 8px !important;
