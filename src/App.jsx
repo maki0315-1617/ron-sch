@@ -57,6 +57,7 @@ const MAX_COMMON_TITLES = 20
 const WEEK_CALENDAR_FIXED_KEY = 'ron-sch-week-calendar-fixed'
 const WEEK_START_DAY_KEY = 'ron-sch-week-start-day'
 const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
+const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 
 const formatDateKey = (date) => {
   const d = new Date(date)
@@ -257,7 +258,10 @@ function App() {
     return Number.isInteger(storedValue) && storedValue >= 0 && storedValue <= 6 ? storedValue : 1
   })
   const [monthCalendarEnabled, setMonthCalendarEnabled] = useState(() => {
-    return typeof window !== 'undefined' && window.localStorage.getItem(MONTH_CALENDAR_ENABLED_KEY) === 'true'
+    return typeof window === 'undefined' || window.localStorage.getItem(MONTH_CALENDAR_ENABLED_KEY) !== 'false'
+  })
+  const [weekCalendarEnabled, setWeekCalendarEnabled] = useState(() => {
+    return typeof window === 'undefined' || window.localStorage.getItem(WEEK_CALENDAR_ENABLED_KEY) !== 'false'
   })
   const [monthCalendarCollapsed, setMonthCalendarCollapsed] = useState(false)
   const [view, setView] = useState('home')
@@ -401,6 +405,11 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(MONTH_CALENDAR_ENABLED_KEY, String(monthCalendarEnabled))
   }, [monthCalendarEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(WEEK_CALENDAR_ENABLED_KEY, String(weekCalendarEnabled))
+  }, [weekCalendarEnabled])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -2106,10 +2115,12 @@ function App() {
             ],
           },
           {
-            heading: '4. 月カレンダーで予定を把握する',
-            body: '設定メニューの「月カレンダー表示」をONにすると、検索欄の上に月カレンダーが表示されます。前月・翌月ボタンで月を移動でき、週カレンダーやスケジュール検索の対象月も自動的に連動します。',
+            heading: '4. カレンダーの表示を切り替える',
+            body: '設定メニューの「月カレンダー表示」と「週カレンダー表示」で、月・週カレンダーを個別に表示または非表示にできます。初期状態では両方が表示され、月のみ・週のみ・両方の表示を選べます。',
             points: [
-              '各日にはその日の予定件数だけが数字で表示され、予定がない日は空白になります。',
+              '表示中のカレンダーが1つだけの場合は、カレンダーがすべて非表示にならないよう、その表示を解除できません。',
+              '各日には未完了件数 / 全件数が表示され、全件完了した日は全件数のみ緑色で表示されます。',
+              '前月・翌月ボタンで月を移動でき、週カレンダーやスケジュール検索の対象月も自動的に連動します。',
               '週カレンダーで表示中の週の範囲は、月カレンダー上でも色付けされて確認できます。',
               '日付をタップすると選択日が切り替わり、週カレンダーとスケジュールカードにも即座に反映されます。',
               'ヘッダーの折りたたみボタンで、月カレンダーの表示・非表示を切り替えられます。',
@@ -2181,10 +2192,12 @@ function App() {
             ],
           },
           {
-            heading: '4. See your schedule on the month calendar',
-            body: 'Turn on "Show Month Calendar" from the settings menu to display a month view above the search box. Use the previous/next month buttons to browse months; the week calendar and schedule search stay in sync with the selected month.',
+            heading: '4. Switch calendar displays',
+            body: 'Use "Show Month Calendar" and "Show Week Calendar" in the settings menu to show or hide each calendar independently. Both are shown by default, and you can use the month calendar only, the week calendar only, or both.',
             points: [
-              'Each day shows only the number of scheduled tasks, and days with none are left blank.',
+              'When only one calendar is visible, it cannot be turned off, so at least one calendar always remains on screen.',
+              'Each day shows incomplete tasks / total tasks. When all tasks are complete, only the total is shown in green.',
+              'Use the previous/next month buttons to browse months; the week calendar and schedule search stay in sync with the selected month.',
               'The week currently shown in the week calendar is highlighted within the month view.',
               'Tapping a date switches the selected day, instantly updating the week calendar and schedule card.',
               'Use the collapse button in the header to show or hide the month calendar.',
@@ -2675,10 +2688,21 @@ function App() {
                           type="button"
                           role="menuitem"
                           style={styles.menuItem}
-                          onClick={() => setMonthCalendarEnabled((current) => !current)}
+                          onClick={() => setMonthCalendarEnabled((current) => current && !weekCalendarEnabled ? current : !current)}
+                          disabled={monthCalendarEnabled && !weekCalendarEnabled}
                         >
                           <Check size={18} color={monthCalendarEnabled ? '#2563eb' : 'transparent'} />
                           月カレンダー表示
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
+                          onClick={() => setWeekCalendarEnabled((current) => current && !monthCalendarEnabled ? current : !current)}
+                          disabled={weekCalendarEnabled && !monthCalendarEnabled}
+                        >
+                          <Check size={18} color={weekCalendarEnabled ? '#2563eb' : 'transparent'} />
+                          週カレンダー表示
                         </button>
                         <label style={styles.settingsSelectLabel}>
                           週の開始を設定
@@ -2851,7 +2875,7 @@ function App() {
           </header>
 
           {view === 'home' && (
-          <main ref={mainRef} style={{ ...styles.main, ...(weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
+          <main ref={mainRef} style={{ ...styles.main, ...(weekCalendarEnabled && weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
             {monthCalendarEnabled && (
               <section className="month-calendar-section" style={styles.monthCalendarSection} aria-label="月カレンダー">
                 <div className="month-calendar-header" style={styles.monthCalendarHeader}>
@@ -2924,7 +2948,11 @@ function App() {
                             const isCurrentMonth = date.getMonth() === monthViewDate.getMonth()
                             const isToday = dateKey === formatDateKey(new Date())
                             const isSelected = dateKey === selectedKey
-                            const count = (scheduleMap[dateKey] || []).length
+                            const items = scheduleMap[dateKey] || []
+                            const totalCount = items.length
+                            const incompleteCount = items.filter((item) => item.completed !== true).length
+                            const isAllCompleted = totalCount > 0 && incompleteCount === 0
+                            const isCountAbbreviated = incompleteCount >= 100 || totalCount >= 100
 
                             return (
                               <button
@@ -2940,7 +2968,19 @@ function App() {
                                 }}
                               >
                                 <span style={styles.monthCalendarDayNumber}>{date.getDate()}</span>
-                                <span style={styles.monthCalendarDayCount}>{count > 0 ? count : ''}</span>
+                                <span style={styles.monthCalendarDayCount}>
+                                  {totalCount > 0 && (
+                                    isCountAbbreviated ? '…/…' : isAllCompleted ? (
+                                      <span style={styles.monthCalendarCompletedCount}>{totalCount}</span>
+                                    ) : (
+                                      <>
+                                        <span style={styles.monthCalendarIncompleteCount}>{incompleteCount}</span>
+                                        <span style={styles.monthCalendarCountSeparator}>/</span>
+                                        <span>{totalCount}</span>
+                                      </>
+                                    )
+                                  )}
+                                </span>
                               </button>
                             )
                           })}
@@ -3025,9 +3065,10 @@ function App() {
                 </div>
               )}
             </section>
-            <section
-              className="week-section"
-              style={{ ...styles.weekSection, ...(weekCalendarFixed ? styles.fixedWeekSection : {}), touchAction: 'pan-y' }}
+            {weekCalendarEnabled && (
+              <section
+                className="week-section"
+                style={{ ...styles.weekSection, ...(weekCalendarFixed ? styles.fixedWeekSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
                 weekTouchRef.current = event.changedTouches[0].clientX
               }}
@@ -3071,6 +3112,10 @@ function App() {
                 {weekDates.map((date) => {
                   const key = formatDateKey(date)
                   const list = scheduleMap[key] || []
+                  const totalCount = list.length
+                  const incompleteCount = list.filter((item) => item.completed !== true).length
+                  const isAllCompleted = totalCount > 0 && incompleteCount === 0
+                  const isCountAbbreviated = incompleteCount >= 100 || totalCount >= 100
                   const isSelected = key === selectedKey
                   const isToday = key === formatDateKey(new Date())
 
@@ -3091,17 +3136,30 @@ function App() {
                         {dayNames[date.getDay()]}
                       </span>
                       <strong className="week-day-number" style={styles.dayNumber}>{date.getDate()}</strong>
-                      <span style={styles.dayMeta}>{list.length ? `${list.length}件` : ''}</span>
+                      <span style={styles.dayMeta}>
+                        {totalCount > 0 && (
+                          isCountAbbreviated ? '…/…' : isAllCompleted ? (
+                            <span style={styles.monthCalendarCompletedCount}>{totalCount}</span>
+                          ) : (
+                            <>
+                              <span style={styles.monthCalendarIncompleteCount}>{incompleteCount}</span>
+                              <span style={styles.monthCalendarCountSeparator}>/</span>
+                              <span>{totalCount}</span>
+                            </>
+                          )
+                        )}
+                      </span>
                     </button>
                   )
                 })}
               </div>
-            </section>
+              </section>
+            )}
 
             <section
               ref={scheduleSectionRef}
               className="schedule-section"
-              style={{ ...styles.scheduleSection, ...(weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
+              style={{ ...styles.scheduleSection, ...(weekCalendarEnabled && weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
                 dayTouchRef.current = event.changedTouches[0].clientX
               }}
@@ -4561,9 +4619,19 @@ const styles = {
   },
   monthCalendarDayCount: {
     fontSize: '11px',
-    color: '#2563eb',
+    color: '#0f172a',
     fontWeight: 600,
     minHeight: '13px',
+    whiteSpace: 'nowrap',
+  },
+  monthCalendarIncompleteCount: {
+    color: '#dc2626',
+  },
+  monthCalendarCountSeparator: {
+    color: '#0f172a',
+  },
+  monthCalendarCompletedCount: {
+    color: '#16a34a',
   },
   scheduleSearchHeader: {
     display: 'flex',
