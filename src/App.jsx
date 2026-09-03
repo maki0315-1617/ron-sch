@@ -25,6 +25,7 @@ const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
 const HELP_SITE_URL = 'https://ron-home-app.vercel.app/'
 const HELP_MAIL_ADDRESS = 'ronron201907@gmail.com'
+const SLEEP_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/829d308f0a34444fbf032d3d0b5f467c'
 
 const helpContent = {
   ja: {
@@ -36,6 +37,7 @@ const helpContent = {
     note: 'なお、誹謗中傷のメールはご遠慮願います。',
     close: '閉じる',
     guideButton: '利用ガイドPDFを開く',
+    shortcutButton: 'iPhone用「睡眠記録」ショートカットを取得',
     about: '『ロン君のスケジュール』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。',
     summary: '予定の登録から通知、進捗確認まで、日々の生活に沿った使い方をサポートします。',
   },
@@ -48,6 +50,7 @@ const helpContent = {
     note: 'Please avoid sending abusive or defamatory emails.',
     close: 'Close',
     guideButton: 'Open User Guide (PDF)',
+    shortcutButton: 'Get the “Sleep Records” Shortcut for iPhone',
     about: 'Ron’s Schedule is a simple planning app designed to make daily scheduling easier and help you stay consistent over time.',
     summary: 'From adding tasks to checking progress and managing reminders, it supports a smoother daily routine.',
   },
@@ -2385,7 +2388,7 @@ function App() {
             ],
           },
           {
-            heading: '6. 進捗状況を確認する',
+            heading: '7. 進捗状況を確認する',
             body: 'フッターには連続達成日数と今週の進捗状況が表示されます。達成数を見ながら、自分のペースを把握しやすくなっています。',
             points: [
               '進捗率の推移をPDFとして保存できます。',
@@ -2400,6 +2403,17 @@ function App() {
               '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
               '予定名が完全一致するものを1件として集計します。表記を揃えたい場合は定例タイトルの利用が便利です。',
               '集計結果の最下行に合計件数と合計時間が表示されます。',
+            ],
+          },
+          {
+            heading: '付録. iPhoneで睡眠記録ショートカットを使う',
+            body: 'iPhoneのショートカットアプリから、睡眠記録をすぐに開く専用アイコンをホーム画面に追加できます。共有リンクには「https://ron-sch.vercel.app/?sleep=1」を開く処理だけが登録されています。',
+            points: [
+              'Safariでヘルプの「iPhone用『睡眠記録』ショートカットを取得」をタップします。',
+              'Appleのページが開いたら「ショートカットを取得」をタップし、内容を確認して追加します。',
+              'ショートカットアプリで追加したショートカットの「・・・」を開き、共有ボタンから「ホーム画面に追加」を選びます。',
+              'ホーム画面の「睡眠記録」アイコンをタップし、アプリにログインすると睡眠記録だけの画面が開きます。',
+              '初回はSafariでログインが必要な場合があります。パスワードやFirebaseの秘密情報はショートカットに入力しません。',
             ],
           },
         ],
@@ -2488,6 +2502,17 @@ function App() {
               'The date range can be up to 31 days; a message appears if it is exceeded.',
               'Tasks are grouped by exact title match. Use common titles to keep names consistent.',
               'The total count and total minutes are shown in the last row of the summary.',
+            ],
+          },
+          {
+            heading: 'Appendix. Use the Sleep Records Shortcut on iPhone',
+            body: 'You can add a dedicated home-screen icon that opens Sleep Records quickly in the iPhone Shortcuts app. The shared shortcut only opens “https://ron-sch.vercel.app/?sleep=1”.',
+            points: [
+              'In Safari, tap “Get the Sleep Records Shortcut for iPhone” in Help.',
+              'When Apple’s page opens, tap “Get Shortcut”, review the actions, and add it.',
+              'In the Shortcuts app, open the shortcut menu, tap Share, and choose “Add to Home Screen”.',
+              'Tap the new Sleep Records icon on the Home Screen and sign in when prompted.',
+              'You may need to sign in through Safari the first time. Never enter a password or Firebase secret into the shortcut.',
             ],
           },
         ],
@@ -4096,6 +4121,14 @@ function App() {
                   >
                     {helpContent[helpLang].guideButton}
                   </button>
+                  <a
+                    href={SLEEP_SHORTCUT_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ ...styles.helpLink, color: '#0f766e', fontWeight: 700 }}
+                  >
+                    {helpContent[helpLang].shortcutButton}
+                  </a>
                   <p style={styles.helpNote}>{helpContent[helpLang].note}</p>
                 </div>
 
