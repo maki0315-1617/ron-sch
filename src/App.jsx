@@ -230,6 +230,39 @@ const escapeCsvField = (value) => {
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
+const loadPublicImageAsDataUrl = async (path, removeLightBackground = false) => {
+  const response = await fetch(path)
+  if (!response.ok) throw new Error(`画像を読み込めませんでした: ${path}`)
+  const buffer = await response.arrayBuffer()
+  if (removeLightBackground) {
+    const blob = new Blob([buffer], { type: 'image/png' })
+    const image = await createImageBitmap(blob)
+    const canvas = document.createElement('canvas')
+    canvas.width = image.width
+    canvas.height = image.height
+    const context = canvas.getContext('2d')
+    context.drawImage(image, 0, 0)
+    const imageData = context.getImageData(0, 0, image.width, image.height)
+    for (let offset = 0; offset < imageData.data.length; offset += 4) {
+      const red = imageData.data[offset]
+      const green = imageData.data[offset + 1]
+      const blue = imageData.data[offset + 2]
+      const lightness = Math.min(red, green, blue)
+      if (lightness >= 238) imageData.data[offset + 3] = 0
+      else if (lightness >= 220) imageData.data[offset + 3] = Math.round((238 - lightness) / 18 * 255)
+    }
+    context.putImageData(imageData, 0, 0)
+    image.close()
+    return canvas.toDataURL('image/png')
+  }
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return `data:image/png;base64,${btoa(binary)}`
+}
+
 const AGGREGATION_MAX_DAYS = 31
 
 const notificationTokenKey = (userId) => `ron-sch-fcm-token:${userId}`
@@ -2147,7 +2180,7 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
-  const openSleepReport = () => {
+  const openSleepReport = async () => {
     if (!session) return
 
     const reportWindow = window.open('', '_blank', 'width=1000,height=750')
@@ -2156,9 +2189,38 @@ function App() {
       return
     }
 
+    reportWindow.document.write(`<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>睡眠記録を準備中</title><style>body{margin:0;padding:48px 24px;color:#172033;font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center}.progress-box{max-width:480px;margin:40px auto;text-align:left}.progress-track{height:12px;background:#e2e8f0;border-radius:6px;overflow:hidden}.progress-bar{width:35%;height:100%;background:#0f766e;animation:progress 1.2s ease-in-out infinite alternate}@keyframes progress{from{width:15%}to{width:85%}}</style></head><body><h1>睡眠記録を準備しています</h1><div class="progress-box"><p>対象月の計画数を読み込んでいます...</p><div class="progress-track" role="progressbar" aria-label="読み込み中"><div class="progress-bar"></div></div></div></body></html>`)
+    reportWindow.document.close()
+
     const year = selectedDate.getFullYear()
     const month = selectedDate.getMonth()
     const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const monthStartKey = formatDateKey(new Date(year, month, 1))
+    const monthEndKey = formatDateKey(new Date(year, month, daysInMonth))
+    const completedPlanCounts = {}
+
+    try {
+      const scheduleSnapshot = await getDocs(query(
+        collection(db, 'schedule_items'),
+        where('user_id', '==', session.uid),
+        where('date', '>=', monthStartKey),
+        where('date', '<=', monthEndKey)
+      ))
+      scheduleSnapshot.forEach((docSnap) => {
+        const item = docSnap.data()
+        if (item.date && item.completed === true) {
+          completedPlanCounts[item.date] = (completedPlanCounts[item.date] || 0) + 1
+        }
+      })
+    } catch (error) {
+      console.error('月別計画数取得エラー:', error)
+      if (!reportWindow.closed) reportWindow.close()
+      alert(`計画数の取得に失敗しました:\n${error.message}`)
+      return
+    }
+
+    if (reportWindow.closed) return
+
     const reportRows = Array.from({ length: daysInMonth }, (_, index) => {
       const date = new Date(year, month, index + 1)
       const dateKey = formatDateKey(date)
@@ -2172,29 +2234,42 @@ function App() {
         minutes = parseTimeValue(wakeTime) - parseTimeValue(previousBedtime)
         if (minutes <= 0) minutes += 24 * 60
       }
-      return { dateKey, dayName: dayNames[date.getDay()], currentBedtime, previousBedtime, wakeTime, minutes }
+      return { dateKey, dayName: dayNames[date.getDay()], currentBedtime, previousBedtime, wakeTime, minutes, completedPlanCount: completedPlanCounts[dateKey] || 0 }
     })
     const formatDuration = (minutes) => minutes === null ? '-' : `${Math.floor(minutes / 60)}時間${minutes % 60}分`
     const rows = reportRows.map((row) => `
       <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td></tr>`).join('')
-    const chartRows = reportRows.filter((row) => row.minutes !== null)
     const chartWidth = 760
-    const chartHeight = 260
-    const maxMinutes = Math.max(12 * 60, ...chartRows.map((row) => row.minutes))
-    const chartPoints = chartRows.map((row, index) => {
-      const x = chartRows.length === 1 ? chartWidth / 2 : 48 + (chartWidth - 72) * index / (chartRows.length - 1)
+    const chartHeight = 310
+    const plotLeft = 48
+    const plotRight = chartWidth - 24
+    const plotTop = 40
+    const plotBottom = 220
+    const maxMinutes = Math.max(12 * 60, ...reportRows.filter((row) => row.minutes !== null).map((row) => row.minutes))
+    const maxCompletedPlans = Math.max(1, ...reportRows.map((row) => row.completedPlanCount))
+    const chartPoints = reportRows.map((row, index) => {
+      const x = reportRows.length === 1 ? (plotLeft + plotRight) / 2 : plotLeft + (plotRight - plotLeft) * index / (reportRows.length - 1)
       const y = 220 - (row.minutes / maxMinutes) * 180
       return { ...row, x, y }
     })
-    const polyline = chartPoints.map((point) => `${point.x},${point.y}`).join(' ')
-    const chart = chartPoints.length
-      ? `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="日別睡眠時間グラフ">
-          <line x1="48" y1="220" x2="${chartWidth - 24}" y2="220" stroke="#cbd5e1" />
-          <line x1="48" y1="40" x2="48" y2="220" stroke="#cbd5e1" />
-          <polyline points="${polyline}" fill="none" stroke="#0f766e" stroke-width="3" />
-          ${chartPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0f766e" /><text x="${point.x}" y="${point.y - 8}" text-anchor="middle" font-size="10" fill="#115e59">${formatDuration(point.minutes)}</text><text x="${point.x}" y="238" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
-        </svg>`
-      : '<p class="empty">睡眠記録がありません</p>'
+    const sleepPoints = chartPoints.filter((point) => point.minutes !== null)
+    const polyline = sleepPoints.map((point) => `${point.x},${point.y}`).join(' ')
+    const targetY = plotBottom - (8 * 60 / maxMinutes) * 180
+    const bars = chartPoints.map((point) => {
+      const barWidth = Math.max(4, (plotRight - plotLeft) / daysInMonth * 0.58)
+      const barHeight = point.completedPlanCount / maxCompletedPlans * 70
+      return `<rect x="${point.x - barWidth / 2}" y="${plotBottom - barHeight}" width="${barWidth}" height="${barHeight}" fill="#f59e0b" opacity="0.72"><title>${point.dateKey}: 完了 ${point.completedPlanCount}件</title></rect>`
+    }).join('')
+    const chart = `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="日別睡眠時間と完了計画数のグラフ">
+        <line x1="${plotLeft}" y1="${plotBottom}" x2="${plotRight}" y2="${plotBottom}" stroke="#cbd5e1" />
+        <line x1="${plotLeft}" y1="${plotTop}" x2="${plotLeft}" y2="${plotBottom}" stroke="#cbd5e1" />
+        ${bars}
+        <line x1="${plotLeft}" y1="${targetY}" x2="${plotRight}" y2="${targetY}" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 5" />
+        <text x="${plotRight}" y="${targetY - 6}" text-anchor="end" font-size="11" fill="#b91c1c">推奨 8時間</text>
+        ${sleepPoints.length ? `<polyline points="${polyline}" fill="none" stroke="#0f766e" stroke-width="3" />${sleepPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0f766e" /><text x="${point.x}" y="${point.y - 8}" text-anchor="middle" font-size="10" fill="#115e59">${formatDuration(point.minutes)}</text>`).join('')}` : ''}
+        ${chartPoints.map((point) => `<text x="${point.x}" y="238" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
+        <text x="${plotLeft}" y="260" font-size="11" fill="#0f766e">● 睡眠時間</text><text x="${plotLeft + 110}" y="260" font-size="11" fill="#d97706">■ 完了計画数</text>
+      </svg>`
 
     const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>睡眠記録</title>
       <style>
@@ -2210,7 +2285,7 @@ function App() {
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
       <h1>睡眠記録</h1><div class="period">対象期間: ${year}年${month + 1}月</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
       <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th></tr></thead><tbody>${rows}</tbody></table>
-      <h2>日別睡眠時間</h2><div class="chart-box">${chart}</div></body></html>`
+      <h2>日別睡眠時間・完了計画数</h2><div class="chart-box">${chart}</div></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
@@ -2317,7 +2392,7 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
-  const openUserGuidePdf = (lang = 'ja') => {
+  const openUserGuidePdf = async (lang = 'ja') => {
     const reportWindow = window.open('', '_blank', 'width=1000,height=750')
     if (!reportWindow) {
       const alertText = lang === 'en'
@@ -2326,6 +2401,9 @@ function App() {
       alert(alertText)
       return
     }
+
+    reportWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8"><title>利用ガイドを準備中</title><style>body{font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center;padding:48px;color:#172033}.track{max-width:460px;height:12px;margin:24px auto;background:#e2e8f0;border-radius:6px;overflow:hidden}.bar{height:100%;width:40%;background:#2563eb;animation:load 1.2s ease-in-out infinite alternate}@keyframes load{from{width:15%}to{width:85%}}</style></head><body><h1>利用ガイドを準備しています</h1><div class="track" role="progressbar" aria-label="読み込み中"><div class="bar"></div></div></body></html>')
+    reportWindow.document.close()
 
     const guideContent = {
       ja: {
@@ -2529,6 +2607,30 @@ function App() {
     }
 
     const guide = guideContent[lang] || guideContent.ja
+    const guideScreenshotPaths = lang === 'en'
+      ? [
+        ...Array.from({ length: 7 }, (_, index) => ({ path: `/guide-screen-${index + 1}.png`, alt: `Ron’s Schedule app screen ${index + 1}`, caption: `App screen example ${index + 1}.` })),
+      ]
+      : [
+        ...Array.from({ length: 7 }, (_, index) => ({ path: `/guide-screen-${index + 1}.png`, alt: `ロン君のスケジュール画面${index + 1}`, caption: `アプリ画面例 ${index + 1}` })),
+      ]
+    let guideScreenshots
+    try {
+      guideScreenshots = await Promise.all(guideScreenshotPaths.map(async (screenshot) => ({
+        ...screenshot,
+        src: await loadPublicImageAsDataUrl(screenshot.path),
+      })))
+    } catch (error) {
+      if (!reportWindow.closed) reportWindow.close()
+      alert(`${lang === 'en' ? 'The guide images could not be loaded' : 'ガイド画像を読み込めませんでした'}:\n${error.message}`)
+      return
+    }
+    const guideScreenshotsHtml = guideScreenshots.map((screenshot, index) => `
+      <figure class="guide-screenshot${index === guideScreenshots.length - 1 ? ' guide-screenshot-wide' : ''}">
+        <img src="${screenshot.src}" alt="${screenshot.alt}" />
+        <figcaption>${screenshot.caption}</figcaption>
+      </figure>
+    `).join('')
     const sectionsHtml = guide.sections.map((section, index) => `
       <section class="card">
         <div class="step-badge">${index + 1}</div>
@@ -2614,6 +2716,41 @@ function App() {
               font-size: 14px;
               line-height: 1.7;
             }
+            .screenshots {
+              display: grid;
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 12px;
+              margin-top: 22px;
+            }
+            .guide-screenshot {
+              margin: 0;
+              min-width: 0;
+              break-inside: avoid;
+            }
+            .guide-screenshot-wide {
+              grid-column: 1 / -1;
+            }
+            .guide-screenshot img {
+              display: block;
+              width: 100%;
+              height: 190px;
+              object-fit: contain;
+              object-position: center;
+              background: #f8fafc;
+              border: 1px solid #dbeafe;
+              border-radius: 10px;
+            }
+            .guide-screenshot-wide img {
+              height: auto;
+              max-height: 310px;
+              object-fit: contain;
+            }
+            .guide-screenshot figcaption {
+              margin-top: 6px;
+              color: #475569;
+              font-size: 11px;
+              line-height: 1.5;
+            }
             .card {
               background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
               border: 1px solid #dbeafe;
@@ -2690,6 +2827,7 @@ function App() {
                 <div>${guide.note}</div>
               </div>
               <div class="footer">${guide.footer}</div>
+              <div class="screenshots">${guideScreenshotsHtml}</div>
             </div>
           </div>
         </body>
@@ -2707,7 +2845,7 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
-  const openProductPrPdf = (lang = 'ja') => {
+  const openProductPrPdf = async (lang = 'ja') => {
     const reportWindow = window.open('', '_blank', 'width=1100,height=800')
     if (!reportWindow) {
       alert(lang === 'en' ? 'The PR slides could not be opened. Please allow pop-ups.' : 'PRスライドを開けませんでした。ポップアップを許可してください。')
@@ -2716,21 +2854,40 @@ function App() {
 
     const isEnglish = lang === 'en'
     const slides = isEnglish ? [
-      { tag: 'RON’S SCHEDULE', title: 'Plan your day.\nMake progress visible.', body: 'A friendly daily schedule app that turns intentions into small, achievable actions.', art: '📅  ✨  🐈‍⬛' },
-      { tag: 'ONE PLACE FOR YOUR DAY', title: 'See what matters\nat a glance.', body: 'Schedules, priorities, completion, search, calendar views, and reminders work together in one calm workspace.', art: '🗓️  ✅  🔔' },
-      { tag: 'SLEEP RECORDS', title: 'Start the morning\nwith a simple tap.', body: 'Save wake-up time and bedtime manually or use Current Time. Review the previous bedtime and your recent average.', art: '🌙  🛏️  ☀️' },
-      { tag: 'RON-KUN’S SUPPORT', title: 'A little advice\nfor today.', body: 'Recent sleep averages are translated into four friendly levels, emojis, and rotating advice from black cat Ron-kun.', art: '🐈‍⬛  💬  😊' },
-      { tag: 'KEEP GOING', title: 'Small checks create\na better rhythm.', body: 'Streaks, progress reports, PDFs, and notifications help you notice what you have done and choose the next step.', art: '🔥  📈  🚶' },
-      { tag: 'READY WHEN YOU ARE', title: 'Make today\neasier to begin.', body: 'Use the web app or the iPhone Sleep Records Shortcut for quick access to the moments that matter.', art: '📱  🚀  🐈‍⬛' },
+      { tag: 'RON’S SCHEDULE', title: 'Plan your day.\nMake progress visible.', body: 'A friendly daily schedule app that turns intentions into small, achievable actions.', points: ['Turn a busy day into clear next steps.', 'See progress without losing your focus.'], art: '📅  ✨  🐈‍⬛' },
+      { tag: 'ONE PLACE FOR YOUR DAY', title: 'See what matters\nat a glance.', body: 'Schedules, priorities, completion, search, calendar views, and reminders work together in one calm workspace.', points: ['Keep plans, priorities, and reminders together.', 'Find the right task quickly when plans change.'], art: '🗓️  ✅  🔔' },
+      { tag: 'SLEEP RECORDS', title: 'Start the morning\nwith a simple tap.', body: 'Save wake-up time and bedtime manually or use Current Time. Review the previous bedtime and your recent average.', points: ['Record wake-up and bedtime in seconds.', 'Compare sleep duration with the recommended eight hours.'], art: '🌙  🛏️  ☀️' },
+      { tag: 'RON-KUN’S SUPPORT', title: 'A little advice\nfor today.', body: 'Recent sleep averages are translated into four friendly levels, emojis, and rotating advice from black cat Ron-kun.', points: ['Make recent sleep patterns easier to understand.', 'Receive a gentle suggestion matched to your rhythm.'], art: '🐈‍⬛  💬  😊' },
+      { tag: 'KEEP GOING', title: 'Small checks create\na better rhythm.', body: 'Streaks, progress reports, PDFs, and notifications help you notice what you have done and choose the next step.', points: ['Celebrate completed plans and steady routines.', 'Use reports to turn reflection into action.'], art: '🔥  📈  🚶' },
+      { tag: 'READY WHEN YOU ARE', title: 'Make today\neasier to begin.', body: 'Use the web app or the iPhone Sleep Records Shortcut for quick access to the moments that matter.', points: ['Open the right view whenever you need it.', 'Keep the daily routine accessible on mobile.'], art: '📱  🚀  🐈‍⬛' },
+      { tag: 'APP SCREENS', title: 'Everything you need\nin one place.', body: 'Explore the app screens and find the view that fits your daily routine.', points: ['A calm interface supports repeated daily use.', 'Choose the screen that matches your next action.'], art: '🖥️  📱  ✅' },
     ] : [
-      { tag: 'ロン君のスケジュール', title: '今日を整え、\n前進を見える化。', body: 'やりたいことを小さな行動に変えて、毎日の達成感を支えるスケジュールアプリです。', art: '📅  ✨  🐈‍⬛' },
-      { tag: '一日の予定をひとまとめ', title: '大切なことが\nひと目でわかる。', body: '予定、重要度、完了、検索、カレンダー、通知をひとつの落ち着いた画面で管理できます。', art: '🗓️  ✅  🔔' },
-      { tag: '睡眠記録', title: '朝の記録を\nワンタッチで。', body: '起床と就寝を手動または現在時刻で保存。前日の就寝と最近の平均睡眠時間も確認できます。', art: '🌙  🛏️  ☀️' },
-      { tag: 'ロン君のサポート', title: '今日のあなたに\nひとこと。', body: '最近の睡眠平均を4段階で判定し、黒猫ロン君の絵文字と日替わりアドバイスで寄り添います。', art: '🐈‍⬛  💬  😊' },
-      { tag: '続ける仕組み', title: '小さな確認が\nよいリズムをつくる。', body: '連続達成、進捗レポート、PDF、通知で、できたことに気づき次の一歩を選べます。', art: '🔥  📈  🚶' },
-      { tag: 'いつでも、あなたのペースで', title: '今日を始める\nきっかけに。', body: 'Webアプリでも、iPhoneの睡眠記録ショートカットでも、必要な瞬間にすぐ使えます。', art: '📱  🚀  🐈‍⬛' },
+      { tag: 'ロン君のスケジュール', title: '今日を整え、\n前進を見える化。', body: 'やりたいことを小さな行動に変えて、毎日の達成感を支えるスケジュールアプリです。', points: ['一日のやることを見通しやすく整理。', '小さな完了を積み重ねて達成感を実感。'], art: '📅  ✨  🐈‍⬛' },
+      { tag: '一日の予定をひとまとめ', title: '大切なことが\nひと目でわかる。', body: '予定、重要度、完了、検索、カレンダー、通知をひとつの落ち着いた画面で管理できます。', points: ['重要度で、先に取り組むことが明確に。', '検索とカレンダーで予定をすぐ確認。'], art: '🗓️  ✅  🔔' },
+      { tag: '睡眠記録', title: '朝の記録を\nワンタッチで。', body: '起床と就寝を手動または現在時刻で保存。前日の就寝と最近の平均睡眠時間も確認できます。', points: ['現在時刻ボタンで入力の手間を軽減。', '8時間の目安と日別の睡眠時間を比較。'], art: '🌙  🛏️  ☀️' },
+      { tag: 'ロン君のサポート', title: '今日のあなたに\nひとこと。', body: '最近の睡眠平均を4段階で判定し、黒猫ロン君の絵文字と日替わりアドバイスで寄り添います。', points: ['睡眠の状態を4段階でやさしく表示。', '毎日の気分に寄り添うアドバイスを提供。'], art: '🐈‍⬛  💬  😊' },
+      { tag: '続ける仕組み', title: '小さな確認が\nよいリズムをつくる。', body: '連続達成、進捗レポート、PDF、通知で、できたことに気づき次の一歩を選べます。', points: ['連続達成日数で継続を確認。', 'レポートで習慣の変化を振り返る。'], art: '🔥  📈  🚶' },
+      { tag: 'いつでも、あなたのペースで', title: '今日を始める\nきっかけに。', body: 'Webアプリでも、iPhoneの睡眠記録ショートカットでも、必要な瞬間にすぐ使えます。', points: ['PCでもスマートフォンでも利用可能。', '必要な記録へすぐアクセス。'], art: '📱  🚀  🐈‍⬛' },
+      { tag: 'アプリ画面', title: '必要な機能を\nひとつの場所に。', body: '7つの画面例から、毎日の使い方をイメージできます。', points: ['画面ごとの役割がひと目でわかる。', '自分に合う使い方を見つけやすい。'], art: '🖥️  📱  ✅' },
     ]
 
+    const slideScreenshotPaths = Array.from({ length: 7 }, (_, index) => `/guide-screen-${index + 1}.png`)
+    let slideScreenshots
+    try {
+      slideScreenshots = await Promise.all(slideScreenshotPaths.map((path) => loadPublicImageAsDataUrl(path)))
+    } catch (error) {
+      if (!reportWindow.closed) reportWindow.close()
+      alert(`${isEnglish ? 'The slide images could not be loaded' : 'スライド画像を読み込めませんでした'}:\n${error.message}`)
+      return
+    }
+    let ronImage
+    try {
+      ronImage = await loadPublicImageAsDataUrl('/ron.png', true)
+    } catch (error) {
+      if (!reportWindow.closed) reportWindow.close()
+      alert(`${isEnglish ? 'Ron-kun image could not be loaded' : 'ロン君の画像を読み込めませんでした'}:\n${error.message}`)
+      return
+    }
     const slideHtml = slides.map((slide, index) => `
       <section class="slide ${index === 0 ? 'cover' : ''}">
         <div class="brand">${escapeHtml(slide.tag)}</div>
@@ -2738,7 +2895,9 @@ function App() {
         <div class="slide-number">${String(index + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}</div>
         <h1>${escapeHtml(slide.title).replaceAll('\n', '<br>')}</h1>
         <p>${escapeHtml(slide.body)}</p>
-        <img class="ron" src="/ron.png" alt="黒猫ロン君" />
+        <ul class="appeal-points">${slide.points.map((point) => `<li>${escapeHtml(point)}</li>`).join('')}</ul>
+        <img class="screen-shot" src="${slideScreenshots[index]}" alt="${isEnglish ? 'App screen example' : 'アプリ画面の例'}" />
+        <img class="ron" src="${ronImage}" alt="黒猫ロン君" />
       </section>`).join('')
 
     const title = isEnglish ? 'Ron’s Schedule App Introduction' : 'ロン君のスケジュール アプリ紹介'
@@ -2750,9 +2909,11 @@ function App() {
         .slide.cover { background: linear-gradient(135deg, #dbeafe 0%, #ccfbf1 100%); }
         .brand { color: #0f766e; font-size: 15px; font-weight: 800; letter-spacing: 2px; }
         .illustration { position: absolute; top: 42mm; right: 25mm; font-size: 58px; letter-spacing: 10px; white-space: nowrap; }
-        .slide h1 { position: relative; z-index: 1; max-width: 185mm; margin: 38mm 0 10mm; color: #0f172a; font-size: 39px; line-height: 1.2; }
-        .slide p { position: relative; z-index: 1; max-width: 145mm; color: #475569; font-size: 19px; line-height: 1.8; }
-        .ron { position: absolute; right: 30mm; bottom: 22mm; width: 54mm; max-height: 72mm; object-fit: contain; }
+        .slide h1 { position: relative; z-index: 1; max-width: 82mm; margin: 38mm 0 10mm; color: #0f172a; font-size: 39px; line-height: 1.2; }
+        .slide p { position: relative; z-index: 1; max-width: 82mm; color: #475569; font-size: 19px; line-height: 1.65; }
+        .appeal-points { position: relative; z-index: 1; max-width: 82mm; margin: 8mm 0 0; padding-left: 7mm; color: #0f766e; font-size: 15px; line-height: 1.7; font-weight: 700; }
+        .screen-shot { position: absolute; z-index: 1; right: 80mm; bottom: 28mm; width: 100mm; height: 66mm; object-fit: contain; object-position: center; background: rgba(255,255,255,.72); border: 2px solid rgba(255,255,255,.9); border-radius: 10px; box-shadow: 0 12px 28px rgba(15,23,42,.18); }
+        .ron { position: absolute; z-index: 2; right: 25mm; bottom: 20mm; width: 32mm; max-height: 46mm; object-fit: contain; background: transparent; }
         .slide-number { position: absolute; right: 28mm; bottom: 14mm; color: #64748b; font-size: 12px; }
         .cover h1 { font-size: 50px; margin-top: 52mm; } .cover p { font-size: 21px; }
         .actions { position: fixed; z-index: 10; top: 12px; right: 12px; display: flex; gap: 8px; }
