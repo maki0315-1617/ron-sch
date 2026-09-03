@@ -334,6 +334,7 @@ function App() {
   const mainRef = useRef(null)
   const scheduleSectionRef = useRef(null)
   const selectedKey = formatDateKey(selectedDate)
+  const sleepOnlyMode = isSleepShortcutLaunch()
 
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -2864,7 +2865,7 @@ function App() {
           </div>
         </div>
       ) : (
-        <div style={styles.appShell} className="app-shell">
+        <div style={styles.appShell} className={`app-shell${sleepOnlyMode ? ' sleep-only-mode' : ''}`}>
           {loading && (
             <div style={styles.progressBarTrack}>
               <div style={styles.progressBarFill} />
@@ -3154,7 +3155,7 @@ function App() {
           </header>
 
           {view === 'home' && (
-          <main ref={mainRef} style={{ ...styles.main, ...(weekCalendarEnabled && weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
+          <main ref={mainRef} className={sleepOnlyMode ? 'sleep-only-main' : undefined} style={{ ...styles.main, ...(weekCalendarEnabled && weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
             {monthCalendarEnabled && (
               <section className="month-calendar-section" style={styles.monthCalendarSection} aria-label="月カレンダー">
                 <div className="month-calendar-header" style={styles.monthCalendarHeader}>
@@ -3501,6 +3502,7 @@ function App() {
                   </button>
                   <span style={styles.sleepRecordStatus}>{sleepRecord?.exists ? '保存済み' : '未記録'}</span>
                 </div>
+                  {sleepOnlyMode && <div style={styles.sleepOnlyDate}>{formatWeekTitle(selectedDate)}</div>}
                 {!sleepRecordCollapsed && <>
                 <div style={styles.sleepRecordFields}>
                   <label style={styles.sleepRecordField}>
@@ -5166,6 +5168,12 @@ const styles = {
     background: 'transparent',
     color: '#334155',
     cursor: 'pointer',
+  },
+  sleepOnlyDate: {
+    marginBottom: '10px',
+    color: '#0f172a',
+    fontSize: '18px',
+    fontWeight: 700,
   },
   sleepRecordTitle: {
     color: '#334155',

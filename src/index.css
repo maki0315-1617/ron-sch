@@ -145,6 +145,57 @@ img {
   transform: translateY(0);
 }
 
+.sleep-only-mode .app-header,
+.sleep-only-mode .month-calendar-section,
+.sleep-only-mode .schedule-search-section,
+.sleep-only-mode .week-section,
+.sleep-only-mode .selected-header,
+.sleep-only-mode .double-tap-hint-banner,
+.sleep-only-mode .schedule-list,
+.sleep-only-mode .emptyState,
+.sleep-only-mode > footer,
+.sleep-only-mode .scroll-to-top-button {
+  display: none !important;
+}
+
+.sleep-only-mode .sleep-only-main {
+  min-height: 100vh !important;
+  padding: 12px 0 !important;
+}
+
+.sleep-only-mode .schedule-section {
+  min-height: auto !important;
+  overflow: visible !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.sleep-only-mode .schedule-section > :not(.sleep-record-panel) {
+  display: none !important;
+}
+
+.sleep-only-mode .sleep-record-panel {
+  grid-template-columns: 1fr !important;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.sleep-only-mode .sleep-summary {
+  grid-column: 1 !important;
+  grid-row: auto !important;
+}
+
+.sleep-only-mode .sleep-record-fields {
+  grid-template-columns: 1fr !important;
+}
+
 @media (max-width: 600px) {
   .app-shell {
     padding: 10px 8px 24px !important;
