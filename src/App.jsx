@@ -37,6 +37,7 @@ const helpContent = {
     note: 'なお、誹謗中傷のメールはご遠慮願います。',
     close: '閉じる',
     guideButton: '利用ガイドPDFを開く',
+    prButton: 'アプリ紹介・PRスライドPDFをダウンロード',
     shortcutButton: 'iPhone用「睡眠記録」ショートカットを取得',
     about: '『ロン君のスケジュール』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。',
     summary: '予定の登録から通知、進捗確認まで、日々の生活に沿った使い方をサポートします。',
@@ -50,6 +51,7 @@ const helpContent = {
     note: 'Please avoid sending abusive or defamatory emails.',
     close: 'Close',
     guideButton: 'Open User Guide (PDF)',
+    prButton: 'Download App Introduction / PR Slides',
     shortcutButton: 'Get the “Sleep Records” Shortcut for iPhone',
     about: 'Ron’s Schedule is a simple planning app designed to make daily scheduling easier and help you stay consistent over time.',
     summary: 'From adding tasks to checking progress and managing reminders, it supports a smoother daily routine.',
@@ -2703,6 +2705,63 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
+  const openProductPrPdf = (lang = 'ja') => {
+    const reportWindow = window.open('', '_blank', 'width=1100,height=800')
+    if (!reportWindow) {
+      alert(lang === 'en' ? 'The PR slides could not be opened. Please allow pop-ups.' : 'PRスライドを開けませんでした。ポップアップを許可してください。')
+      return
+    }
+
+    const isEnglish = lang === 'en'
+    const slides = isEnglish ? [
+      { tag: 'RON’S SCHEDULE', title: 'Plan your day.\nMake progress visible.', body: 'A friendly daily schedule app that turns intentions into small, achievable actions.', art: '📅  ✨  🐈‍⬛' },
+      { tag: 'ONE PLACE FOR YOUR DAY', title: 'See what matters\nat a glance.', body: 'Schedules, priorities, completion, search, calendar views, and reminders work together in one calm workspace.', art: '🗓️  ✅  🔔' },
+      { tag: 'SLEEP RECORDS', title: 'Start the morning\nwith a simple tap.', body: 'Save wake-up time and bedtime manually or use Current Time. Review the previous bedtime and your recent average.', art: '🌙  🛏️  ☀️' },
+      { tag: 'RON-KUN’S SUPPORT', title: 'A little advice\nfor today.', body: 'Recent sleep averages are translated into four friendly levels, emojis, and rotating advice from black cat Ron-kun.', art: '🐈‍⬛  💬  😊' },
+      { tag: 'KEEP GOING', title: 'Small checks create\na better rhythm.', body: 'Streaks, progress reports, PDFs, and notifications help you notice what you have done and choose the next step.', art: '🔥  📈  🚶' },
+      { tag: 'READY WHEN YOU ARE', title: 'Make today\neasier to begin.', body: 'Use the web app or the iPhone Sleep Records Shortcut for quick access to the moments that matter.', art: '📱  🚀  🐈‍⬛' },
+    ] : [
+      { tag: 'ロン君のスケジュール', title: '今日を整え、\n前進を見える化。', body: 'やりたいことを小さな行動に変えて、毎日の達成感を支えるスケジュールアプリです。', art: '📅  ✨  🐈‍⬛' },
+      { tag: '一日の予定をひとまとめ', title: '大切なことが\nひと目でわかる。', body: '予定、重要度、完了、検索、カレンダー、通知をひとつの落ち着いた画面で管理できます。', art: '🗓️  ✅  🔔' },
+      { tag: '睡眠記録', title: '朝の記録を\nワンタッチで。', body: '起床と就寝を手動または現在時刻で保存。前日の就寝と最近の平均睡眠時間も確認できます。', art: '🌙  🛏️  ☀️' },
+      { tag: 'ロン君のサポート', title: '今日のあなたに\nひとこと。', body: '最近の睡眠平均を4段階で判定し、黒猫ロン君の絵文字と日替わりアドバイスで寄り添います。', art: '🐈‍⬛  💬  😊' },
+      { tag: '続ける仕組み', title: '小さな確認が\nよいリズムをつくる。', body: '連続達成、進捗レポート、PDF、通知で、できたことに気づき次の一歩を選べます。', art: '🔥  📈  🚶' },
+      { tag: 'いつでも、あなたのペースで', title: '今日を始める\nきっかけに。', body: 'Webアプリでも、iPhoneの睡眠記録ショートカットでも、必要な瞬間にすぐ使えます。', art: '📱  🚀  🐈‍⬛' },
+    ]
+
+    const slideHtml = slides.map((slide, index) => `
+      <section class="slide ${index === 0 ? 'cover' : ''}">
+        <div class="brand">${escapeHtml(slide.tag)}</div>
+        <div class="illustration">${slide.art}</div>
+        <div class="slide-number">${String(index + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}</div>
+        <h1>${escapeHtml(slide.title).replaceAll('\n', '<br>')}</h1>
+        <p>${escapeHtml(slide.body)}</p>
+        <img class="ron" src="/ron.png" alt="黒猫ロン君" />
+      </section>`).join('')
+
+    const title = isEnglish ? 'Ron’s Schedule App Introduction' : 'ロン君のスケジュール アプリ紹介'
+    const html = `<!doctype html><html lang="${isEnglish ? 'en' : 'ja'}"><head><meta charset="UTF-8" /><title>${title}</title>
+      <style>
+        @page { size: A4 landscape; margin: 0; } * { box-sizing: border-box; }
+        body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; background: #dfe8f2; }
+        .slide { position: relative; width: 297mm; height: 210mm; page-break-after: always; overflow: hidden; padding: 24mm 28mm; background: linear-gradient(135deg, #f8fbff 0%, #e7f4f2 100%); }
+        .slide.cover { background: linear-gradient(135deg, #dbeafe 0%, #ccfbf1 100%); }
+        .brand { color: #0f766e; font-size: 15px; font-weight: 800; letter-spacing: 2px; }
+        .illustration { position: absolute; top: 42mm; right: 25mm; font-size: 58px; letter-spacing: 10px; white-space: nowrap; }
+        .slide h1 { position: relative; z-index: 1; max-width: 185mm; margin: 38mm 0 10mm; color: #0f172a; font-size: 39px; line-height: 1.2; }
+        .slide p { position: relative; z-index: 1; max-width: 145mm; color: #475569; font-size: 19px; line-height: 1.8; }
+        .ron { position: absolute; right: 30mm; bottom: 22mm; width: 54mm; max-height: 72mm; object-fit: contain; }
+        .slide-number { position: absolute; right: 28mm; bottom: 14mm; color: #64748b; font-size: 12px; }
+        .cover h1 { font-size: 50px; margin-top: 52mm; } .cover p { font-size: 21px; }
+        .actions { position: fixed; z-index: 10; top: 12px; right: 12px; display: flex; gap: 8px; }
+        button { border: 0; border-radius: 8px; padding: 10px 16px; background: #0f766e; color: white; font-weight: 700; cursor: pointer; } .close { background: #64748b; }
+        @media print { body { background: white; } .actions { display: none; } }
+      </style></head><body><div class="actions"><button onclick="window.print()">${isEnglish ? 'Save / Print as PDF' : 'PDFとして保存 / 印刷'}</button><button class="close" onclick="window.close()">${isEnglish ? 'Close' : '閉じる'}</button></div>${slideHtml}</body></html>`
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+    setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
   const openProgressReport = async () => {
     if (!session) return
 
@@ -4120,6 +4179,13 @@ function App() {
                     onClick={() => openUserGuidePdf(helpLang)}
                   >
                     {helpContent[helpLang].guideButton}
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...styles.primaryButton, width: '100%', background: 'linear-gradient(135deg, #0f766e 0%, #0e7490 100%)' }}
+                    onClick={() => openProductPrPdf(helpLang)}
+                  >
+                    {helpContent[helpLang].prButton}
                   </button>
                   <a
                     href={SLEEP_SHORTCUT_URL}
