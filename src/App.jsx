@@ -2266,8 +2266,8 @@ function App() {
         ${bars}
         <line x1="${plotLeft}" y1="${targetY}" x2="${plotRight}" y2="${targetY}" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 5" />
         <text x="${plotRight}" y="${targetY - 6}" text-anchor="end" font-size="11" fill="#b91c1c">推奨 8時間</text>
-        ${sleepPoints.length ? `<polyline points="${polyline}" fill="none" stroke="#0f766e" stroke-width="3" />${sleepPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0f766e" /><text x="${point.x}" y="${point.y - 8}" text-anchor="middle" font-size="10" fill="#115e59">${formatDuration(point.minutes)}</text>`).join('')}` : ''}
-        ${chartPoints.map((point) => `<text x="${point.x}" y="238" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
+        ${sleepPoints.length ? `<polyline points="${polyline}" fill="none" stroke="#0f766e" stroke-width="3" />${sleepPoints.map((point, index) => { const labelY = index % 2 === 0 ? point.y - 8 : point.y + 16; return `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0f766e" /><text x="${point.x}" y="${labelY}" text-anchor="middle" font-size="8" fill="#115e59">${formatDuration(point.minutes)}</text>` }).join('')}` : ''}
+        ${chartPoints.map((point) => `<text x="${point.x}" y="252" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
         <text x="${plotLeft}" y="260" font-size="11" fill="#0f766e">● 睡眠時間</text><text x="${plotLeft + 110}" y="260" font-size="11" fill="#d97706">■ 完了計画数</text>
       </svg>`
 
