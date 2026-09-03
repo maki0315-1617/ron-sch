@@ -83,9 +83,9 @@ const formatCurrentTime = () => {
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 }
 
-const getSleepDurationMinutes = (record) => {
-  if (!record?.bedtime || !record?.wakeTime) return null
-  let minutes = parseTimeValue(record.wakeTime) - parseTimeValue(record.bedtime)
+const getSleepDurationMinutes = (record, previousRecord) => {
+  if (!record?.wakeTime || !previousRecord?.bedtime) return null
+  let minutes = parseTimeValue(record.wakeTime) - parseTimeValue(previousRecord.bedtime)
   if (minutes <= 0) minutes += 24 * 60
   return minutes
 }
@@ -940,10 +940,10 @@ function App() {
 
   const recentSleepSummary = useMemo(() => {
     const records = Array.from({ length: 3 }, (_, index) => {
-      const dateKey = formatDateKey(addDays(selectedDate, -index))
-      return sleepRecordMap[dateKey]
+      const dateKey = formatDateKey(addDays(selectedDate, -(index + 1)))
+      const previousDateKey = formatDateKey(addDays(selectedDate, -(index + 2)))
+      return getSleepDurationMinutes(sleepRecordMap[dateKey], sleepRecordMap[previousDateKey])
     })
-      .map((record) => getSleepDurationMinutes(record))
       .filter((minutes) => minutes !== null)
     if (records.length === 0) return { averageMinutes: null, recordedDays: 0, level: null }
     const averageMinutes = Math.round(records.reduce((sum, minutes) => sum + minutes, 0) / records.length)
