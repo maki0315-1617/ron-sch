@@ -58,6 +58,12 @@ const WEEK_CALENDAR_FIXED_KEY = 'ron-sch-week-calendar-fixed'
 const WEEK_START_DAY_KEY = 'ron-sch-week-start-day'
 const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
+const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
+
+const isSleepShortcutLaunch = () => {
+  if (typeof window === 'undefined') return false
+  return new URLSearchParams(window.location.search).get('sleep') === '1'
+}
 
 const formatDateKey = (date) => {
   const d = new Date(date)
@@ -70,6 +76,40 @@ const formatDateKey = (date) => {
 const formatCurrentTime = () => {
   const now = new Date()
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+}
+
+const getSleepDurationMinutes = (record) => {
+  if (!record?.bedtime || !record?.wakeTime) return null
+  let minutes = parseTimeValue(record.wakeTime) - parseTimeValue(record.bedtime)
+  if (minutes <= 0) minutes += 24 * 60
+  return minutes
+}
+
+const sleepAdviceByLevel = {
+  short: {
+    emoji: '😴',
+    messages: ['ロン君からのお知らせです。今日は無理をせず、予定の合間にひと休みしてくださいね。', 'ロン君です。集中する時間を短く区切って、ゆっくり進めましょう。', 'ロン君も心配しています。水分をとって、できる範囲で始めましょう。', '今日は頑張りすぎない日です。ロン君と一緒に、予定を少なめにして過ごしましょう。', '眠気が強いときは安全を優先してくださいね。ロン君との約束です。', 'ロン君から提案です。今夜はいつもより早めにお布団へ向かいましょう。'],
+  },
+  moderate: {
+    emoji: '🌤️',
+    messages: ['ロン君です。少し短めなので、今夜はいつもより早めに休みましょう。', '昼間に軽く体を動かすとよさそうです。ロン君も応援しています。', '午後の予定は詰め込みすぎず、余白を残していきましょう。', 'ロン君からひとこと。眠る前は画面を少し早めにお休みさせましょう。', '今日は大事な予定から少しずつ。ロン君と無理のないペースで進めましょう。', '明日の元気は今夜からです。ロン君と一緒に休む準備を始めましょう。'],
+  },
+  good: {
+    emoji: '😊',
+    messages: ['ロン君も安心しています。ちょうどよい睡眠なので、今日も無理なくいきましょう。', 'しっかり休めています。ロン君と一緒に大切な予定から取り組みましょう。', 'よい調子です。朝の光を浴びて、ロン君と一日を始めましょう。', 'ロン君から合格サインです。休憩も忘れず、気持ちよく過ごしましょう。', 'よく眠れましたね。ロン君も嬉しいです。今日のペースを大切にしましょう。', '睡眠のリズムが整っています。ロン君と今日の予定を一つずつ進めましょう。'],
+  },
+  long: {
+    emoji: '🛌',
+    messages: ['ロン君です。長めに休めています。体調を確認しながら過ごしましょう。', 'よく眠れていますね。ロン君と一緒に生活リズムも意識してみましょう。', '十分な休息です。ロン君も安心しています。気持ちよく始めましょう。', 'ロン君から元気をお届けします。今日は朝の光を浴びて活動しましょう。', 'しっかり休めています。ロン君と、昼寝は短めにして夜へつなげましょう。', 'たくさん眠れましたね。ロン君と体調を確認しながら、ゆったり過ごしましょう。'],
+  },
+}
+
+const getSleepAdviceLevel = (averageMinutes) => {
+  if (averageMinutes === null) return null
+  if (averageMinutes <= 5 * 60) return 'short'
+  if (averageMinutes <= 7 * 60) return 'moderate'
+  if (averageMinutes <= 8 * 60) return 'good'
+  return 'long'
 }
 
 const parseTimeValue = (time = '09:00') => {
@@ -221,6 +261,10 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [scheduleMap, setScheduleMap] = useState({})
+  const [sleepRecord, setSleepRecord] = useState(null)
+  const [previousSleepRecord, setPreviousSleepRecord] = useState(null)
+  const [sleepRecordMap, setSleepRecordMap] = useState({})
+  const [sleepSaving, setSleepSaving] = useState(false)
   const [loading, setLoading] = useState(false)
   const [schedulePreview, setSchedulePreview] = useState(null)
   const [detailDraft, setDetailDraft] = useState(null)
@@ -264,6 +308,10 @@ function App() {
     return typeof window === 'undefined' || window.localStorage.getItem(WEEK_CALENDAR_ENABLED_KEY) !== 'false'
   })
   const [monthCalendarCollapsed, setMonthCalendarCollapsed] = useState(false)
+  const [sleepRecordEnabled, setSleepRecordEnabled] = useState(() => {
+    return isSleepShortcutLaunch() || typeof window === 'undefined' || window.localStorage.getItem(SLEEP_RECORD_ENABLED_KEY) !== 'false'
+  })
+  const [sleepRecordCollapsed, setSleepRecordCollapsed] = useState(false)
   const [view, setView] = useState('home')
   const [incompleteItems, setIncompleteItems] = useState([])
   const [incompleteLoading, setIncompleteLoading] = useState(false)
@@ -285,6 +333,7 @@ function App() {
   const loadedWeeksRef = useRef(new Set())
   const mainRef = useRef(null)
   const scheduleSectionRef = useRef(null)
+  const selectedKey = formatDateKey(selectedDate)
 
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -346,7 +395,70 @@ function App() {
     // アカウント切り替え時は週キャッシュを破棄して再取得させる
     loadedWeeksRef.current = new Set()
     setScheduleMap({})
+    setSleepRecord(null)
+    setPreviousSleepRecord(null)
+    setSleepRecordMap({})
   }, [session?.uid])
+
+  useEffect(() => {
+    if (!session) return
+
+    let cancelled = false
+    const loadSleepRecords = async () => {
+      try {
+        const snapshot = await getDocs(query(collection(db, 'sleep_records'), where('user_id', '==', session.uid)))
+        if (cancelled) return
+        const nextMap = {}
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data()
+          if (data.date) nextMap[data.date] = data
+        })
+        setSleepRecordMap(nextMap)
+      } catch (error) {
+        console.error('睡眠記録一覧取得エラー:', error)
+      }
+    }
+
+    loadSleepRecords()
+    return () => {
+      cancelled = true
+    }
+  }, [session?.uid])
+
+  useEffect(() => {
+    if (!session) return
+
+    let cancelled = false
+    const loadSleepRecord = async () => {
+      try {
+        const previousKey = formatDateKey(addDays(selectedDate, -1))
+        const [snapshot, previousSnapshot] = await Promise.all([
+          getDoc(doc(db, 'sleep_records', `${session.uid}_${selectedKey}`)),
+          getDoc(doc(db, 'sleep_records', `${session.uid}_${previousKey}`)),
+        ])
+        if (cancelled) return
+        const data = snapshot.exists() ? snapshot.data() : {}
+        const previousData = previousSnapshot.exists() ? previousSnapshot.data() : null
+        setSleepRecord({
+          bedtime: data.bedtime || formatCurrentTime(),
+          wakeTime: data.wakeTime || formatCurrentTime(),
+          exists: snapshot.exists(),
+        })
+        setPreviousSleepRecord(previousData)
+      } catch (error) {
+        console.error('睡眠記録取得エラー:', error)
+        if (!cancelled) {
+          setSleepRecord(null)
+          setPreviousSleepRecord(null)
+        }
+      }
+    }
+
+    loadSleepRecord()
+    return () => {
+      cancelled = true
+    }
+  }, [session?.uid, selectedKey])
 
   useEffect(() => {
     if (!session) {
@@ -410,6 +522,11 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(WEEK_CALENDAR_ENABLED_KEY, String(weekCalendarEnabled))
   }, [weekCalendarEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(SLEEP_RECORD_ENABLED_KEY, String(sleepRecordEnabled))
+  }, [sleepRecordEnabled])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -810,12 +927,65 @@ function App() {
   const changeMonthView = (offset) => changeSelectedMonth(offset)
   const sessionUserId = session?.uid
 
-  const selectedKey = formatDateKey(selectedDate)
-
   const selectedItems = useMemo(() => {
     const items = scheduleMap[selectedKey] || []
     return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
   }, [scheduleMap, selectedKey])
+
+  const recentSleepSummary = useMemo(() => {
+    const records = Array.from({ length: 3 }, (_, index) => {
+      const dateKey = formatDateKey(addDays(selectedDate, -index))
+      return sleepRecordMap[dateKey]
+    })
+      .map((record) => getSleepDurationMinutes(record))
+      .filter((minutes) => minutes !== null)
+    if (records.length === 0) return { averageMinutes: null, recordedDays: 0, level: null }
+    const averageMinutes = Math.round(records.reduce((sum, minutes) => sum + minutes, 0) / records.length)
+    return {
+      averageMinutes,
+      recordedDays: records.length,
+      level: getSleepAdviceLevel(averageMinutes),
+    }
+  }, [selectedDate, sleepRecordMap])
+
+  const sleepAdvice = useMemo(() => {
+    if (!recentSleepSummary.level) return null
+    const advice = sleepAdviceByLevel[recentSleepSummary.level]
+    return {
+      emoji: advice.emoji,
+      message: advice.messages[Math.floor(Math.random() * advice.messages.length)],
+    }
+  }, [recentSleepSummary.level])
+
+  const formatSleepDuration = (minutes) => {
+    if (minutes === null) return '記録なし'
+    return `${Math.floor(minutes / 60)}時間${minutes % 60}分`
+  }
+
+  const saveSleepTime = async (field, value = formatCurrentTime()) => {
+    if (!session || sleepSaving) return
+
+    const time = value || formatCurrentTime()
+    const nextRecord = {
+      bedtime: sleepRecord?.bedtime || time,
+      wakeTime: sleepRecord?.wakeTime || time,
+      [field]: time,
+      user_id: session.uid,
+      date: selectedKey,
+    }
+
+    setSleepSaving(true)
+    try {
+      await setDoc(doc(db, 'sleep_records', `${session.uid}_${selectedKey}`), nextRecord)
+      setSleepRecord({ ...nextRecord, exists: true })
+      setSleepRecordMap((current) => ({ ...current, [selectedKey]: { ...nextRecord } }))
+    } catch (error) {
+      console.error('睡眠記録保存エラー:', error)
+      alert(`睡眠記録の保存に失敗しました:\n${error.message}`)
+    } finally {
+      setSleepSaving(false)
+    }
+  }
 
   // 0件の日は追加方法のみ、1件以上は編集→追加の順で順次表示する
   const doubleTapHintMessages = useMemo(() => {
@@ -1971,6 +2141,73 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
+  const openSleepReport = () => {
+    if (!session) return
+
+    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
+    if (!reportWindow) {
+      alert('帳票画面を開けませんでした。ポップアップを許可してください。')
+      return
+    }
+
+    const year = selectedDate.getFullYear()
+    const month = selectedDate.getMonth()
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const reportRows = Array.from({ length: daysInMonth }, (_, index) => {
+      const date = new Date(year, month, index + 1)
+      const dateKey = formatDateKey(date)
+      const record = sleepRecordMap[dateKey]
+      const bedtime = record?.bedtime || ''
+      const wakeTime = record?.wakeTime || ''
+      let minutes = null
+      if (bedtime && wakeTime) {
+        minutes = parseTimeValue(wakeTime) - parseTimeValue(bedtime)
+        if (minutes <= 0) minutes += 24 * 60
+      }
+      return { dateKey, dayName: dayNames[date.getDay()], bedtime, wakeTime, minutes }
+    })
+    const formatDuration = (minutes) => minutes === null ? '-' : `${Math.floor(minutes / 60)}時間${minutes % 60}分`
+    const rows = reportRows.map((row) => `
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.bedtime || '-'}</td><td>${row.wakeTime || '-'}</td><td>${formatDuration(row.minutes)}</td></tr>`).join('')
+    const chartRows = reportRows.filter((row) => row.minutes !== null)
+    const chartWidth = 760
+    const chartHeight = 260
+    const maxMinutes = Math.max(12 * 60, ...chartRows.map((row) => row.minutes))
+    const chartPoints = chartRows.map((row, index) => {
+      const x = chartRows.length === 1 ? chartWidth / 2 : 48 + (chartWidth - 72) * index / (chartRows.length - 1)
+      const y = 220 - (row.minutes / maxMinutes) * 180
+      return { ...row, x, y }
+    })
+    const polyline = chartPoints.map((point) => `${point.x},${point.y}`).join(' ')
+    const chart = chartPoints.length
+      ? `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="日別睡眠時間グラフ">
+          <line x1="48" y1="220" x2="${chartWidth - 24}" y2="220" stroke="#cbd5e1" />
+          <line x1="48" y1="40" x2="48" y2="220" stroke="#cbd5e1" />
+          <polyline points="${polyline}" fill="none" stroke="#0f766e" stroke-width="3" />
+          ${chartPoints.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0f766e" /><text x="${point.x}" y="${point.y - 8}" text-anchor="middle" font-size="10" fill="#115e59">${formatDuration(point.minutes)}</text><text x="${point.x}" y="238" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
+        </svg>`
+      : '<p class="empty">睡眠記録がありません</p>'
+
+    const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>睡眠記録</title>
+      <style>
+        @page { size: A4 portrait; margin: 12mm; } * { box-sizing: border-box; }
+        body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
+        h1 { margin: 0 0 5px; font-size: 24px; } h2 { margin: 22px 0 10px; font-size: 17px; color: #115e59; }
+        .period, .output-date { color: #64748b; font-size: 13px; } .output-date { margin: 4px 0 18px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; } th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+        th { background: #ccfbf1; color: #115e59; } .chart-box { border: 1px solid #e2e8f0; padding: 10px; } svg { width: 100%; height: auto; }
+        .empty { color: #64748b; text-align: center; padding: 30px; } .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+        button { border: 0; border-radius: 8px; background: #0f766e; color: white; padding: 10px 18px; font-weight: 700; cursor: pointer; } .close-button { background: #64748b; }
+        @media print { .actions { display: none; } }
+      </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
+      <h1>睡眠記録</h1><div class="period">対象期間: ${year}年${month + 1}月</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
+      <table><thead><tr><th>日付</th><th>就寝</th><th>起床</th><th>睡眠時間</th></tr></thead><tbody>${rows}</tbody></table>
+      <h2>日別睡眠時間</h2><div class="chart-box">${chart}</div></body></html>`
+    const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+    setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
   const openWeeklyReport = async (reportType) => {
     if (!session) return
 
@@ -2127,7 +2364,18 @@ function App() {
             ],
           },
           {
-            heading: '5. 通知を使う',
+            heading: '5. 睡眠記録を便利に使う',
+            body: '睡眠記録では、選択日の起床時刻と当日の就寝時刻を保存できます。「現在時刻」を押すと、その時点の時刻をワンタッチで保存できます。前日の就寝時刻は自動的に参照表示されます。',
+            points: [
+              '時刻を手動で変更した場合は「保存」を押して記録します。',
+              '睡眠記録の見出しを押すと、入力欄と詳細を折りたためます。初期状態は開いた状態です。',
+              '設定メニューの「睡眠記録表示」で、睡眠記録欄の表示・非表示を切り替えられます。非表示にしても保存済みデータは削除されません。',
+              '直近3日間の平均睡眠時間と、睡眠時間に応じたロン君の絵文字・アドバイスを確認できます。',
+              'メニューの「睡眠記録PDF」から、選択中の月の一覧表と日別グラフを出力できます。',
+            ],
+          },
+          {
+            heading: '6. 通知を使う',
             body: '右上の通知ボタンから、予定の開始時刻を通知で受け取れます。ブラウザの通知許可が必要です。',
             points: [
               '通知がオンの場合、予定開始時刻に音や表示で知らせます。',
@@ -2145,7 +2393,7 @@ function App() {
             ],
           },
           {
-            heading: '7. スケジュールを集計する',
+            heading: '8. スケジュールを集計する',
             body: 'メニューの「スケジュール集計」から、期間と「全て / 完了のみ」を指定して、予定名ごとの件数と合計時間(分)を集計できます。集計結果はPDFまたはCSVで保存できます。',
             points: [
               '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
@@ -2204,7 +2452,18 @@ function App() {
             ],
           },
           {
-            heading: '5. Use notifications',
+            heading: '5. Make good use of sleep records',
+            body: 'Sleep Records lets you save the selected day’s wake-up time and bedtime. Tap “Current time” to save the time instantly with one tap. The previous day’s bedtime is shown automatically for reference.',
+            points: [
+              'After changing a time manually, tap “Save” to store the edited value.',
+              'Tap the Sleep Records heading to collapse or expand the input and details. It is expanded by default.',
+              'Use “Show Sleep Records” in Settings to show or hide the sleep record panel. Hiding it does not delete saved data.',
+              'Review the average sleep time for the most recent three days, along with a Ron-style emoji and advice based on the sleep duration.',
+              'From the menu, open “Sleep Records PDF” to export a table and a daily sleep-duration chart for the selected month.',
+            ],
+          },
+          {
+            heading: '6. Use notifications',
             body: 'Tap the notification button in the upper-right corner to receive reminders when a scheduled task is about to start. Browser notification permission is required.',
             points: [
               'When notifications are enabled, you will receive a reminder at the scheduled time.',
@@ -2213,7 +2472,7 @@ function App() {
             ],
           },
           {
-            heading: '6. Track your progress',
+            heading: '7. Track your progress',
             body: 'The footer shows your streak and weekly progress so it is easy to stay aware of your momentum and keep moving forward.',
             points: [
               'Progress trends can be saved as a PDF report.',
@@ -2222,7 +2481,7 @@ function App() {
             ],
           },
           {
-            heading: '7. Summarize your schedules',
+            heading: '8. Summarize your schedules',
             body: 'From the menu, open "Schedule Summary" to choose a date range and either "All" or "Completed only", then get the count and total minutes for each task name. Results can be saved as PDF or CSV.',
             points: [
               'The date range can be up to 31 days; a message appears if it is exceeded.',
@@ -2674,7 +2933,7 @@ function App() {
                       <Settings size={18} /> 設定
                     </button>
                     {settingsMenuOpen && (
-                      <div style={styles.settingsSubmenu} role="group" aria-label="カレンダー設定">
+                      <div style={styles.settingsSubmenu} role="group" aria-label="カレンダーと睡眠記録の設定">
                         <button
                           type="button"
                           role="menuitem"
@@ -2703,6 +2962,15 @@ function App() {
                         >
                           <Check size={18} color={weekCalendarEnabled ? '#2563eb' : 'transparent'} />
                           週カレンダー表示
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
+                          onClick={() => setSleepRecordEnabled((current) => !current)}
+                        >
+                          <Check size={18} color={sleepRecordEnabled ? '#2563eb' : 'transparent'} />
+                          睡眠記録表示
                         </button>
                         <label style={styles.settingsSelectLabel}>
                           週の開始を設定
@@ -2751,6 +3019,17 @@ function App() {
                       }}
                     >
                       <TrendingUp size={18} /> 進捗率PDF
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={styles.menuItem}
+                      onClick={() => {
+                        openSleepReport()
+                        setMenuOpen(false)
+                      }}
+                    >
+                      <Clock3 size={18} /> 睡眠記録PDF
                     </button>
                     <button
                       type="button"
@@ -2953,6 +3232,7 @@ function App() {
                             const incompleteCount = items.filter((item) => item.completed !== true).length
                             const isAllCompleted = totalCount > 0 && incompleteCount === 0
                             const isCountAbbreviated = incompleteCount >= 100 || totalCount >= 100
+                            const hasSleepRecord = Boolean(sleepRecordMap[dateKey])
 
                             return (
                               <button
@@ -2981,6 +3261,7 @@ function App() {
                                     )
                                   )}
                                 </span>
+                                {hasSleepRecord && <span style={styles.monthCalendarSleepMark}>睡眠</span>}
                               </button>
                             )
                           })}
@@ -3206,6 +3487,76 @@ function App() {
                   </button>
                 </div>
               </div>
+
+              {sleepRecordEnabled && <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
+                <div style={styles.sleepRecordTitleRow}>
+                  <button
+                    type="button"
+                    style={styles.sleepRecordCollapseButton}
+                    onClick={() => setSleepRecordCollapsed((current) => !current)}
+                    aria-expanded={!sleepRecordCollapsed}
+                  >
+                    {sleepRecordCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                    <strong style={styles.sleepRecordTitle}>睡眠記録</strong>
+                  </button>
+                  <span style={styles.sleepRecordStatus}>{sleepRecord?.exists ? '保存済み' : '未記録'}</span>
+                </div>
+                {!sleepRecordCollapsed && <>
+                <div style={styles.sleepRecordFields}>
+                  <label style={styles.sleepRecordField}>
+                    <span>起床</span>
+                    <input
+                      type="time"
+                      value={sleepRecord?.wakeTime || formatCurrentTime()}
+                      onChange={(event) => setSleepRecord((current) => ({ ...(current || {}), wakeTime: event.target.value }))}
+                      style={styles.sleepRecordInput}
+                    />
+                    <span style={styles.sleepRecordActions}>
+                      <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('wakeTime', sleepRecord?.wakeTime)} disabled={sleepSaving}>
+                        保存
+                      </button>
+                      <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('wakeTime')} disabled={sleepSaving}>
+                        現在時刻
+                      </button>
+                    </span>
+                  </label>
+                  <label style={styles.sleepRecordField}>
+                    <span>就寝</span>
+                    <input
+                      type="time"
+                      value={sleepRecord?.bedtime || formatCurrentTime()}
+                      onChange={(event) => setSleepRecord((current) => ({ ...(current || {}), bedtime: event.target.value }))}
+                      style={styles.sleepRecordInput}
+                    />
+                    <span style={styles.sleepRecordActions}>
+                      <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('bedtime', sleepRecord?.bedtime)} disabled={sleepSaving}>
+                        保存
+                      </button>
+                      <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('bedtime')} disabled={sleepSaving}>
+                        現在時刻
+                      </button>
+                    </span>
+                  </label>
+                </div>
+                <div style={styles.previousSleepRecord}>
+                  <span>前日の就寝</span>
+                  <strong>{previousSleepRecord?.bedtime || '未記録'}</strong>
+                  <span style={styles.previousSleepRecordNote}>前日の記録を表示</span>
+                </div>
+                <aside className="sleep-summary" style={styles.sleepSummary} aria-label="最近3日間の平均睡眠時間">
+                  <div style={styles.sleepSummaryHeading}>最近3日間の平均</div>
+                  {sleepAdvice ? (
+                    <>
+                      <div style={styles.sleepSummaryValue}>{formatSleepDuration(recentSleepSummary.averageMinutes)} <span style={styles.sleepSummaryEmoji}>{sleepAdvice.emoji}</span></div>
+                      <div style={styles.sleepSummaryDays}>{recentSleepSummary.recordedDays}/3日を集計</div>
+                      <p style={styles.sleepSummaryMessage}>{sleepAdvice.message}</p>
+                    </>
+                  ) : (
+                    <div style={styles.sleepSummaryEmpty}>睡眠時間を保存すると表示します</div>
+                  )}
+                </aside>
+                </>}
+              </div>}
 
               {showDoubleTapHint && doubleTapHintMessages[Math.min(hintMessageIndex, doubleTapHintMessages.length - 1)] && (
                 <div
@@ -4624,6 +4975,12 @@ const styles = {
     minHeight: '13px',
     whiteSpace: 'nowrap',
   },
+  monthCalendarSleepMark: {
+    color: '#0f766e',
+    fontSize: '10px',
+    lineHeight: 1.2,
+    fontWeight: 700,
+  },
   monthCalendarIncompleteCount: {
     color: '#dc2626',
   },
@@ -4782,6 +5139,135 @@ const styles = {
     margin: 0,
     fontSize: '26px',
     color: '#0f172a',
+  },
+  sleepRecordPanel: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(220px, 280px)',
+    columnGap: '16px',
+    alignItems: 'start',
+    borderTop: '1px solid #e8eef7',
+    borderBottom: '1px solid #e8eef7',
+    padding: '10px 0',
+    marginBottom: '10px',
+  },
+  sleepRecordTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  sleepRecordCollapseButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    border: 0,
+    padding: 0,
+    background: 'transparent',
+    color: '#334155',
+    cursor: 'pointer',
+  },
+  sleepRecordTitle: {
+    color: '#334155',
+    fontSize: '14px',
+  },
+  sleepRecordStatus: {
+    color: '#64748b',
+    fontSize: '12px',
+  },
+  sleepRecordFields: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: '10px',
+  },
+  sleepRecordField: {
+    display: 'grid',
+    gridTemplateColumns: '42px minmax(90px, 1fr)',
+    alignItems: 'center',
+    gap: '8px',
+    color: '#475569',
+    fontSize: '13px',
+    fontWeight: 700,
+  },
+  sleepRecordActions: {
+    gridColumn: '2',
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+  },
+  sleepRecordInput: {
+    width: '100%',
+    minWidth: 0,
+    border: '1px solid #d9e2f2',
+    borderRadius: '8px',
+    background: '#f8fbff',
+    padding: '8px',
+    color: '#1f2937',
+  },
+  sleepSummary: {
+    gridColumn: '2',
+    gridRow: '1 / span 3',
+    minWidth: 0,
+    padding: '10px 12px',
+    borderRadius: '10px',
+    background: '#ecfeff',
+    border: '1px solid #a5f3fc',
+  },
+  sleepSummaryHeading: {
+    color: '#0f766e',
+    fontSize: '12px',
+    fontWeight: 700,
+  },
+  sleepSummaryValue: {
+    marginTop: '3px',
+    color: '#134e4a',
+    fontSize: '20px',
+    fontWeight: 800,
+  },
+  sleepSummaryEmoji: {
+    fontSize: '22px',
+    marginLeft: '4px',
+  },
+  sleepSummaryDays: {
+    color: '#64748b',
+    fontSize: '11px',
+  },
+  sleepSummaryMessage: {
+    margin: '6px 0 0',
+    color: '#155e75',
+    fontSize: '12px',
+    lineHeight: 1.5,
+  },
+  sleepSummaryEmpty: {
+    marginTop: '5px',
+    color: '#64748b',
+    fontSize: '11px',
+    lineHeight: 1.4,
+  },
+  previousSleepRecord: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginTop: '10px',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    background: '#f8fafc',
+    color: '#64748b',
+    fontSize: '12px',
+  },
+  previousSleepRecordNote: {
+    color: '#94a3b8',
+    fontSize: '11px',
+  },
+  sleepRecordSaveButton: {
+    border: '1px solid #cbd5e1',
+    borderRadius: '8px',
+    background: '#ffffff',
+    color: '#334155',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 700,
+    padding: '8px 12px',
   },
   todayResetButton: {
     display: 'flex',

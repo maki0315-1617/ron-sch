@@ -376,6 +376,16 @@ img {
     gap: 8px !important;
   }
 
+  .sleep-record-panel {
+    grid-template-columns: 1fr !important;
+    row-gap: 8px;
+  }
+
+  .sleep-record-panel .sleep-summary {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+  }
+
   .selected-caption {
     font-size: 10.5px !important;
     margin-bottom: 0 !important;

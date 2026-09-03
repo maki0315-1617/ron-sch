@@ -15,6 +15,16 @@ service cloud.firestore {
       allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
     }
 
+    match /daily_tasks/{taskId} {
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
+    }
+
+    match /sleep_records/{recordId} {
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
+    }
+
     match /fcm_tokens/{tokenId} {
       allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
       allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
