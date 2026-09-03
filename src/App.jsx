@@ -2163,18 +2163,20 @@ function App() {
       const date = new Date(year, month, index + 1)
       const dateKey = formatDateKey(date)
       const record = sleepRecordMap[dateKey]
-      const bedtime = record?.bedtime || ''
       const wakeTime = record?.wakeTime || ''
+      const currentBedtime = record?.bedtime || ''
+      const previousDateKey = formatDateKey(addDays(date, -1))
+      const previousBedtime = sleepRecordMap[previousDateKey]?.bedtime || ''
       let minutes = null
-      if (bedtime && wakeTime) {
-        minutes = parseTimeValue(wakeTime) - parseTimeValue(bedtime)
+      if (previousBedtime && wakeTime) {
+        minutes = parseTimeValue(wakeTime) - parseTimeValue(previousBedtime)
         if (minutes <= 0) minutes += 24 * 60
       }
-      return { dateKey, dayName: dayNames[date.getDay()], bedtime, wakeTime, minutes }
+      return { dateKey, dayName: dayNames[date.getDay()], currentBedtime, previousBedtime, wakeTime, minutes }
     })
     const formatDuration = (minutes) => minutes === null ? '-' : `${Math.floor(minutes / 60)}時間${minutes % 60}分`
     const rows = reportRows.map((row) => `
-      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.bedtime || '-'}</td><td>${row.wakeTime || '-'}</td><td>${formatDuration(row.minutes)}</td></tr>`).join('')
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td></tr>`).join('')
     const chartRows = reportRows.filter((row) => row.minutes !== null)
     const chartWidth = 760
     const chartHeight = 260
@@ -2207,7 +2209,7 @@ function App() {
         @media print { .actions { display: none; } }
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
       <h1>睡眠記録</h1><div class="period">対象期間: ${year}年${month + 1}月</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
-      <table><thead><tr><th>日付</th><th>就寝</th><th>起床</th><th>睡眠時間</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th></tr></thead><tbody>${rows}</tbody></table>
       <h2>日別睡眠時間</h2><div class="chart-box">${chart}</div></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
