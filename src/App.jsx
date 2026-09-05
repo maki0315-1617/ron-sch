@@ -19,7 +19,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, X } from 'lucide-react'
+import { ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Coffee, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, Moon, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Sunrise, Sunset, Trash2, TrendingUp, Utensils, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -64,6 +64,19 @@ const WEEK_START_DAY_KEY = 'ron-sch-week-start-day'
 const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
+
+const timeGreetingOptions = [
+  { startHour: 5, endHour: 11, Icon: Sunrise, messages: ['おはようございます。今日の予定を確認しましょう。', 'おはようございます。気持ちよく一日を始めましょう。', '朝の光を浴びて、ゆっくりペースを整えましょう。', 'まずは大切な予定を一つ確認して始めましょう。'] },
+  { startHour: 11, endHour: 14, Icon: Utensils, messages: ['ランチの時間です。少し休憩しましょう。', 'お昼です。午後に備えてひと息つきましょう。', '食事と休憩で、午後のための力を蓄えましょう。', '画面から少し離れて、目も休ませましょう。'] },
+  { startHour: 14, endHour: 17, Icon: Coffee, messages: ['一息入れましょう。水分補給も忘れずに。', '午後の休憩時間です。少し気分を切り替えましょう。', '集中が続いたら、短い休憩を予定に入れましょう。', '肩の力を抜いて、次の予定へ進みましょう。'] },
+  { startHour: 17, endHour: 21, Icon: Sunset, messages: ['お疲れさまです。残りの予定を整えましょう。', '夕方です。今日できたことを確認しましょう。', '無理のない範囲で、今日の予定を締めくくりましょう。', '明日に持ち越すことも、立派な予定の整理です。'] },
+  { startHour: 21, endHour: 29, Icon: Moon, messages: ['今日もお疲れさまでした。ゆっくり休みましょう。', '夜の時間です。明日の予定を軽く確認しましょう。', '今夜は早めに休む準備を始めましょう。', '画面を見る時間を少し減らして、心を落ち着けましょう。'] },
+]
+
+const weekendGreetingOption = {
+  Icon: Coffee,
+  messages: ['週末です。予定の合間に、ゆっくり休む時間を取りましょう。', '土日は心と体を整える日です。無理のない予定にしましょう。', '休憩も大切な予定です。好きなことをして過ごしましょう。', '今週もお疲れさまでした。ゆったりした時間を楽しみましょう。'],
+}
 
 const isSleepShortcutLaunch = () => {
   if (typeof window === 'undefined') return false
@@ -303,6 +316,7 @@ function App() {
   const [previousSleepRecord, setPreviousSleepRecord] = useState(null)
   const [sleepRecordMap, setSleepRecordMap] = useState({})
   const [sleepSaving, setSleepSaving] = useState(false)
+  const [sleepSaveMessage, setSleepSaveMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [schedulePreview, setSchedulePreview] = useState(null)
   const [detailDraft, setDetailDraft] = useState(null)
@@ -437,6 +451,7 @@ function App() {
     setSleepRecord(null)
     setPreviousSleepRecord(null)
     setSleepRecordMap({})
+    setSleepSaveMessage('')
   }, [session?.uid])
 
   useEffect(() => {
@@ -468,6 +483,7 @@ function App() {
     if (!session) return
 
     let cancelled = false
+    setSleepSaveMessage('')
     const loadSleepRecord = async () => {
       try {
         const previousKey = formatDateKey(addDays(selectedDate, -1))
@@ -971,6 +987,19 @@ function App() {
     return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
   }, [scheduleMap, selectedKey])
 
+  const currentHour = new Date(nowTick).getHours()
+  const isWeekend = selectedDate.getDay() === 0 || selectedDate.getDay() === 6
+
+  const timeGreeting = useMemo(() => {
+    const adjustedHour = currentHour < 5 ? currentHour + 24 : currentHour
+    const option = isWeekend
+      ? weekendGreetingOption
+      : timeGreetingOptions.find(({ startHour, endHour }) => adjustedHour >= startHour && adjustedHour < endHour)
+    const message = option.messages[Math.floor(Math.random() * option.messages.length)]
+    const scheduleMessage = isWeekend ? '' : selectedItems.length > 0 ? ` 選択日の予定は${selectedItems.length}件です。` : ' 選択日の予定はありません。'
+    return { Icon: option.Icon, message: `${message}${scheduleMessage}` }
+  }, [currentHour, isWeekend, selectedItems.length])
+
   const recentSleepSummary = useMemo(() => {
     const records = Array.from({ length: 3 }, (_, index) => {
       const dateKey = formatDateKey(addDays(selectedDate, -(index + 1)))
@@ -1018,6 +1047,7 @@ function App() {
       await setDoc(doc(db, 'sleep_records', `${session.uid}_${selectedKey}`), nextRecord)
       setSleepRecord({ ...nextRecord, exists: true })
       setSleepRecordMap((current) => ({ ...current, [selectedKey]: { ...nextRecord } }))
+      setSleepSaveMessage('睡眠記録を保存しました。')
     } catch (error) {
       console.error('睡眠記録保存エラー:', error)
       alert(`睡眠記録の保存に失敗しました:\n${error.message}`)
@@ -2237,6 +2267,10 @@ function App() {
       return { dateKey, dayName: dayNames[date.getDay()], currentBedtime, previousBedtime, wakeTime, minutes, completedPlanCount: completedPlanCounts[dateKey] || 0 }
     })
     const formatDuration = (minutes) => minutes === null ? '-' : `${Math.floor(minutes / 60)}時間${minutes % 60}分`
+    const recordedSleepMinutes = reportRows.filter((row) => row.minutes !== null).map((row) => row.minutes)
+    const averageSleepMinutes = recordedSleepMinutes.length
+      ? Math.round(recordedSleepMinutes.reduce((sum, minutes) => sum + minutes, 0) / recordedSleepMinutes.length)
+      : null
     const rows = reportRows.map((row) => `
       <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td></tr>`).join('')
     const chartWidth = 760
@@ -2276,7 +2310,7 @@ function App() {
         @page { size: A4 portrait; margin: 12mm; } * { box-sizing: border-box; }
         body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
         h1 { margin: 0 0 5px; font-size: 24px; } h2 { margin: 22px 0 10px; font-size: 17px; color: #115e59; }
-        .period, .output-date { color: #64748b; font-size: 13px; } .output-date { margin: 4px 0 18px; }
+        .period, .output-date { color: #64748b; font-size: 13px; } .output-date { margin: 4px 0 18px; } .average { margin: 0 0 14px; color: #134e4a; font-size: 15px; } .average span { margin-left: 6px; color: #64748b; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; font-size: 12px; } th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
         th { background: #ccfbf1; color: #115e59; } .chart-box { border: 1px solid #e2e8f0; padding: 10px; } svg { width: 100%; height: auto; }
         .empty { color: #64748b; text-align: center; padding: 30px; } .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
@@ -2284,6 +2318,7 @@ function App() {
         @media print { .actions { display: none; } }
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
       <h1>睡眠記録</h1><div class="period">対象期間: ${year}年${month + 1}月</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
+      <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
       <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th></tr></thead><tbody>${rows}</tbody></table>
       <h2>日別睡眠時間・完了計画数</h2><div class="chart-box">${chart}</div></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
@@ -3736,6 +3771,11 @@ function App() {
                 </div>
               </div>
 
+              <div style={styles.timeGreeting} role="status">
+                <timeGreeting.Icon size={17} aria-hidden="true" />
+                <span>{timeGreeting.message}</span>
+              </div>
+
               {sleepRecordEnabled && <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
                 <div style={styles.sleepRecordTitleRow}>
                   <button
@@ -3757,7 +3797,10 @@ function App() {
                     <input
                       type="time"
                       value={sleepRecord?.wakeTime || formatCurrentTime()}
-                      onChange={(event) => setSleepRecord((current) => ({ ...(current || {}), wakeTime: event.target.value }))}
+                      onChange={(event) => {
+                        setSleepSaveMessage('')
+                        setSleepRecord((current) => ({ ...(current || {}), wakeTime: event.target.value }))
+                      }}
                       style={styles.sleepRecordInput}
                     />
                     <span style={styles.sleepRecordActions}>
@@ -3774,7 +3817,10 @@ function App() {
                     <input
                       type="time"
                       value={sleepRecord?.bedtime || formatCurrentTime()}
-                      onChange={(event) => setSleepRecord((current) => ({ ...(current || {}), bedtime: event.target.value }))}
+                      onChange={(event) => {
+                        setSleepSaveMessage('')
+                        setSleepRecord((current) => ({ ...(current || {}), bedtime: event.target.value }))
+                      }}
                       style={styles.sleepRecordInput}
                     />
                     <span style={styles.sleepRecordActions}>
@@ -3787,6 +3833,7 @@ function App() {
                     </span>
                   </label>
                 </div>
+                {sleepSaveMessage && <div style={styles.sleepSaveMessage} role="status">{sleepSaveMessage}</div>}
                 <div style={styles.previousSleepRecord}>
                   <span>前日の就寝</span>
                   <strong>{previousSleepRecord?.bedtime || '未記録'}</strong>
@@ -5404,6 +5451,18 @@ const styles = {
     fontSize: '26px',
     color: '#0f172a',
   },
+  timeGreeting: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '10px',
+    padding: '8px 10px',
+    borderLeft: '3px solid #14b8a6',
+    background: '#f0fdfa',
+    color: '#115e59',
+    fontSize: '13px',
+    lineHeight: 1.45,
+  },
   sleepRecordPanel: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) minmax(220px, 280px)',
@@ -5444,6 +5503,12 @@ const styles = {
   sleepRecordStatus: {
     color: '#64748b',
     fontSize: '12px',
+  },
+  sleepSaveMessage: {
+    marginTop: '8px',
+    color: '#047857',
+    fontSize: '12px',
+    fontWeight: 700,
   },
   sleepRecordFields: {
     display: 'grid',
