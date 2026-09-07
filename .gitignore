@@ -23,8 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 
+.firebase/
 .vercel
 .env*
+
 
 # Android packages and signing secrets
 *.apk
