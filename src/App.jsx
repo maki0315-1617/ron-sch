@@ -656,7 +656,9 @@ function App() {
 
   const getNotificationRegistration = async () => {
     if (notificationRegistrationRef.current) return notificationRegistrationRef.current
-    const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js')
+    const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+      scope: '/firebase-cloud-messaging-push-scope',
+    })
     notificationRegistrationRef.current = registration
     return registration
   }
@@ -665,7 +667,7 @@ function App() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
     try {
-      const existing = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js')
+      const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
       if (!existing) return
       const registration = await navigator.serviceWorker.ready
       const targetWorker = navigator.serviceWorker.controller || registration.active
@@ -702,7 +704,7 @@ function App() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
     try {
-      const existing = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js')
+      const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
       if (!existing) return
       const registration = await navigator.serviceWorker.ready
       const targetWorker = navigator.serviceWorker.controller || registration.active
@@ -909,7 +911,7 @@ function App() {
     navigator.serviceWorker.addEventListener('message', handleMessage)
 
     const requestBadgeCount = () => {
-      navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js').then((existing) => {
+      navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope').then((existing) => {
         if (!existing) return
         return navigator.serviceWorker.ready.then((registration) => {
           if (registration.active) {

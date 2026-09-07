@@ -25,3 +25,9 @@ dist-ssr
 
 .vercel
 .env*
+
+# Android packages and signing secrets
+*.apk
+*.aab
+*.keystore
+signing-key-info.txt
