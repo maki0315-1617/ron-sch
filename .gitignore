@@ -26,6 +26,17 @@ dist-ssr
 .firebase/
 .vercel
 .env*
+!.env.example
+
+# Local build and deployment metadata
+build.log
+
+# Native signing credentials and provisioning files
+*.jks
+*.p12
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist
 
 
 # Android packages and signing secrets
