@@ -430,6 +430,7 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!auth) return
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setSession(user)
     })
@@ -964,8 +965,6 @@ function App() {
 
   const weekStartKey = useMemo(() => formatDateKey(getWeekStart(selectedDate, weekStartDay)), [selectedDate, weekStartDay])
 
-  const weekEndKey = formatDateKey(weekDates[6])
-
   // 月カレンダー・週カレンダー・スケジュール検索は selectedDate の月を共通の基準として同期する
   const monthViewDate = useMemo(
     () => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1),
@@ -982,7 +981,6 @@ function App() {
   }
 
   const changeMonthView = (offset) => changeSelectedMonth(offset)
-  const sessionUserId = session?.uid
 
   const selectedItems = useMemo(() => {
     const items = scheduleMap[selectedKey] || []

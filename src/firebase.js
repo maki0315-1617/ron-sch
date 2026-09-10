@@ -1,26 +1,35 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
 import { deleteToken, getMessaging, getToken, isSupported, onMessage } from 'firebase/messaging';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyBn0mED4M3cUFV0a75ZnKU0aS0FVwGBsL0',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'makino-ron.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'makino-ron',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'makino-ron.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '993887680290',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:993887680290:web:26bcfcfc900e7cf445177b'
 };
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager()
-  })
-});
 
-const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+let db;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  });
+} catch (error) {
+  console.warn('Firestoreの永続キャッシュを初期化できないため、通常のFirestoreへ切り替えます:', error);
+  db = getFirestore(app);
+}
+
+export { db };
+
+const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || 'BNcjJ-d0kaK0xHGvtpfWlSd8WRl0TbJ2GrsgZTWifSn2uy5NbAJxmwuY_mTvvj6b6am7GRkKbvXlQ_NC9ZbTaWA';
 let messagingPromise = null;
 
 const resolveMessaging = async () => {
