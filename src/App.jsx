@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { auth, db, deleteFcmToken, getFcmToken, subscribeForegroundNotifications } from './firebase'
 import {
+  EmailAuthProvider,
   createUserWithEmailAndPassword,
+  deleteUser,
   onAuthStateChanged,
+  reauthenticateWithCredential,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth'
@@ -19,7 +23,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Coffee, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, Moon, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Sunrise, Sunset, Trash2, TrendingUp, Utensils, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Coffee, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, Moon, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Sunrise, Sunset, Trash2, TrendingUp, UserX, Utensils, X } from 'lucide-react'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -334,6 +338,7 @@ function App() {
   const doubleTapHintShownRef = useRef(false)
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
+  const [relatedChainModal, setRelatedChainModal] = useState({ open: false, loading: false, items: [] })
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [notificationEnabled, setNotificationEnabled] = useState(false)
   const [notificationPermission, setNotificationPermission] = useState(
@@ -344,6 +349,10 @@ function App() {
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false)
+  const [deletePassword, setDeletePassword] = useState('')
+  const [deletingAccount, setDeletingAccount] = useState(false)
+  const [deleteAccountError, setDeleteAccountError] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
   const [helpLang, setHelpLang] = useState('ja')
   const [weekCalendarFixed, setWeekCalendarFixed] = useState(() => {
@@ -557,6 +566,24 @@ function App() {
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [menuOpen])
+
+  useEffect(() => {
+    const handleScheduleActionMenuOutside = (event) => {
+      const openDetails = document.querySelectorAll('details.schedule-action-menu[open]')
+      if (openDetails.length === 0) return
+      openDetails.forEach((details) => {
+        if (!details.contains(event.target)) {
+          details.removeAttribute('open')
+        }
+      })
+    }
+    document.addEventListener('mousedown', handleScheduleActionMenuOutside)
+    document.addEventListener('touchstart', handleScheduleActionMenuOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleScheduleActionMenuOutside)
+      document.removeEventListener('touchstart', handleScheduleActionMenuOutside)
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -980,8 +1007,6 @@ function App() {
     setSelectedDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1))
   }
 
-  const changeMonthView = (offset) => changeSelectedMonth(offset)
-
   const selectedItems = useMemo(() => {
     const items = scheduleMap[selectedKey] || []
     return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
@@ -1334,6 +1359,131 @@ function App() {
     }
   }
 
+  const handleSendPasswordReset = async () => {
+    if (!email.trim()) {
+      setAuthError('パスワード再設定メールを送信するため、メールアドレスを入力してください。')
+      return
+    }
+    setAuthError('')
+    try {
+      await sendPasswordResetEmail(auth, email.trim())
+      alert(`「${email.trim()}」宛にパスワード再設定用メールを送信しました。\nメール内のリンクから新しいパスワードを設定してください。`)
+    } catch (error) {
+      console.error('パスワードリセット送信エラー:', error)
+      if (error.code === 'auth/user-not-found') {
+        setAuthError('登録されていないメールアドレスです。')
+      } else if (error.code === 'auth/invalid-email') {
+        setAuthError('有効なメールアドレスを入力してください。')
+      } else {
+        setAuthError(`送信に失敗しました: ${error.message}`)
+      }
+    }
+  }
+
+  const deleteUserData = async (uid) => {
+    const collectionsToDelete = ['schedule_items', 'sleep_records', 'fcm_tokens']
+    for (const colName of collectionsToDelete) {
+      let hasMore = true
+      while (hasMore) {
+        const snap = await getDocs(query(collection(db, colName), where('user_id', '==', uid)))
+        if (snap.empty) {
+          hasMore = false
+          break
+        }
+        const docs = snap.docs
+        const batchSize = 400
+        for (let i = 0; i < docs.length; i += batchSize) {
+          const batch = writeBatch(db)
+          const chunk = docs.slice(i, i + batchSize)
+          chunk.forEach((d) => batch.delete(d.ref))
+          await batch.commit()
+        }
+        if (docs.length < batchSize) {
+          hasMore = false
+        }
+      }
+    }
+
+    try {
+      await deleteDoc(doc(db, 'common_titles', uid))
+    } catch (e) {
+      console.error('common_titles delete error:', e)
+    }
+    try {
+      await deleteDoc(doc(db, 'notification_state', uid))
+    } catch (e) {
+      console.error('notification_state delete error:', e)
+    }
+  }
+
+  const handleSendResetEmailInDeleteModal = async () => {
+    if (!session?.email) return
+    try {
+      await sendPasswordResetEmail(auth, session.email)
+      alert(`「${session.email}」宛にパスワード再設定用のメールを送信しました。\nメールに記載されているリンクからパスワードを再設定したあと、再度アカウント削除を行ってください。`)
+    } catch (error) {
+      console.error('パスワードリセットメール送信エラー:', error)
+      alert(`パスワードリセットメールの送信に失敗しました:\n${error.message}`)
+    }
+  }
+
+  const handleAccountDelete = async () => {
+    if (!session || !auth.currentUser) {
+      alert('セッションが切れています。再度ログインしてください。')
+      setDeleteAccountModalOpen(false)
+      return
+    }
+
+    if (!deletePassword) {
+      setDeleteAccountError('パスワードを入力してください。')
+      return
+    }
+
+    setDeleteAccountError('')
+
+    if (!window.confirm('本当にアカウントとすべてのデータを削除しますか？この操作は復旧できません。')) {
+      return
+    }
+
+    setDeletingAccount(true)
+    try {
+      const credential = EmailAuthProvider.credential(session.email, deletePassword)
+      await reauthenticateWithCredential(auth.currentUser, credential)
+
+      await deleteUserData(session.uid)
+
+      try {
+        await deleteFcmToken()
+      } catch (e) {
+        console.error('FCM token cleanup error:', e)
+      }
+
+      const userToDelete = auth.currentUser
+      await deleteUser(userToDelete)
+
+      alert('アカウントとすべてのデータが正常に削除されました。')
+      setDeleteAccountModalOpen(false)
+      setDeletePassword('')
+      setSession(null)
+      setAuthMode('signup')
+      setEmail('')
+      setPassword('')
+      setScheduleMap({})
+      setSleepRecordMap({})
+    } catch (error) {
+      console.error('アカウント削除エラー:', error)
+      if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        setDeleteAccountError('パスワードが正しくありません。')
+      } else if (error.code === 'auth/requires-recent-login') {
+        setDeleteAccountError('セキュリティ保護のため、一度ログアウトして再ログイン後に実行してください。')
+      } else {
+        setDeleteAccountError(`削除に失敗しました: ${error.message}`)
+      }
+    } finally {
+      setDeletingAccount(false)
+    }
+  }
+
   const changeWeek = (offset) => {
     setSelectedDate((current) => addDays(current, offset))
   }
@@ -1580,25 +1730,106 @@ function App() {
 
   const closeDetail = () => setDetailDraft(null)
 
-  const openRelatedSchedule = async (relation) => {
-    if (!relation || !session) return
+  const openRelatedSchedule = async (relationOrItem) => {
+    if (!relationOrItem || !session) return
+    closeSchedulePreview()
+    setRelatedChainModal({ open: true, loading: true, items: [] })
+
     try {
-      const localItem = (scheduleMap[relation.date] || []).find((entry) => entry.id === relation.id)
-      if (localItem) {
-        closeSchedulePreview()
-        openDetail(localItem)
-        return
+      const getItem = async (refInfo) => {
+        if (!refInfo?.id || !refInfo?.date) return null
+        const local = (scheduleMap[refInfo.date] || []).find((entry) => entry.id === refInfo.id)
+        if (local) return { ...local, date: refInfo.date }
+
+        const snap = await getDoc(doc(db, 'schedule_items', `${session.uid}_${refInfo.date}_${refInfo.id}`))
+        if (snap.exists()) {
+          return { id: refInfo.id, date: refInfo.date, ...snap.data() }
+        }
+        return null
       }
-      const snap = await getDoc(doc(db, 'schedule_items', `${session.uid}_${relation.date}_${relation.id}`))
-      if (!snap.exists()) {
+
+      const startNode = await getItem(relationOrItem)
+      if (!startNode) {
         alert('関連する予定が見つかりません。')
+        setRelatedChainModal({ open: false, loading: false, items: [] })
         return
       }
-      closeSchedulePreview()
-      openDetail({ id: relation.id, date: relation.date, ...snap.data() })
+
+      const visited = new Set()
+      let headNode = startNode
+      visited.add(`${headNode.date}_${headNode.id}`)
+
+      while (headNode.relatedPrev?.id && headNode.relatedPrev?.date) {
+        const prevKey = `${headNode.relatedPrev.date}_${headNode.relatedPrev.id}`
+        if (visited.has(prevKey)) break
+        const prevNode = await getItem(headNode.relatedPrev)
+        if (!prevNode) break
+        visited.add(prevKey)
+        headNode = prevNode
+      }
+
+      visited.clear()
+      const chain = []
+      let currNode = headNode
+
+      while (currNode) {
+        const currKey = `${currNode.date}_${currNode.id}`
+        if (visited.has(currKey)) break
+        visited.add(currKey)
+        chain.push(currNode)
+
+        if (currNode.relatedNext?.id && currNode.relatedNext?.date) {
+          currNode = await getItem(currNode.relatedNext)
+        } else {
+          currNode = null
+        }
+      }
+
+      setRelatedChainModal({ open: true, loading: false, items: chain })
     } catch (error) {
-      console.error('関連予定の取得エラー:', error)
+      console.error('関連予定チェーン取得エラー:', error)
       alert(`関連する予定の取得に失敗しました:\n${error.message}`)
+      setRelatedChainModal({ open: false, loading: false, items: [] })
+    }
+  }
+
+  const toggleRelatedItemCompleted = async (item) => {
+    if (!session) return
+
+    const confirmMessage = item.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
+    if (!window.confirm(confirmMessage)) return
+
+    try {
+      if (!item.completed && item.relatedPrev?.id && item.relatedPrev?.date) {
+        let previousItem = relatedChainModal.items.find((entry) => entry.id === item.relatedPrev.id && entry.date === item.relatedPrev.date)
+        if (!previousItem) {
+          const previousRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedPrev.date}_${item.relatedPrev.id}`)
+          const previousSnap = await getDoc(previousRef)
+          if (previousSnap.exists()) {
+            previousItem = previousSnap.data()
+          }
+        }
+        if (!previousItem) {
+          alert('関連する前の予定が見つかりません。')
+          return
+        }
+        if (previousItem.completed !== true) {
+          alert('関連する前の予定が未完了のため、この予定は完了できません。')
+          return
+        }
+      }
+
+      const nextItem = { ...item, completed: !item.completed, user_id: session.uid }
+      await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), nextItem)
+      upsertScheduleItemLocal(nextItem)
+      setRelatedChainModal((prev) => ({
+        ...prev,
+        items: prev.items.map((entry) => (entry.id === item.id && entry.date === item.date ? nextItem : entry)),
+      }))
+      fetchWeekSchedule()
+    } catch (error) {
+      console.error('完了状態更新エラー:', error)
+      alert(`完了状態の更新に失敗しました:\n${error.message}`)
     }
   }
 
@@ -1653,6 +1884,11 @@ function App() {
   const saveDetailDraft = async () => {
     if (!session || !detailDraft || savingDraft) return
 
+    if (!detailDraft.title.trim()) {
+      alert('タイトルを入力してください。')
+      return
+    }
+
     const startTime = detailDraft.time || '09:00'
     const endTime = detailDraft.endTime || '10:00'
 
@@ -1668,7 +1904,7 @@ function App() {
       const item = {
         id: itemId,
         user_id: session.uid,
-        title: detailDraft.title.trim() || '予定',
+        title: detailDraft.title.trim(),
         time: startTime,
         endTime: endTime,
         details: detailDraft.details || '',
@@ -1760,7 +1996,7 @@ function App() {
     setCommonTitlesExpanded(false)
     setDetailDraft({
       id: `new-${Date.now()}`,
-      title: '新規予定',
+      title: '',
       time: '09:00',
       endTime: '10:00',
       details: '',
@@ -1800,6 +2036,91 @@ function App() {
     } catch (error) {
       console.error('完了状態更新エラー:', error)
       alert(`完了状態の更新に失敗しました:\n${error.message}`)
+    }
+  }
+
+  const addOneHourWithCap = (startTimeStr) => {
+    const [hStr, mStr] = (startTimeStr || '09:00').split(':')
+    let hours = parseInt(hStr, 10)
+    let minutes = parseInt(mStr, 10)
+    if (Number.isNaN(hours)) hours = 9
+    if (Number.isNaN(minutes)) minutes = 0
+
+    let endHours = hours + 1
+    let endMinutes = minutes
+
+    if (endHours > 23 || (endHours === 23 && endMinutes > 59)) {
+      return '23:59'
+    }
+    return `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`
+  }
+
+  const timeToMinutes = (timeStr) => {
+    const [h, m] = (timeStr || '00:00').split(':').map((v) => parseInt(v, 10) || 0)
+    return h * 60 + m
+  }
+
+  const minutesToTime = (mins) => {
+    const clamped = Math.max(0, Math.min(23 * 60 + 59, mins))
+    const h = Math.floor(clamped / 60)
+    const m = clamped % 60
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  }
+
+  const moveScheduleItem = async (item, direction) => {
+    if (!session || item.completed) return
+
+    const items = selectedItems
+    const index = items.findIndex((entry) => entry.id === item.id)
+    if (index < 0) return
+
+    let newStartTime = ''
+    let newEndTime = ''
+
+    if (direction === 'up') {
+      if (index === 0) return
+      const targetItem = items[index - 1]
+      if (index >= 2) {
+        const prevPrevItem = items[index - 2]
+        newStartTime = prevPrevItem.endTime || '09:00'
+        newEndTime = targetItem.time || addOneHourWithCap(newStartTime)
+        if (parseTimeValue(newEndTime) <= parseTimeValue(newStartTime)) {
+          newEndTime = addOneHourWithCap(newStartTime)
+        }
+      } else {
+        const targetStartMins = timeToMinutes(targetItem.time || '09:00')
+        const startMins = Math.max(0, targetStartMins - 60)
+        newStartTime = minutesToTime(startMins)
+        newEndTime = targetItem.time || minutesToTime(startMins + 60)
+        if (parseTimeValue(newEndTime) <= parseTimeValue(newStartTime)) {
+          newEndTime = addOneHourWithCap(newStartTime)
+        }
+      }
+    } else if (direction === 'down') {
+      if (index === items.length - 1) return
+      const targetItem = items[index + 1]
+      newStartTime = targetItem.endTime || '10:00'
+      newEndTime = addOneHourWithCap(newStartTime)
+    }
+
+    if (!newStartTime) return
+
+    const updatedItem = {
+      ...item,
+      time: newStartTime,
+      endTime: newEndTime,
+      user_id: session.uid,
+    }
+
+    upsertScheduleItemLocal(updatedItem)
+
+    try {
+      await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), updatedItem)
+      fetchWeekSchedule()
+    } catch (error) {
+      console.error('予定の移動エラー:', error)
+      alert(`予定の移動に失敗しました:\n${error.message}`)
+      fetchWeekSchedule()
     }
   }
 
@@ -3136,6 +3457,17 @@ function App() {
                 style={styles.input}
                 required
               />
+              {authMode === 'login' && (
+                <div style={{ textAlign: 'right', marginTop: '-4px', marginBottom: '8px' }}>
+                  <button
+                    type="button"
+                    style={{ ...styles.textButton, fontSize: '12px', padding: 0 }}
+                    onClick={handleSendPasswordReset}
+                  >
+                    パスワードをお忘れの方はこちら
+                  </button>
+                </div>
+              )}
               <button type="submit" style={styles.primaryButton}>
                 {authMode === 'login' ? 'ログイン' : '登録する'}
               </button>
@@ -3349,6 +3681,19 @@ function App() {
                     >
                       <LogOut size={18} /> ログアウト
                     </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      style={{ ...styles.menuItem, ...styles.menuItemDanger }}
+                      onClick={() => {
+                        setMenuOpen(false)
+                        setDeleteAccountError('')
+                        setDeletePassword('')
+                        setDeleteAccountModalOpen(true)
+                      }}
+                    >
+                      <UserX size={18} /> アカウント削除
+                    </button>
                   </div>
                 )}
               </div>
@@ -3372,7 +3717,7 @@ function App() {
                   aria-label={notificationEnabled ? '通知をオフにする' : '通知をオンにする'}
                   title={notificationEnabled ? '通知をオフにする' : '通知をオンにする'}
                 >
-                  {notificationEnabled ? <Bell size={16} /> : <BellOff size={16} />}
+                  {notificationEnabled ? <Bell size={28} /> : <BellOff size={28} />}
                   <span className="notification-label">{notificationBusy ? '処理中' : notificationEnabled ? '通知ON' : '通知OFF'}</span>
                   {notificationBadgeCount > 0 && (
                     <span style={styles.notificationCountBadge} className="notification-count-badge">{notificationBadgeCount}</span>
@@ -3438,6 +3783,80 @@ function App() {
 
           {view === 'home' && (
           <main ref={mainRef} className={sleepOnlyMode ? 'sleep-only-main' : undefined} style={{ ...styles.main, ...(weekCalendarEnabled && weekCalendarFixed ? styles.mainWithFixedWeek : {}) }}>
+            <section className="schedule-search-section" style={styles.scheduleSearchSection} aria-label="スケジュール名を検索">
+              <div className="schedule-search-header" style={styles.scheduleSearchHeader}>
+                <div>
+                  <h2 className="schedule-search-title" style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
+                  <p className="schedule-search-caption" style={styles.scheduleSearchCaption}>{searchMonthTitle}の予定名から部分一致で検索</p>
+                </div>
+                <div className="schedule-search-nav" style={styles.scheduleSearchNav}>
+                  <button
+                    type="button"
+                    className="schedule-search-nav-btn"
+                    style={styles.searchNavButton}
+                    onClick={() => changeSearchMonth(-1)}
+                    aria-label="前月"
+                    title="前月"
+                  >
+                    <ChevronLeft size={18} />
+                  </button>
+                  <span className="schedule-search-nav-month" style={styles.searchNavMonthText}>{searchMonthTitle}</span>
+                  <button
+                    type="button"
+                    className="schedule-search-nav-btn"
+                    style={styles.searchNavButton}
+                    onClick={() => changeSearchMonth(1)}
+                    aria-label="翌月"
+                    title="翌月"
+                  >
+                    <ChevronRight size={18} />
+                  </button>
+                  {scheduleSearchQuery && (
+                    <button type="button" className="schedule-search-clear-btn" style={styles.searchClearButton} onClick={() => {
+                      setScheduleSearchQuery('')
+                    }} aria-label="検索をクリア" title="検索をクリア">
+                      <X size={16} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="schedule-search-input-row" style={styles.scheduleSearchInputRow}>
+                <Search size={18} color="#2563eb" />
+                <input
+                  type="text"
+                  className="schedule-search-input"
+                  value={scheduleSearchQuery}
+                  onChange={(event) => setScheduleSearchQuery(event.target.value)}
+                  placeholder={`${searchMonthTitle}の予定名を入力`}
+                  style={styles.scheduleSearchInput}
+                />
+              </div>
+              {scheduleSearchQuery.trim() && (
+                <div style={styles.scheduleSearchResults}>
+                  <div style={styles.scheduleSearchStatus}>
+                    【{searchMonthTitle}】「{scheduleSearchQuery.trim()}」の検索結果: {scheduleSearchResults.length}件
+                  </div>
+                  {scheduleSearchResults.map((item) => (
+                    <button
+                      key={`${item.date}_${item.id}`}
+                      type="button"
+                      style={styles.scheduleSearchResult}
+                      onClick={() => {
+                        setScheduleSearchQuery('')
+                        setSelectedDate(new Date(`${item.date}T00:00:00`))
+                        openSchedulePreview(item)
+                      }}
+                    >
+                      <span style={styles.scheduleSearchResultTitle}>{item.title || '予定'}</span>
+                      <span style={styles.scheduleSearchResultMeta}>{item.date}　{item.time || '09:00'} - {item.endTime || '10:00'}</span>
+                    </button>
+                  ))}
+                  {scheduleSearchResults.length === 0 && (
+                    <div style={styles.scheduleSearchEmpty}>{searchMonthTitle}に該当する予定はありません。</div>
+                  )}
+                </div>
+              )}
+            </section>
             {monthCalendarEnabled && (
               <section className="month-calendar-section" style={styles.monthCalendarSection} aria-label="月カレンダー">
                 <div className="month-calendar-header" style={styles.monthCalendarHeader}>
@@ -3452,31 +3871,7 @@ function App() {
                     {monthCalendarCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
                     <span>月カレンダー</span>
                   </button>
-                  {!monthCalendarCollapsed && (
-                    <div className="month-calendar-nav" style={styles.monthCalendarNav}>
-                      <button
-                        type="button"
-                        className="month-calendar-nav-btn"
-                        style={styles.searchNavButton}
-                        onClick={() => changeMonthView(-1)}
-                        aria-label="前月"
-                        title="前月"
-                      >
-                        <ChevronLeft size={16} />
-                      </button>
-                      <span className="month-calendar-nav-title" style={styles.monthCalendarNavTitle}>{formatMonthTitle(monthViewDate)}</span>
-                      <button
-                        type="button"
-                        className="month-calendar-nav-btn"
-                        style={styles.searchNavButton}
-                        onClick={() => changeMonthView(1)}
-                        aria-label="翌月"
-                        title="翌月"
-                      >
-                        <ChevronRight size={16} />
-                      </button>
-                    </div>
-                  )}
+                  <span className="month-calendar-nav-title" style={styles.monthCalendarNavTitle}>{formatMonthTitle(monthViewDate)}</span>
                 </div>
                 {!monthCalendarCollapsed && (
                   <div className="month-calendar-body" style={styles.monthCalendarBody}>
@@ -3555,80 +3950,6 @@ function App() {
                 )}
               </section>
             )}
-            <section className="schedule-search-section" style={styles.scheduleSearchSection} aria-label="スケジュール名を検索">
-              <div className="schedule-search-header" style={styles.scheduleSearchHeader}>
-                <div>
-                  <h2 className="schedule-search-title" style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
-                  <p className="schedule-search-caption" style={styles.scheduleSearchCaption}>{searchMonthTitle}の予定名から部分一致で検索</p>
-                </div>
-                <div className="schedule-search-nav" style={styles.scheduleSearchNav}>
-                  <button
-                    type="button"
-                    className="schedule-search-nav-btn"
-                    style={styles.searchNavButton}
-                    onClick={() => changeSearchMonth(-1)}
-                    aria-label="前月"
-                    title="前月"
-                  >
-                    <ChevronLeft size={16} />
-                  </button>
-                  <span className="schedule-search-nav-month" style={styles.searchNavMonthText}>{searchMonthTitle}</span>
-                  <button
-                    type="button"
-                    className="schedule-search-nav-btn"
-                    style={styles.searchNavButton}
-                    onClick={() => changeSearchMonth(1)}
-                    aria-label="翌月"
-                    title="翌月"
-                  >
-                    <ChevronRight size={16} />
-                  </button>
-                  {scheduleSearchQuery && (
-                    <button type="button" className="schedule-search-clear-btn" style={styles.searchClearButton} onClick={() => {
-                      setScheduleSearchQuery('')
-                    }} aria-label="検索をクリア" title="検索をクリア">
-                      <X size={16} />
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="schedule-search-input-row" style={styles.scheduleSearchInputRow}>
-                <Search size={18} color="#2563eb" />
-                <input
-                  type="text"
-                  className="schedule-search-input"
-                  value={scheduleSearchQuery}
-                  onChange={(event) => setScheduleSearchQuery(event.target.value)}
-                  placeholder={`${searchMonthTitle}の予定名を入力`}
-                  style={styles.scheduleSearchInput}
-                />
-              </div>
-              {scheduleSearchQuery.trim() && (
-                <div style={styles.scheduleSearchResults}>
-                  <div style={styles.scheduleSearchStatus}>
-                    【{searchMonthTitle}】「{scheduleSearchQuery.trim()}」の検索結果: {scheduleSearchResults.length}件
-                  </div>
-                  {scheduleSearchResults.map((item) => (
-                    <button
-                      key={`${item.date}_${item.id}`}
-                      type="button"
-                      style={styles.scheduleSearchResult}
-                      onClick={() => {
-                        setScheduleSearchQuery('')
-                        setSelectedDate(new Date(`${item.date}T00:00:00`))
-                        openSchedulePreview(item)
-                      }}
-                    >
-                      <span style={styles.scheduleSearchResultTitle}>{item.title || '予定'}</span>
-                      <span style={styles.scheduleSearchResultMeta}>{item.date}　{item.time || '09:00'} - {item.endTime || '10:00'}</span>
-                    </button>
-                  ))}
-                  {scheduleSearchResults.length === 0 && (
-                    <div style={styles.scheduleSearchEmpty}>{searchMonthTitle}に該当する予定はありません。</div>
-                  )}
-                </div>
-              )}
-            </section>
             {weekCalendarEnabled && (
               <section
                 className="week-section"
@@ -3877,16 +4198,31 @@ function App() {
                 <div style={styles.emptyState}>この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
               ) : (
                 <div className="schedule-list" style={styles.scheduleList}>
-                  {selectedItems.map((item) => {
+                  {selectedItems.map((item, index) => {
+                    const isFirst = index === 0
+                    const isLast = index === selectedItems.length - 1
                     const hasOverlap = selectedItems.some((other) => {
                       return other.id !== item.id && isTimeOverlap(item.time || '09:00', item.endTime || '10:00', other.time || '09:00', other.endTime || '10:00')
                     })
                     const timeDisplay = `${item.time || '09:00'} - ${item.endTime || '10:00'}`
-                    const timeBoxStyle = hasOverlap
-                      ? { ...styles.scheduleTimeBox, color: '#dc2626', background: '#fee2e2' }
-                      : item.completed
-                        ? { ...styles.scheduleTimeBox, color: '#6b7280', background: '#d1d5db' }
-                        : styles.scheduleTimeBox
+                    
+                    let timeBoxStyle = styles.scheduleTimeBox
+                    let clockIconColor = '#2563eb'
+
+                    if (item.completed) {
+                      timeBoxStyle = { ...styles.scheduleTimeBox, background: '#d1d5db', color: '#6b7280' }
+                      clockIconColor = '#6b7280'
+                    } else if (item.priority === 'high') {
+                      timeBoxStyle = { ...styles.scheduleTimeBox, background: '#fee2e2', color: '#dc2626' }
+                      clockIconColor = '#dc2626'
+                    } else if (item.priority === 'low') {
+                      timeBoxStyle = { ...styles.scheduleTimeBox, background: 'transparent', border: '1px solid #cbd5e1', color: '#475569' }
+                      clockIconColor = '#64748b'
+                    } else {
+                      timeBoxStyle = { ...styles.scheduleTimeBox, background: '#e0edff', color: '#1d4ed8' }
+                      clockIconColor = '#2563eb'
+                    }
+
                     const urgency = getScheduleUrgency(item, nowTick)
 
                     return (
@@ -3896,13 +4232,20 @@ function App() {
                       onClick={() => handleScheduleCardTap(item)}
                       style={{
                         ...styles.scheduleCard,
-                        ...(hasScheduleRelation(item) ? styles.relatedScheduleCard : {}),
-                        ...(item.completed ? (hasScheduleRelation(item) ? styles.completedRelatedScheduleCard : styles.completedScheduleCard) : {}),
+                        ...(item.completed ? styles.completedScheduleCard : {}),
                       }}
                     >
-                      <div style={timeBoxStyle}>
-                        <Clock3 size={16} color={hasOverlap ? '#dc2626' : '#2563eb'} />
-                        <span>{timeDisplay}</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+                        <div style={timeBoxStyle}>
+                          <Clock3 size={16} color={clockIconColor} />
+                          <span>{timeDisplay}</span>
+                        </div>
+                        {hasOverlap && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#dc2626', fontSize: '11px', fontWeight: 700, paddingLeft: '2px' }}>
+                            <AlertTriangle size={14} color="#dc2626" />
+                            <span>重複注意</span>
+                          </div>
+                        )}
                       </div>
 
                       <div style={styles.scheduleBody}>
@@ -3918,7 +4261,35 @@ function App() {
                               </span>
                             )}
                           </div>
-                          <div className="schedule-actions-mobile" style={{ display: 'flex', gap: '8px' }}>
+                          <div className="schedule-actions-mobile" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                            <button
+                              type="button"
+                              className="schedule-move-btn"
+                              style={{ ...styles.moveButton, ...(isFirst || item.completed ? styles.moveButtonDisabled : {}) }}
+                              disabled={isFirst || item.completed}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                moveScheduleItem(item, 'up')
+                              }}
+                              aria-label="上に移動"
+                              title="上に移動"
+                            >
+                              <ChevronUp size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              className="schedule-move-btn"
+                              style={{ ...styles.moveButton, ...(isLast || item.completed ? styles.moveButtonDisabled : {}) }}
+                              disabled={isLast || item.completed}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                moveScheduleItem(item, 'down')
+                              }}
+                              aria-label="下に移動"
+                              title="下に移動"
+                            >
+                              <ChevronDown size={16} />
+                            </button>
                             <button
                               type="button"
                               className="schedule-complete-btn"
@@ -3937,6 +4308,18 @@ function App() {
                                 <MoreHorizontal size={20} />
                               </summary>
                               <div className="schedule-action-menu-list" style={styles.scheduleActionMenuList}>
+                                <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  closeScheduleActionMenu(event)
+                                  if (!item.completed && !isFirst) moveScheduleItem(item, 'up')
+                                }} disabled={item.completed || isFirst}>
+                                  <ChevronUp size={18} /> <span>上に移動</span>
+                                </button>
+                                <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  closeScheduleActionMenu(event)
+                                  if (!item.completed && !isLast) moveScheduleItem(item, 'down')
+                                }} disabled={item.completed || isLast}>
+                                  <ChevronDown size={18} /> <span>下に移動</span>
+                                </button>
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                   closeScheduleActionMenu(event)
                                   if (!item.completed) openMoveCopyDialog(item)
@@ -4525,20 +4908,37 @@ function App() {
                   <button type="button" style={styles.closeButton} onClick={closeDetail}>閉じる</button>
                 </div>
 
-                <label style={styles.fieldLabel}>タイトル</label>
+                <label style={styles.fieldLabel}>タイトル（必須）</label>
+                {commonTitles.length > 0 && (
+                  <select
+                    style={{ ...styles.modalInput, marginBottom: '8px' }}
+                    value=""
+                    onChange={(e) => {
+                      const selectedVal = e.target.value
+                      if (selectedVal) {
+                        setDetailDraft((prev) => (prev ? { ...prev, title: selectedVal } : null))
+                      }
+                    }}
+                    aria-label="定例タイトルから選択"
+                  >
+                    <option value="">定例タイトルから選択…</option>
+                    {commonTitles.map((titleOption) => (
+                      <option key={titleOption} value={titleOption}>
+                        {titleOption}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <input
                   type="text"
-                  list="common-title-options"
                   value={detailDraft.title}
-                  onChange={(e) => setDetailDraft({ ...detailDraft, title: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setDetailDraft((prev) => (prev ? { ...prev, title: val } : null))
+                  }}
                   style={styles.modalInput}
-                  placeholder="タイトルを入力（定例タイトルから選択も可能）"
+                  placeholder="タイトルを入力してください"
                 />
-                <datalist id="common-title-options">
-                  {commonTitles.map((titleOption) => (
-                    <option key={titleOption} value={titleOption} />
-                  ))}
-                </datalist>
 
                 <label style={styles.commonTitleCheckboxRow}>
                   <input
@@ -4648,6 +5048,130 @@ function App() {
                     disabled={savingDraft}
                   >
                     {savingDraft ? '保存中…' : '保存'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {relatedChainModal.open && (
+            <div style={styles.modalOverlay} onClick={() => setRelatedChainModal({ open: false, loading: false, items: [] })}>
+              <div className="schedule-modal" style={{ ...styles.modal, maxWidth: '600px' }} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <Link2 size={18} color="#2563eb" />
+                    <h3 style={styles.modalTitle}>関連スケジュール一覧</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={() => setRelatedChainModal({ open: false, loading: false, items: [] })}>閉じる</button>
+                </div>
+
+                {relatedChainModal.loading ? (
+                  <div style={styles.loadingState}>読み込み中...</div>
+                ) : relatedChainModal.items.length === 0 ? (
+                  <div style={styles.emptyState}>関連するスケジュールはありません。</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '14px', maxHeight: '60vh', overflowY: 'auto', paddingRight: '4px' }}>
+                    {relatedChainModal.items.map((item) => {
+                      const timeDisplay = `${item.date}　${item.time || '09:00'} - ${item.endTime || '10:00'}`
+                      return (
+                        <div
+                          key={`${item.date}_${item.id}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '12px 14px',
+                            borderRadius: '12px',
+                            border: '1px solid #dfeaf7',
+                            background: item.completed ? '#e5e7eb' : '#ffffff',
+                            gap: '12px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: item.completed ? '#64748b' : '#2563eb' }}>
+                              {timeDisplay}
+                            </div>
+                            <div style={{ fontSize: '15px', fontWeight: 700, color: item.completed ? '#6b7280' : '#0f172a', textDecoration: item.completed ? 'line-through' : 'none', wordBreak: 'break-word' }}>
+                              {item.title || '予定'}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="schedule-complete-btn"
+                            style={{
+                              ...styles.completeButton,
+                              ...(item.completed ? styles.completedButton : {}),
+                              flexShrink: 0,
+                            }}
+                            onClick={() => toggleRelatedItemCompleted(item)}
+                            title={item.completed ? '完了を取り消す' : '完了にする'}
+                            aria-label={item.completed ? '完了を取り消す' : '予定を完了にする'}
+                          >
+                            <Check size={16} />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {deleteAccountModalOpen && (
+            <div style={styles.modalOverlay} onClick={() => !deletingAccount && setDeleteAccountModalOpen(false)}>
+              <div className="schedule-modal" style={styles.modal} onClick={(event) => event.stopPropagation()}>
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <UserX size={18} color="#dc2626" />
+                    <h3 style={{ ...styles.modalTitle, color: '#dc2626' }}>アカウントの削除</h3>
+                  </div>
+                  <button type="button" style={styles.closeButton} onClick={() => setDeleteAccountModalOpen(false)} disabled={deletingAccount}>閉じる</button>
+                </div>
+
+                <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '10px', padding: '12px', color: '#991b1b', fontSize: '13px', marginTop: '12px', marginBottom: '14px', lineHeight: 1.5 }}>
+                  <strong>⚠️ 注意・確認事項</strong>
+                  <p style={{ margin: '4px 0 0' }}>
+                    アカウントを削除すると全データ（スケジュール、睡眠記録、設定など）が完全に消去され、復旧することはできません。
+                  </p>
+                </div>
+
+                {deleteAccountError && (
+                  <div style={{ color: '#dc2626', fontSize: '13px', fontWeight: 700, marginBottom: '10px' }}>
+                    {deleteAccountError}
+                  </div>
+                )}
+
+                <label style={styles.fieldLabel}>本人確認のため現在のパスワードを入力してください</label>
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  placeholder="パスワードを入力"
+                  style={styles.modalInput}
+                  disabled={deletingAccount}
+                />
+
+                <div style={{ marginTop: '8px', marginBottom: '16px', textAlign: 'right' }}>
+                  <button
+                    type="button"
+                    style={{ ...styles.textButton, fontSize: '12px', padding: 0 }}
+                    onClick={handleSendResetEmailInDeleteModal}
+                    disabled={deletingAccount}
+                  >
+                    パスワードをお忘れの方はこちら（再設定メール送信）
+                  </button>
+                </div>
+
+                <div style={styles.modalActionRow}>
+                  <button type="button" style={styles.secondaryButton} onClick={() => setDeleteAccountModalOpen(false)} disabled={deletingAccount}>キャンセル</button>
+                  <button
+                    type="button"
+                    style={{ ...styles.primaryButton, background: '#dc2626', borderColor: '#b91c1c', opacity: deletingAccount ? 0.7 : 1, cursor: deletingAccount ? 'wait' : 'pointer' }}
+                    onClick={handleAccountDelete}
+                    disabled={deletingAccount}
+                  >
+                    {deletingAccount ? '削除中…' : 'アカウントを削除する'}
                   </button>
                 </div>
               </div>
@@ -5750,6 +6274,26 @@ const styles = {
   lowPriorityBadge: {
     background: '#e0f2fe',
     color: '#0369a1',
+  },
+  moveButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '32px',
+    height: '32px',
+    borderRadius: '8px',
+    border: '1px solid #d9e2f2',
+    background: '#ffffff',
+    color: '#334155',
+    cursor: 'pointer',
+    padding: 0,
+  },
+  moveButtonDisabled: {
+    opacity: 0.35,
+    cursor: 'not-allowed',
+    background: '#f1f5f9',
+    borderColor: '#e2e8f0',
+    color: '#94a3b8',
   },
   completeButton: {
     display: 'flex',

@@ -1,0 +1,189 @@
+VITE_FIREBASE_API_KEY=AIzaSyBn0mED4M3cUFV0a75ZnKU0aS0FVwGBsL0
+VITE_FIREBASE_AUTH_DOMAIN=makino-ron.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=makino-ron
+VITE_FIREBASE_STORAGE_BUCKET=makino-ron.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=993887680290
+VITE_FIREBASE_APP_ID=1:993887680290:web:26bcfcfc900e7cf445177b
+VITE_FIREBASE_VAPID_KEY=BNcjJ-d0kaK0xHGvtpfWlSd8WRl0TbJ2GrsgZTWifSn2uy5NbAJxmwuY_mTvvj6b6am7GRkKbvXlQ_NC9ZbTaWA
+
+
+Xcodeで確認する場合は、次の手順です。
+
+1. ローカル環境変数を確認
+
+プロジェクト直下の .env にFirebase設定がある状態にします。
+D:\AI\my-react-app\ron-sch\.env
+
+.env はGitHubへプッシュ不要です。
+
+2. Webアプリをビルド
+npm run build
+
+3. iOS側へ反映
+npx cap sync ios
+
+Web側の変更をiOSプロジェクトへコピーする重要な手順です。
+
+4. Xcodeを開く
+npx cap open ios
+
+または、次のファイルをXcodeで開きます。
+ios/App/App.xcworkspace
+
+.xcodeproj ではなく、基本的に .xcworkspace を開いてください。
+
+5. Xcodeで実行
+
+上部で App ターゲットを選択
+iPhoneシミュレーター、または接続した実機を選択
+▶ ボタンを押す
+ログイン画面が表示されることを確認
+変更を確認するたびの基本手順
+npm run build
+npx cap sync ios
+npx cap open ios
+
+Xcodeをすでに開いている場合は、npx cap sync ios の後にXcodeで再度実行します。
+
+確認項目
+
+ログイン画面が表示される
+ログインできる
+予定を登録・編集・削除できる
+ページ移動後も表示される
+アプリを再起動してもデータが表示される
+通知を使う場合は実機で確認する
+iOSシミュレーターでは、プッシュ通知や一部の端末機能は正しく確認できないことがあります。FirebaseログインやFirestoreの確認はシミュレーターでも可能ですが、通知とホーム画面追加機能は実機確認が必要です。
+
+なお、Vercelの環境変数はXcodeには自動で入りません。Xcodeで使うFirebase設定は、ローカルの .env を使って npm run build した時点でWebアセットに埋め込まれます。
+
+
+
+いいえ、Xcode以外にFirebase本体をMacへインストールする必要はありません。
+
+現在の構成では、FirebaseはWebアプリ内のnpmパッケージとして利用されています。
+
+Macで必要なのは次のものです。
+
+Xcode
+Node.js
+npm
+CocoaPods（npx cap sync ios で必要になる場合があります）
+Git（ソース取得用）
+Macで初回セットアップする例:
+brew install node
+npm install
+npm install -g cocoapods
+npm install -g @capacitor/cli
+
+プロジェクト内で実行:
+npm run build
+npx cap sync ios
+npx cap open ios
+
+Firebase ConsoleやFirebase CLIは、通常のXcode実機確認には不要です。
+
+Firebase CLIが必要になるのは、Macから次の操作を行う場合だけです。
+
+Firebase Hostingへデプロイ
+Firestoreルールのデプロイ
+Firebase Functionsのデプロイ
+Firebase Emulatorの起動
+その場合だけ、次を実行します。
+
+
+つまり、Xcodeでアプリを確認するだけなら、Firebase ConsoleへのログインやFirebase CLIのインストールは不要です。Firebaseの接続設定は、プロジェクトの .env に入れて npm run build した時点でアプリに反映されます。
+
+
+
+
+
+CapacitorのiOS通知設定がこのプロジェクトでどこまで済んでいるかを確認し、Mac担当者向けに「.env の扱い」と「通知確認」の手順を一つに整理します。特にiOS実機・Apple Developer設定・Xcodeの権限は、シミュレーターでは確認できない点を切り分けます。
+
+
+
+
+
+確認したところ、このプロジェクトは現在、CapacitorのネイティブPushプラグインではなく、Firebase Web Messagingとブラウザ通知を使う構成です。つまりXcodeで通知を確認する場合は、通常のApple Push通知設定だけでなく、この実装がiOSのCapacitor WebViewで動作するかも確認対象になります。手順では「まずアプリ本体の動作」「次に通知権限」「最後にバックグラウンド通知」の順にします。
+
+はい。Mac担当者には、.env の内容を安全な方法で渡してください。GitHubやメール本文には貼らず、パスワード管理ツールや暗号化ファイルなどを使います。
+
+Capacitor通知の確認手順
+1. Mac側の準備
+プロジェクト直下に .env を配置します。
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=...
+VITE_FIREBASE_PROJECT_ID=...
+VITE_FIREBASE_STORAGE_BUCKET=...
+VITE_FIREBASE_MESSAGING_SENDER_ID=...
+VITE_FIREBASE_APP_ID=...
+VITE_FIREBASE_VAPID_KEY=...
+
+.env はGitHubへプッシュしません。
+
+その後、プロジェクトで実行します。
+npm install
+npm run build
+npx cap sync ios
+npx cap open ios
+
+Xcodeでは必ず次を開きます。
+ios/App/App.xcworkspace
+
+2. Apple側の通知設定
+Apple Developerで、アプリIDのBundle IDが次と一致していることを確認します。
+
+
+そのApp IDで、次を有効にします。
+
+Push Notifications
+Associated Domainsなど、必要な機能がある場合はそれらも有効化
+Xcodeでは次を確認します。
+
+App プロジェクトを選択
+App ターゲットを選択
+Signing & Capabilities を開く
++ Capability から Push Notifications を追加
+Team と Bundle Identifier を確認
+Automatically manage signing を有効にする
+3. 実機での確認
+通知はシミュレーターでは正しく確認できないため、iPhone実機を使います。
+
+iPhoneをMacへ接続
+iPhone側でMacを信頼
+Xcode上部で実機を選択
+▶ Run を押す
+アプリを起動してログイン
+通知許可が表示されたら「許可」
+iPhoneの設定で確認
+設定
+→ 通知
+→ ロン君のスケジュール
+→ 通知を許可
+
+4. アプリ内での確認
+アプリの通知設定を開き、通知を有効にします。
+
+確認する内容:
+
+通知許可を要求できる
+FCMトークンを取得できる
+通知設定が有効になる
+予定の通知が届く
+アプリをバックグラウンドにしても届く
+アプリを終了した状態でも届く
+5. 注意点
+現在のプロジェクトには、@capacitor/push-notifications は導入されていません。実装はFirebase Web Messagingとサービスワーカーを中心にしています。
+
+そのため、Xcodeでアプリを起動できても、iOSのネイティブPush通知が必ず動くとは限りません。通知確認では、まずアプリが表示されるかを確認し、その後に通知を確認してください。
+
+通知が届かない場合は、次を確認します。
+
+iPhone実機で確認しているか
+通知許可が有効か
+FirebaseのVAPIDキーが正しいか
+.env を置いてから npm run build したか
+npx cap sync ios を実行したか
+Firebase Console側で通知を送信しているか
+XcodeのBundle IDがFirebase側の設定と一致しているか
+通常のWeb版通知だけを確認する場合は、MacのブラウザでVercelの本番サイトを開いて確認します。Xcodeアプリ内のネイティブ通知まで保証したい場合は、後から @capacitor/push-notifications を追加する構成に変更する必要があります
