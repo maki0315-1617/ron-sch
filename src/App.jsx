@@ -2096,11 +2096,47 @@ function App() {
           newEndTime = addOneHourWithCap(newStartTime)
         }
       }
+
+      const isNoChange = newStartTime === (item.time || '09:00') && newEndTime === (item.endTime || '10:00')
+      const isNotMovingUp = parseTimeValue(newStartTime) >= parseTimeValue(targetItem.time || '09:00')
+
+      if (isNoChange || isNotMovingUp) {
+        const confirmResult = window.confirm(
+          '移動先の予定と時間が重複するため、開始時間を調整して移動します。よろしいですか？'
+        )
+        if (!confirmResult) return
+
+        const targetStartMins = timeToMinutes(targetItem.time || '09:00')
+        const adjustedStartMins = Math.max(0, targetStartMins - 1)
+        newStartTime = minutesToTime(adjustedStartMins)
+
+        const itemDurationMins = Math.max(30, timeToMinutes(item.endTime || '10:00') - timeToMinutes(item.time || '09:00'))
+        const adjustedEndMins = Math.min(23 * 60 + 59, adjustedStartMins + itemDurationMins)
+        newEndTime = minutesToTime(adjustedEndMins)
+      }
     } else if (direction === 'down') {
       if (index === items.length - 1) return
       const targetItem = items[index + 1]
       newStartTime = targetItem.endTime || '10:00'
       newEndTime = addOneHourWithCap(newStartTime)
+
+      const isNoChange = newStartTime === (item.time || '09:00') && newEndTime === (item.endTime || '10:00')
+      const isNotMovingDown = parseTimeValue(newStartTime) <= parseTimeValue(targetItem.time || '09:00')
+
+      if (isNoChange || isNotMovingDown) {
+        const confirmResult = window.confirm(
+          '移動先の予定と時間が重複するため、開始時間を調整して移動します。よろしいですか？'
+        )
+        if (!confirmResult) return
+
+        const targetStartMins = timeToMinutes(targetItem.time || '09:00')
+        const adjustedStartMins = Math.min(23 * 60 + 59, targetStartMins + 1)
+        newStartTime = minutesToTime(adjustedStartMins)
+
+        const itemDurationMins = Math.max(30, timeToMinutes(item.endTime || '10:00') - timeToMinutes(item.time || '09:00'))
+        const adjustedEndMins = Math.min(23 * 60 + 59, adjustedStartMins + itemDurationMins)
+        newEndTime = minutesToTime(adjustedEndMins)
+      }
     }
 
     if (!newStartTime) return
