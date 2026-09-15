@@ -1493,7 +1493,7 @@ function App() {
   }
 
   const selectPreviousWeek = () => {
-    setSelectedDate((current) => addDays(getWeekStart(current, weekStartDay), -1))
+    setSelectedDate((current) => addDays(getWeekStart(current, weekStartDay), -7))
   }
 
   const changeSelectedDay = (offset) => {
