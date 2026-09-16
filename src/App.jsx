@@ -82,6 +82,11 @@ const weekendGreetingOption = {
   messages: ['週末です。予定の合間に、ゆっくり休む時間を取りましょう。', '土日は心と体を整える日です。無理のない予定にしましょう。', '休憩も大切な予定です。好きなことをして過ごしましょう。', '今週もお疲れさまでした。ゆったりした時間を楽しみましょう。'],
 }
 
+const holidayGreetingOption = {
+  Icon: Coffee,
+  messages: ['祝日です。予定の合間に、ゆっくり休む時間を取りましょう。', '今日は祝日です。無理のないペースで過ごしましょう。', '祝日の時間を大切にして、心と体を整えましょう。', '今日は少し余白をつくって、ゆったり過ごしましょう。'],
+}
+
 const isSleepShortcutLaunch = () => {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('sleep') === '1'
@@ -235,6 +240,15 @@ const formatMonthTitle = (date) =>
 const formatDisplayDate = (date) =>
   new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' }).format(date)
 
+const parseHolidayCsv = (csvText) => {
+  const holidays = {}
+  csvText.replace(/^\uFEFF/, '').split(/\r?\n/).slice(1).forEach((line) => {
+    const match = line.match(/^"(\d{4}-\d{2}-\d{2})","(.*)"$/)
+    if (match) holidays[match[1]] = match[2]
+  })
+  return holidays
+}
+
 const escapeHtml = (value = '') => String(value)
   .replaceAll('&', '&amp;')
   .replaceAll('<', '&lt;')
@@ -316,6 +330,7 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [scheduleMap, setScheduleMap] = useState({})
+  const [holidayMap, setHolidayMap] = useState({})
   const [sleepRecord, setSleepRecord] = useState(null)
   const [previousSleepRecord, setPreviousSleepRecord] = useState(null)
   const [sleepRecordMap, setSleepRecordMap] = useState({})
@@ -444,6 +459,26 @@ function App() {
       setSession(user)
     })
     return () => unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    fetch('/cao-syukujitsu-data.csv')
+      .then((response) => {
+        if (!response.ok) throw new Error(`休日データの読み込みに失敗しました: ${response.status}`)
+        return response.text()
+      })
+      .then((csvText) => {
+        if (!cancelled) setHolidayMap(parseHolidayCsv(csvText))
+      })
+      .catch((error) => {
+        console.warn('休日データの読み込みに失敗しました:', error)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -1012,18 +1047,22 @@ function App() {
     return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
   }, [scheduleMap, selectedKey])
 
+  const selectedHolidayName = holidayMap[selectedKey] || ''
+
   const currentHour = new Date(nowTick).getHours()
   const isWeekend = selectedDate.getDay() === 0 || selectedDate.getDay() === 6
 
   const timeGreeting = useMemo(() => {
     const adjustedHour = currentHour < 5 ? currentHour + 24 : currentHour
-    const option = isWeekend
+    const option = selectedHolidayName
+      ? holidayGreetingOption
+      : isWeekend
       ? weekendGreetingOption
       : timeGreetingOptions.find(({ startHour, endHour }) => adjustedHour >= startHour && adjustedHour < endHour)
     const message = option.messages[Math.floor(Math.random() * option.messages.length)]
-    const scheduleMessage = isWeekend ? '' : selectedItems.length > 0 ? ` 選択日の予定は${selectedItems.length}件です。` : ' 選択日の予定はありません。'
+    const scheduleMessage = isWeekend || selectedHolidayName ? '' : selectedItems.length > 0 ? ` 選択日の予定は${selectedItems.length}件です。` : ' 選択日の予定はありません。'
     return { Icon: option.Icon, message: `${message}${scheduleMessage}` }
-  }, [currentHour, isWeekend, selectedItems.length])
+  }, [currentHour, isWeekend, selectedHolidayName, selectedItems.length])
 
   const recentSleepSummary = useMemo(() => {
     const records = Array.from({ length: 3 }, (_, index) => {
@@ -3941,6 +3980,7 @@ function App() {
                             const isCurrentMonth = date.getMonth() === monthViewDate.getMonth()
                             const isToday = dateKey === formatDateKey(new Date())
                             const isSelected = dateKey === selectedKey
+                            const isHoliday = Boolean(holidayMap[dateKey])
                             const items = scheduleMap[dateKey] || []
                             const totalCount = items.length
                             const incompleteCount = items.filter((item) => item.completed !== true).length
@@ -3961,7 +4001,7 @@ function App() {
                                   opacity: isCurrentMonth ? 1 : 0.35,
                                 }}
                               >
-                                <span style={styles.monthCalendarDayNumber}>{date.getDate()}</span>
+                                <span style={{ ...styles.monthCalendarDayNumber, color: isHoliday ? '#dc2626' : '#1e293b' }}>{date.getDate()}</span>
                                 <span style={styles.monthCalendarDayCount}>
                                   {totalCount > 0 && (
                                     isCountAbbreviated ? '…/…' : isAllCompleted ? (
@@ -4039,6 +4079,7 @@ function App() {
                   const isCountAbbreviated = incompleteCount >= 100 || totalCount >= 100
                   const isSelected = key === selectedKey
                   const isToday = key === formatDateKey(new Date())
+                  const isHoliday = Boolean(holidayMap[key])
 
                   return (
                     <button
@@ -4053,10 +4094,10 @@ function App() {
                         boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.16)' : '0 2px 6px rgba(15,23,42,0.04)',
                       }}
                     >
-                      <span className="week-day-label" style={{ ...styles.dayLabel, color: date.getDay() === 0 ? '#dc2626' : date.getDay() === 6 ? '#2563eb' : '#475569' }}>
+                      <span className="week-day-label" style={{ ...styles.dayLabel, color: isHoliday || date.getDay() === 0 ? '#dc2626' : date.getDay() === 6 ? '#2563eb' : '#475569' }}>
                         {dayNames[date.getDay()]}
                       </span>
-                      <strong className="week-day-number" style={styles.dayNumber}>{date.getDate()}</strong>
+                      <strong className="week-day-number" style={{ ...styles.dayNumber, color: isHoliday ? '#dc2626' : '#0f172a' }}>{date.getDate()}</strong>
                       <span style={styles.dayMeta}>
                         {totalCount > 0 && (
                           isCountAbbreviated ? '…/…' : isAllCompleted ? (
@@ -4114,7 +4155,9 @@ function App() {
               <div className="selected-header" style={styles.selectedHeader}>
                 <div>
                   <div className="selected-caption" style={styles.selectedCaption}>選択中の日</div>
-                  <h2 className="selected-date-text" style={styles.selectedDateText}>{formatWeekTitle(selectedDate)}</h2>
+                  <h2 className="selected-date-text" style={{ ...styles.selectedDateText, color: selectedHolidayName ? '#dc2626' : '#0f172a' }}>
+                    {formatWeekTitle(selectedDate)}{selectedHolidayName ? ` ${selectedHolidayName}` : ''}
+                  </h2>
                 </div>
                 <div style={styles.selectedHeaderActions}>
                   {formatDateKey(selectedDate) !== formatDateKey(new Date()) && (
@@ -4298,34 +4341,6 @@ function App() {
                             )}
                           </div>
                           <div className="schedule-actions-mobile" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                            <button
-                              type="button"
-                              className="schedule-move-btn"
-                              style={{ ...styles.moveButton, ...(isFirst || item.completed ? styles.moveButtonDisabled : {}) }}
-                              disabled={isFirst || item.completed}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                moveScheduleItem(item, 'up')
-                              }}
-                              aria-label="上に移動"
-                              title="上に移動"
-                            >
-                              <ChevronUp size={16} />
-                            </button>
-                            <button
-                              type="button"
-                              className="schedule-move-btn"
-                              style={{ ...styles.moveButton, ...(isLast || item.completed ? styles.moveButtonDisabled : {}) }}
-                              disabled={isLast || item.completed}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                moveScheduleItem(item, 'down')
-                              }}
-                              aria-label="下に移動"
-                              title="下に移動"
-                            >
-                              <ChevronDown size={16} />
-                            </button>
                             <button
                               type="button"
                               className="schedule-complete-btn"
@@ -5787,11 +5802,6 @@ const styles = {
     padding: '4px 2px',
     cursor: 'pointer',
   },
-  monthCalendarNav: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-  },
   monthCalendarNavTitle: {
     fontSize: '14px',
     fontWeight: 600,
@@ -5886,20 +5896,20 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '28px',
-    height: '28px',
-    border: '1px solid #d9e2f2',
-    borderRadius: '7px',
-    background: '#ffffff',
-    color: '#334155',
+    width: '34px',
+    height: '34px',
+    border: '1px solid #bfdbfe',
+    borderRadius: '8px',
+    background: '#eff6ff',
+    color: '#2563eb',
     cursor: 'pointer',
     padding: 0,
   },
   searchNavMonthText: {
-    fontSize: '13px',
+    fontSize: '18px',
     fontWeight: 700,
-    color: '#1e293b',
-    minWidth: '76px',
+    color: '#1e3a8a',
+    minWidth: '128px',
     textAlign: 'center',
   },
   searchClearButton: {
@@ -6316,26 +6326,6 @@ const styles = {
   lowPriorityBadge: {
     background: '#e0f2fe',
     color: '#0369a1',
-  },
-  moveButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '32px',
-    height: '32px',
-    borderRadius: '8px',
-    border: '1px solid #d9e2f2',
-    background: '#ffffff',
-    color: '#334155',
-    cursor: 'pointer',
-    padding: 0,
-  },
-  moveButtonDisabled: {
-    opacity: 0.35,
-    cursor: 'not-allowed',
-    background: '#f1f5f9',
-    borderColor: '#e2e8f0',
-    color: '#94a3b8',
   },
   completeButton: {
     display: 'flex',
