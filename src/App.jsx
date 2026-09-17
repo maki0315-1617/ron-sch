@@ -779,12 +779,8 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    clearNotificationBadge().catch((error) => {
-      console.error('起動時のバッジクリアエラー:', error)
-    })
-  }, [])
+  // 起動時に強制クリアすると、バックグラウンドで溜まったSW側の実カウントごと消えてバッジが出なくなるため、
+  // 再同期は session 確立後の requestBadgeCount（下部の useEffect）に任せる
 
   const enableNotifications = async () => {
     if (!session) return
