@@ -719,8 +719,9 @@ function App() {
 
   const getNotificationRegistration = async () => {
     if (notificationRegistrationRef.current) return notificationRegistrationRef.current
-    // キャッシュ用SWとFCM通知用SWを統合済みのため、ルートスコープの service-worker.js を登録する
-    const registration = await navigator.serviceWorker.register('/service-worker.js')
+    const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+      scope: '/firebase-cloud-messaging-push-scope',
+    })
     notificationRegistrationRef.current = registration
     return registration
   }
@@ -729,6 +730,8 @@ function App() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
     try {
+      const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
+      if (!existing) return
       const registration = await navigator.serviceWorker.ready
       const targetWorker = navigator.serviceWorker.controller || registration.active
       if (targetWorker) {
@@ -764,6 +767,8 @@ function App() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
     try {
+      const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
+      if (!existing) return
       const registration = await navigator.serviceWorker.ready
       const targetWorker = navigator.serviceWorker.controller || registration.active
       if (targetWorker) {
@@ -774,8 +779,12 @@ function App() {
     }
   }
 
-  // 起動時に強制クリアすると、バックグラウンドで溜まったSW側の実カウントごと消えてバッジが出なくなるため、
-  // 再同期は session 確立後の requestBadgeCount（下部の useEffect）に任せる
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    clearNotificationBadge().catch((error) => {
+      console.error('起動時のバッジクリアエラー:', error)
+    })
+  }, [])
 
   const enableNotifications = async () => {
     if (!session) return
@@ -869,28 +878,6 @@ function App() {
       notificationToggleLockRef.current = false
     }
   }
-
-  useEffect(() => {
-    if (!session || typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
-    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-
-    let cancelled = false
-
-    // 旧バージョンのFCM専用SW(ページを制御せずiOSでプッシュ配信が不安定だった)を使っていた端末を、
-    // 購読を失わせずに新しい統合SW宛てのトークンへ自動で切り替える
-    navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope').then(async (legacy) => {
-      if (!legacy || cancelled) return
-      await legacy.unregister().catch(() => {})
-      if (cancelled) return
-      await enableNotifications().catch((error) => {
-        console.error('通知の自動再登録エラー:', error)
-      })
-    }).catch(() => {})
-
-    return () => {
-      cancelled = true
-    }
-  }, [session?.uid])
 
   const notificationHelpSteps = [
     '鈴ボタンを押して通知をONにします。',
@@ -987,10 +974,13 @@ function App() {
     navigator.serviceWorker.addEventListener('message', handleMessage)
 
     const requestBadgeCount = () => {
-      navigator.serviceWorker.ready.then((registration) => {
-        if (registration.active) {
-          registration.active.postMessage({ type: 'get-badge-count' })
-        }
+      navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope').then((existing) => {
+        if (!existing) return
+        return navigator.serviceWorker.ready.then((registration) => {
+          if (registration.active) {
+            registration.active.postMessage({ type: 'get-badge-count' })
+          }
+        })
       }).catch((error) => {
         console.error('通知件数取得エラー:', error)
       })
