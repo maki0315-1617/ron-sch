@@ -24,7 +24,9 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Coffee, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, Moon, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Sunrise, Sunset, Trash2, TrendingUp, UserX, Utensils, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
+import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
+import { computeFatigueScore, fatigueBandColors } from './fatigueScore'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -70,47 +72,14 @@ const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
 
-const timeGreetingOptions = [
-  { startHour: 5, endHour: 11, Icon: Sunrise, messages: ['おはようございます。今日の予定を確認しましょう。', 'おはようございます。気持ちよく一日を始めましょう。', '朝の光を浴びて、ゆっくりペースを整えましょう。', 'まずは大切な予定を一つ確認して始めましょう。'] },
-  { startHour: 11, endHour: 14, Icon: Utensils, messages: ['ランチの時間です。少し休憩しましょう。', 'お昼です。午後に備えてひと息つきましょう。', '食事と休憩で、午後のための力を蓄えましょう。', '画面から少し離れて、目も休ませましょう。'] },
-  { startHour: 14, endHour: 17, Icon: Coffee, messages: ['一息入れましょう。水分補給も忘れずに。', '午後の休憩時間です。少し気分を切り替えましょう。', '集中が続いたら、短い休憩を予定に入れましょう。', '肩の力を抜いて、次の予定へ進みましょう。'] },
-  { startHour: 17, endHour: 21, Icon: Sunset, messages: ['お疲れさまです。残りの予定を整えましょう。', '夕方です。今日できたことを確認しましょう。', '無理のない範囲で、今日の予定を締めくくりましょう。', '明日に持ち越すことも、立派な予定の整理です。'] },
-  { startHour: 21, endHour: 29, Icon: Moon, messages: ['今日もお疲れさまでした。ゆっくり休みましょう。', '夜の時間です。明日の予定を軽く確認しましょう。', '今夜は早めに休む準備を始めましょう。', '画面を見る時間を少し減らして、心を落ち着けましょう。'] },
-]
-
-const weekendGreetingOption = {
-  Icon: Coffee,
-  messages: ['週末です。予定の合間に、ゆっくり休む時間を取りましょう。', '土日は心と体を整える日です。無理のない予定にしましょう。', '休憩も大切な予定です。好きなことをして過ごしましょう。', '今週もお疲れさまでした。ゆったりした時間を楽しみましょう。'],
-}
-
-const holidayGreetingOption = {
-  Icon: Coffee,
-  messages: ['祝日です。予定の合間に、ゆっくり休む時間を取りましょう。', '今日は祝日です。無理のないペースで過ごしましょう。', '祝日の時間を大切にして、心と体を整えましょう。', '今日は少し余白をつくって、ゆったり過ごしましょう。'],
-}
-
 const isSleepShortcutLaunch = () => {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('sleep') === '1'
 }
 
-const formatDateKey = (date) => {
-  const d = new Date(date)
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 const formatCurrentTime = () => {
   const now = new Date()
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-}
-
-const getSleepDurationMinutes = (record, previousRecord) => {
-  if (!record?.wakeTime || !previousRecord?.bedtime) return null
-  let minutes = parseTimeValue(record.wakeTime) - parseTimeValue(previousRecord.bedtime)
-  if (minutes <= 0) minutes += 24 * 60
-  return minutes
 }
 
 const sleepAdviceByLevel = {
@@ -130,19 +99,6 @@ const sleepAdviceByLevel = {
     emoji: '🛌',
     messages: ['ロン君です。長めに休めています。体調を確認しながら過ごしましょう。', 'よく眠れていますね。ロン君と一緒に生活リズムも意識してみましょう。', '十分な休息です。ロン君も安心しています。気持ちよく始めましょう。', 'ロン君から元気をお届けします。今日は朝の光を浴びて活動しましょう。', 'しっかり休めています。ロン君と、昼寝は短めにして夜へつなげましょう。', 'たくさん眠れましたね。ロン君と体調を確認しながら、ゆったり過ごしましょう。'],
   },
-}
-
-const getSleepAdviceLevel = (averageMinutes) => {
-  if (averageMinutes === null) return null
-  if (averageMinutes <= 5 * 60) return 'short'
-  if (averageMinutes <= 7 * 60) return 'moderate'
-  if (averageMinutes <= 8 * 60) return 'good'
-  return 'long'
-}
-
-const parseTimeValue = (time = '09:00') => {
-  const [hourText = '9', minuteText = '0'] = String(time).split(':')
-  return Number(hourText || 0) * 60 + Number(minuteText || 0)
 }
 
 const isTimeOverlap = (time1, endTime1, time2, endTime2) => {
@@ -188,12 +144,6 @@ const isRelatablePreviousSchedule = (candidate, selected) => {
 }
 
 const relationKeyFromItem = (item) => `${item.date}_${item.id}`
-
-const addDays = (date, amount) => {
-  const next = new Date(date)
-  next.setDate(next.getDate() + amount)
-  return next
-}
 
 const getMonthCalendarDays = (monthDate) => {
   const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1)
@@ -1117,20 +1067,14 @@ function App() {
 
   const selectedHolidayName = holidayMap[selectedKey] || ''
 
-  const currentHour = new Date(nowTick).getHours()
-  const isWeekend = selectedDate.getDay() === 0 || selectedDate.getDay() === 6
+  const selectedIsToday = useMemo(() => formatDateKey(selectedDate) === formatDateKey(new Date()), [selectedDate])
 
-  const timeGreeting = useMemo(() => {
-    const adjustedHour = currentHour < 5 ? currentHour + 24 : currentHour
-    const option = selectedHolidayName
-      ? holidayGreetingOption
-      : isWeekend
-      ? weekendGreetingOption
-      : timeGreetingOptions.find(({ startHour, endHour }) => adjustedHour >= startHour && adjustedHour < endHour)
-    const message = option.messages[Math.floor(Math.random() * option.messages.length)]
-    const scheduleMessage = isWeekend || selectedHolidayName ? '' : selectedItems.length > 0 ? ` 選択日の予定は${selectedItems.length}件です。` : ' 選択日の予定はありません。'
-    return { Icon: option.Icon, message: `${message}${scheduleMessage}` }
-  }, [currentHour, isWeekend, selectedHolidayName, selectedItems.length])
+  const fatigue = useMemo(
+    () => computeFatigueScore(selectedDate, sleepRecordMap, scheduleMap, { isToday: selectedIsToday }),
+    [selectedDate, sleepRecordMap, scheduleMap, selectedIsToday]
+  )
+
+  const fatigueColors = fatigueBandColors[fatigue.band] || fatigueBandColors.normal
 
   const recentSleepSummary = useMemo(() => {
     const records = Array.from({ length: 3 }, (_, index) => {
@@ -1148,13 +1092,9 @@ function App() {
     }
   }, [selectedDate, sleepRecordMap])
 
-  const sleepAdvice = useMemo(() => {
+  const sleepLevelEmoji = useMemo(() => {
     if (!recentSleepSummary.level) return null
-    const advice = sleepAdviceByLevel[recentSleepSummary.level]
-    return {
-      emoji: advice.emoji,
-      message: advice.messages[Math.floor(Math.random() * advice.messages.length)],
-    }
+    return sleepAdviceByLevel[recentSleepSummary.level].emoji
   }, [recentSleepSummary.level])
 
   const formatSleepDuration = (minutes) => {
@@ -4239,9 +4179,33 @@ function App() {
                 </div>
               </div>
 
-              <div style={styles.timeGreeting} role="status">
-                <timeGreeting.Icon size={17} aria-hidden="true" />
-                <span>{timeGreeting.message}</span>
+              <div
+                style={{
+                  ...styles.fatigueStatus,
+                  borderLeftColor: fatigueColors.border,
+                  background: fatigueColors.background,
+                  color: fatigueColors.color,
+                }}
+                role="status"
+                aria-label={`${fatigue.dayLabel}の疲れ ${fatigue.bandLabel} スコア${fatigue.score}`}
+              >
+                <div style={styles.fatigueStatusMain}>
+                  <strong>
+                    {fatigue.dayLabel}の疲れ: {fatigue.bandLabel}（{fatigue.score}）
+                  </strong>
+                  <span style={styles.fatigueStatusNoteInline}>未完了の予定ベース</span>
+                </div>
+                <div style={styles.fatigueStatusMeta}>
+                  未完了 {fatigue.breakdown.schedule.itemCount}件
+                  {' · '}
+                  睡眠 {fatigue.breakdown.sleep.points}/{fatigue.breakdown.sleep.max}
+                  {' · '}
+                  予定 {fatigue.breakdown.schedule.points}/{fatigue.breakdown.schedule.max}
+                </div>
+                <p style={styles.fatigueStatusHint}>{fatigue.primaryHint}</p>
+                {sleepRecordEnabled && fatigue.breakdown.sleep.lastNightMinutes === null && recentSleepSummary.recordedDays === 0 && (
+                  <div style={styles.fatigueStatusFootnote}>睡眠記録を入れると、疲れの見立てがより正確になります。</div>
+                )}
               </div>
 
               {sleepRecordEnabled && <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
@@ -4309,11 +4273,14 @@ function App() {
                 </div>
                 <aside className="sleep-summary" style={styles.sleepSummary} aria-label="最近3日間の平均睡眠時間">
                   <div style={styles.sleepSummaryHeading}>最近3日間の平均</div>
-                  {sleepAdvice ? (
+                  {recentSleepSummary.level ? (
                     <>
-                      <div style={styles.sleepSummaryValue}>{formatSleepDuration(recentSleepSummary.averageMinutes)} <span style={styles.sleepSummaryEmoji}>{sleepAdvice.emoji}</span></div>
+                      <div style={styles.sleepSummaryValue}>
+                        {formatSleepDuration(recentSleepSummary.averageMinutes)}{' '}
+                        {sleepLevelEmoji && <span style={styles.sleepSummaryEmoji}>{sleepLevelEmoji}</span>}
+                      </div>
                       <div style={styles.sleepSummaryDays}>{recentSleepSummary.recordedDays}/3日を集計</div>
-                      <p style={styles.sleepSummaryMessage}>{sleepAdvice.message}</p>
+                      <div style={styles.sleepSummaryFootnote}>詳しいアドバイスは上の「疲れ」表示をご覧ください</div>
                     </>
                   ) : (
                     <div style={styles.sleepSummaryEmpty}>睡眠時間を保存すると表示します</div>
@@ -6089,17 +6056,39 @@ const styles = {
     fontSize: '26px',
     color: '#0f172a',
   },
-  timeGreeting: {
+  fatigueStatus: {
     display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
+    flexDirection: 'column',
+    gap: '4px',
     marginBottom: '10px',
-    padding: '8px 10px',
+    padding: '10px 12px',
     borderLeft: '3px solid #14b8a6',
-    background: '#f0fdfa',
-    color: '#115e59',
     fontSize: '13px',
     lineHeight: 1.45,
+  },
+  fatigueStatusMain: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    gap: '8px',
+  },
+  fatigueStatusNoteInline: {
+    fontSize: '11px',
+    fontWeight: 400,
+    opacity: 0.85,
+  },
+  fatigueStatusMeta: {
+    fontSize: '12px',
+    opacity: 0.9,
+  },
+  fatigueStatusHint: {
+    margin: '2px 0 0',
+    fontSize: '13px',
+  },
+  fatigueStatusFootnote: {
+    fontSize: '11px',
+    opacity: 0.85,
+    marginTop: '2px',
   },
   sleepRecordPanel: {
     display: 'grid',
@@ -6210,6 +6199,12 @@ const styles = {
     color: '#155e75',
     fontSize: '12px',
     lineHeight: 1.5,
+  },
+  sleepSummaryFootnote: {
+    margin: '6px 0 0',
+    color: '#64748b',
+    fontSize: '11px',
+    lineHeight: 1.4,
   },
   sleepSummaryEmpty: {
     marginTop: '5px',
