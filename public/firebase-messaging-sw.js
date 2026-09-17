@@ -129,9 +129,15 @@ const getNotificationTag = (payload) => {
   return `ron-sch-${base}-${bodyKey}`.slice(0, 200);
 };
 
-const hasVisibleAppClient = async () => {
-  const windowClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-  return windowClients.some((client) => client.visibilityState === 'visible');
+// Android 背面でも visibilityState が visible のままになることがあり、誤って SW 表示を止めないよう focus を見る
+const hasFocusedAppClient = async () => {
+  try {
+    const windowClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    return windowClients.some((client) => client.visibilityState === 'visible' && client.focused);
+  } catch (error) {
+    console.warn('フォーカス中クライアントの判定に失敗したため、通知を表示します:', error);
+    return false;
+  }
 };
 
 messaging.onBackgroundMessage((payload) => {
@@ -139,8 +145,8 @@ messaging.onBackgroundMessage((payload) => {
   const body = payload.data?.body || payload.notification?.body || '予定の開始時間です。';
 
   return (async () => {
-    // iOS 等では前面時も SW が動くことがあり、onMessage 側と二重表示になるため前面はページに任せる
-    if (await hasVisibleAppClient()) {
+    // 前面かつフォーカス中のみページ側 onMessage に任せる（iOS の二重表示対策。Android 背面は SW で表示）
+    if (await hasFocusedAppClient()) {
       return;
     }
 
