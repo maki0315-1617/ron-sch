@@ -94,14 +94,40 @@ const clearBadgeCount = async () => {
   });
 };
 
+// iOS ホーム画面 PWA は self.navigator、Chrome 等は registration に載る場合がある
+const setAppIconBadge = async (count) => {
+  const safeCount = Math.max(Number(count) || 0, 0);
+  if (safeCount <= 0) {
+    await clearAppIconBadge();
+    return;
+  }
+  if (self.navigator && 'setAppBadge' in self.navigator) {
+    await self.navigator.setAppBadge(safeCount);
+    return;
+  }
+  if ('setAppBadge' in self.registration) {
+    await self.registration.setAppBadge(safeCount);
+  }
+};
+
+const clearAppIconBadge = async () => {
+  if (self.navigator && 'clearAppBadge' in self.navigator) {
+    await self.navigator.clearAppBadge();
+    return;
+  }
+  if ('clearAppBadge' in self.registration) {
+    await self.registration.clearAppBadge();
+  }
+};
+
 messaging.onBackgroundMessage((payload) => {
   const title = payload.data?.title || payload.notification?.title || 'スケジュール通知';
   const body = payload.data?.body || payload.notification?.body || '予定の開始時間です。';
 
   return (async () => {
     const badgeCount = await incrementBadgeCount().catch(() => null);
-    if (badgeCount !== null && 'setAppBadge' in self.registration) {
-      await self.registration.setAppBadge(badgeCount).catch(() => {});
+    if (badgeCount !== null) {
+      await setAppIconBadge(badgeCount).catch(() => {});
     }
 
     await self.registration.showNotification(title, {
@@ -117,10 +143,10 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil((async () => {
     const badgeCount = await decrementBadgeCount().catch(() => 0);
-    if ('setAppBadge' in self.registration && badgeCount > 0) {
-      await self.registration.setAppBadge(badgeCount).catch(() => {});
-    } else if ('clearAppBadge' in self.registration) {
-      await self.registration.clearAppBadge().catch(() => {});
+    if (badgeCount > 0) {
+      await setAppIconBadge(badgeCount).catch(() => {});
+    } else {
+      await clearAppIconBadge().catch(() => {});
     }
 
     const clientList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
@@ -140,9 +166,7 @@ self.addEventListener('message', (event) => {
   if (event.data.type === 'clear-badge-count') {
     event.waitUntil((async () => {
       await clearBadgeCount().catch(() => 0);
-      if ('clearAppBadge' in self.registration) {
-        await self.registration.clearAppBadge().catch(() => {});
-      }
+      await clearAppIconBadge().catch(() => {});
       // 呼び出し元は既に0を把握しているため返信しない（返信するとping-pongで無限ループになる）
     })());
     return;
@@ -152,10 +176,10 @@ self.addEventListener('message', (event) => {
     event.waitUntil((async () => {
       const safeCount = Math.max(Number(event.data.count) || 0, 0);
       const badgeCount = await writeBadgeCount(safeCount).catch(() => safeCount);
-      if (badgeCount > 0 && 'setAppBadge' in self.registration) {
-        await self.registration.setAppBadge(badgeCount).catch(() => {});
-      } else if ('clearAppBadge' in self.registration) {
-        await self.registration.clearAppBadge().catch(() => {});
+      if (badgeCount > 0) {
+        await setAppIconBadge(badgeCount).catch(() => {});
+      } else {
+        await clearAppIconBadge().catch(() => {});
       }
       // 呼び出し元は既にこの件数を把握しているため返信しない（返信するとping-pongで無限ループになる）
     })());
