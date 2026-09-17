@@ -27,6 +27,7 @@ import {
 import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import { computeFatigueScore, fatigueBandColors } from './fatigueScore'
+import { buildFatigueGuideHtml } from './fatigueGuideDocument'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -44,6 +45,8 @@ const helpContent = {
     note: 'なお、誹謗中傷のメールはご遠慮願います。',
     close: '閉じる',
     guideButton: '利用ガイドPDFを開く',
+    fatigueGuideButton: '「疲れ」判定の説明PDFを開く',
+    fatigueDisclaimer: '「疲れ」のスコアとメッセージは、睡眠記録と予定から算出した生活・予定管理の目安です。医療上の診断・治療・服薬判断の代わりにはなりません。',
     prButton: 'アプリ紹介・PRスライドPDFをダウンロード',
     shortcutButton: 'iPhone用「睡眠記録」ショートカットを取得',
     about: '『ロン君のスケジュール』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。',
@@ -58,6 +61,8 @@ const helpContent = {
     note: 'Please avoid sending abusive or defamatory emails.',
     close: 'Close',
     guideButton: 'Open User Guide (PDF)',
+    fatigueGuideButton: 'Open fatigue score guide (PDF)',
+    fatigueDisclaimer: 'The fatigue score is a planning guide from sleep and schedule data. It is not medical diagnosis, treatment, or medication advice.',
     prButton: 'Download App Introduction / PR Slides',
     shortcutButton: 'Get the “Sleep Records” Shortcut for iPhone',
     about: 'Ron’s Schedule is a simple planning app designed to make daily scheduling easier and help you stay consistent over time.',
@@ -2895,7 +2900,7 @@ function App() {
               '時刻を手動で変更した場合は「保存」を押して記録します。',
               '睡眠記録の見出しを押すと、入力欄と詳細を折りたためます。初期状態は開いた状態です。',
               '設定メニューの「睡眠記録表示」で、睡眠記録欄の表示・非表示を切り替えられます。非表示にしても保存済みデータは削除されません。',
-              '直近3日間の平均睡眠時間と、睡眠時間に応じたロン君の絵文字・アドバイスを確認できます。',
+              '直近3日間の平均睡眠時間を確認できます。選択日の下の「疲れ」表示の詳細は、ヘルプの「疲れ」判定説明PDFを参照してください。',
               'メニューの「睡眠記録PDF」から、選択中の月の一覧表と日別グラフを出力できます。',
             ],
           },
@@ -2994,7 +2999,7 @@ function App() {
               'After changing a time manually, tap “Save” to store the edited value.',
               'Tap the Sleep Records heading to collapse or expand the input and details. It is expanded by default.',
               'Use “Show Sleep Records” in Settings to show or hide the sleep record panel. Hiding it does not delete saved data.',
-              'Review the average sleep time for the most recent three days, along with a Ron-style emoji and advice based on the sleep duration.',
+              'Review the average sleep time for the most recent three days. See Help → fatigue score guide (PDF) for how the fatigue display below the selected date is calculated.',
               'From the menu, open “Sleep Records PDF” to export a table and a daily sleep-duration chart for the selected month.',
             ],
           },
@@ -3272,6 +3277,28 @@ function App() {
         </body>
       </html>`
 
+    const blobUrl = URL.createObjectURL(new Blob([guideHtml], { type: 'text/html' }))
+    setTimeout(() => {
+      if (reportWindow.closed) {
+        URL.revokeObjectURL(blobUrl)
+        return
+      }
+      reportWindow.location.href = blobUrl
+      reportWindow.focus()
+    }, 0)
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
+  const openFatigueGuidePdf = (lang = 'ja') => {
+    const reportWindow = window.open('', '_blank', 'width=1000,height=750')
+    if (!reportWindow) {
+      const alertText = lang === 'en'
+        ? 'The fatigue guide could not be opened. Please allow pop-ups and try again.'
+        : '「疲れ」判定の説明を開けませんでした。ポップアップを許可してください。'
+      alert(alertText)
+      return
+    }
+    const guideHtml = buildFatigueGuideHtml(lang)
     const blobUrl = URL.createObjectURL(new Blob([guideHtml], { type: 'text/html' }))
     setTimeout(() => {
       if (reportWindow.closed) {
@@ -4203,6 +4230,14 @@ function App() {
                   予定 {fatigue.breakdown.schedule.points}/{fatigue.breakdown.schedule.max}
                 </div>
                 <p style={styles.fatigueStatusHint}>{fatigue.primaryHint}</p>
+                <div style={styles.fatigueMedicalNote}>
+                  {helpLang === 'en'
+                    ? 'Not a substitute for medical diagnosis or treatment.'
+                    : '※医療上の診断・治療の代わりにはなりません。'}
+                  <button type="button" style={styles.fatigueGuideLinkButton} onClick={() => openFatigueGuidePdf(helpLang)}>
+                    {helpLang === 'en' ? 'Score guide (PDF)' : '判定の説明（PDF）'}
+                  </button>
+                </div>
                 {sleepRecordEnabled && fatigue.breakdown.sleep.lastNightMinutes === null && recentSleepSummary.recordedDays === 0 && (
                   <div style={styles.fatigueStatusFootnote}>睡眠記録を入れると、疲れの見立てがより正確になります。</div>
                 )}
@@ -4858,6 +4893,14 @@ function App() {
                     onClick={() => openUserGuidePdf(helpLang)}
                   >
                     {helpContent[helpLang].guideButton}
+                  </button>
+                  <p style={styles.helpFatigueDisclaimer}>{helpContent[helpLang].fatigueDisclaimer}</p>
+                  <button
+                    type="button"
+                    style={{ ...styles.secondaryButton, width: '100%', borderColor: '#99f6e4', background: '#f0fdfa', color: '#0f766e' }}
+                    onClick={() => openFatigueGuidePdf(helpLang)}
+                  >
+                    {helpContent[helpLang].fatigueGuideButton}
                   </button>
                   <button
                     type="button"
@@ -6090,6 +6133,23 @@ const styles = {
     opacity: 0.85,
     marginTop: '2px',
   },
+  fatigueMedicalNote: {
+    fontSize: '11px',
+    lineHeight: 1.5,
+    marginTop: '4px',
+    opacity: 0.9,
+  },
+  fatigueGuideLinkButton: {
+    marginLeft: '6px',
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    color: 'inherit',
+    textDecoration: 'underline',
+    cursor: 'pointer',
+    fontSize: '11px',
+    fontWeight: 600,
+  },
   sleepRecordPanel: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) minmax(220px, 280px)',
@@ -6921,6 +6981,16 @@ const styles = {
     fontSize: '14px',
     textDecoration: 'underline',
     wordBreak: 'break-all',
+  },
+  helpFatigueDisclaimer: {
+    margin: 0,
+    fontSize: '12px',
+    lineHeight: 1.55,
+    color: '#92400e',
+    background: '#fffbeb',
+    border: '1px solid #fcd34d',
+    borderRadius: '8px',
+    padding: '8px 10px',
   },
   helpNote: {
     margin: 0,

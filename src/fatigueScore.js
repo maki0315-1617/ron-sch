@@ -271,3 +271,14 @@ export const fatigueBandColors = {
   tired: { border: '#f59e0b', background: '#fffbeb', color: '#92400e' },
   heavy: { border: '#ef4444', background: '#fef2f2', color: '#991b1b' },
 }
+
+/** ヘルプPDFなどユーザー向け説明用（ロジックと同期） */
+export const fatigueScoringReference = {
+  bands: FATIGUE_CONFIG.bands,
+  targetSleepHours: FATIGUE_CONFIG.targetSleepMinutes / 60,
+  recentSleepDays: FATIGUE_CONFIG.recentSleepDays,
+  maxSleepPoints: FATIGUE_CONFIG.maxSleepPoints,
+  maxSchedulePoints: FATIGUE_CONFIG.maxSchedulePoints,
+  minGapMinutes: FATIGUE_CONFIG.minGapMinutes,
+  eveningStartHour: FATIGUE_CONFIG.eveningStartMinutes / 60,
+}
