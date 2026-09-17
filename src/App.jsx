@@ -870,6 +870,28 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!session || typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+
+    let cancelled = false
+
+    // 旧バージョンのFCM専用SW(ページを制御せずiOSでプッシュ配信が不安定だった)を使っていた端末を、
+    // 購読を失わせずに新しい統合SW宛てのトークンへ自動で切り替える
+    navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope').then(async (legacy) => {
+      if (!legacy || cancelled) return
+      await legacy.unregister().catch(() => {})
+      if (cancelled) return
+      await enableNotifications().catch((error) => {
+        console.error('通知の自動再登録エラー:', error)
+      })
+    }).catch(() => {})
+
+    return () => {
+      cancelled = true
+    }
+  }, [session?.uid])
+
   const notificationHelpSteps = [
     '鈴ボタンを押して通知をONにします。',
     'ブラウザの確認が出たら「許可」を選びます。',
