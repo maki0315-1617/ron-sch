@@ -300,6 +300,15 @@ const AGGREGATION_MAX_DAYS = 31
 const notificationTokenKey = (userId) => `ron-sch-fcm-token:${userId}`
 const FCM_SW_SCOPE = '/firebase-cloud-messaging-push-scope'
 
+const buildPushNotificationTag = (payload) => {
+  const data = payload?.data || {}
+  const base = data.scheduleItemId && data.date && data.time
+    ? `${data.scheduleItemId}-${data.date}-${data.time}`
+    : `${data.date || 'd'}-${data.time || 't'}`
+  const bodyKey = data.body ? String(data.body).slice(0, 48) : 'body'
+  return `ron-sch-${base}-${bodyKey}`.slice(0, 200)
+}
+
 const supportsPwaWebPush = () => {
   if (typeof window === 'undefined') return false
   if (Capacitor.isNativePlatform()) return false
@@ -467,6 +476,7 @@ function App() {
   const lastCardTapRef = useRef({ id: null, time: 0 })
   const notificationRegistrationRef = useRef(null)
   const notificationToggleLockRef = useRef(false)
+  const lastForegroundPushRef = useRef({ tag: '', at: 0 })
   const weekSwipeRef = useRef(null)
   const weekTouchRef = useRef(null)
   const daySwipeRef = useRef(null)
@@ -965,12 +975,20 @@ function App() {
     let timerId = null
 
     const attachForegroundListener = async () => {
+      unsubscribe()
       unsubscribe = await subscribeForegroundNotifications((payload) => {
         if (!active) return
         if (Notification.permission !== 'granted') return
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
 
         const title = payload.data?.title || payload.notification?.title || 'スケジュール通知'
         const body = payload.data?.body || payload.notification?.body || '開始時間になった予定があります。'
+        const tag = buildPushNotificationTag(payload)
+        const now = Date.now()
+        const last = lastForegroundPushRef.current
+        if (last.tag === tag && now - last.at < 8000) return
+        lastForegroundPushRef.current = { tag, at: now }
+
         setNotificationBadgeCount((current) => {
           const next = current + 1
           setBrowserBadge(next).catch((error) => {
@@ -978,7 +996,7 @@ function App() {
           })
           return next
         })
-        const notification = new Notification(title, { body })
+        const notification = new Notification(title, { body, tag })
         notification.onclick = () => {
           setNotificationBadgeCount((current) => {
             const next = Math.max(current - 1, 0)

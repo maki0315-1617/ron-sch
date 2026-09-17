@@ -120,11 +120,30 @@ const clearAppIconBadge = async () => {
   }
 };
 
+const getNotificationTag = (payload) => {
+  const data = payload?.data || {};
+  const base = data.scheduleItemId && data.date && data.time
+    ? `${data.scheduleItemId}-${data.date}-${data.time}`
+    : `${data.date || 'd'}-${data.time || 't'}`;
+  const bodyKey = data.body ? String(data.body).slice(0, 48) : 'body';
+  return `ron-sch-${base}-${bodyKey}`.slice(0, 200);
+};
+
+const hasVisibleAppClient = async () => {
+  const windowClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+  return windowClients.some((client) => client.visibilityState === 'visible');
+};
+
 messaging.onBackgroundMessage((payload) => {
   const title = payload.data?.title || payload.notification?.title || 'スケジュール通知';
   const body = payload.data?.body || payload.notification?.body || '予定の開始時間です。';
 
   return (async () => {
+    // iOS 等では前面時も SW が動くことがあり、onMessage 側と二重表示になるため前面はページに任せる
+    if (await hasVisibleAppClient()) {
+      return;
+    }
+
     const badgeCount = await incrementBadgeCount().catch(() => null);
     if (badgeCount !== null) {
       await setAppIconBadge(badgeCount).catch(() => {});
@@ -134,6 +153,8 @@ messaging.onBackgroundMessage((payload) => {
       body,
       icon: '/pwa-192.png',
       badge: '/pwa-192.png',
+      tag: getNotificationTag(payload),
+      renotify: true,
       data: payload.data || {},
     });
   })();
