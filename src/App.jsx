@@ -333,6 +333,41 @@ const requestMessagingBadgeCount = () =>
     console.error('通知件数取得エラー:', error)
   })
 
+const waitForMessagingServiceWorkerActive = (registration, timeoutMs = 15000) => {
+  if (registration.active) return Promise.resolve(registration.active)
+
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error('FCM Service Worker の起動がタイムアウトしました。'))
+    }, timeoutMs)
+
+    const finish = () => {
+      window.clearTimeout(timer)
+      if (registration.active) {
+        resolve(registration.active)
+        return
+      }
+      reject(new Error('FCM Service Worker を起動できませんでした。'))
+    }
+
+    const worker = registration.installing || registration.waiting
+    if (!worker) {
+      finish()
+      return
+    }
+
+    worker.addEventListener('statechange', () => {
+      if (worker.state === 'activated' || registration.active) {
+        finish()
+      }
+    })
+
+    if (worker.state === 'activated' || registration.active) {
+      finish()
+    }
+  })
+}
+
 const isIosDevice = () => typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent)
 
 const isStandaloneDisplay = () => {
@@ -833,6 +868,11 @@ function App() {
       getNotificationRegistration(),
       15000,
       'Service Worker の登録がタイムアウトしました。'
+    )
+    await withTimeout(
+      waitForMessagingServiceWorkerActive(registration),
+      15000,
+      'FCM Service Worker の起動がタイムアウトしました。'
     )
     const token = await withTimeout(
       getFcmToken(registration),

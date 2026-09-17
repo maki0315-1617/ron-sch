@@ -7,6 +7,7 @@ admin.initializeApp();
 const db = admin.firestore();
 const messaging = admin.messaging();
 const TIME_ZONE = 'Asia/Tokyo';
+const WEB_PUSH_APP_URL = (process.env.WEB_PUSH_APP_URL || 'https://ron-sch.vercel.app/').replace(/\/?$/, '/');
 
 const toDateAndTimeKey = (date) => {
   const dateParts = new Intl.DateTimeFormat('en-US', {
@@ -76,17 +77,21 @@ const resolveActiveTokens = async (userId, tokenCache) => {
       .map((tokenDoc) => ({
         id: tokenDoc.id,
         token: tokenDoc.data().token,
+        platform: tokenDoc.data().platform || 'web',
         updatedAt: tokenDoc.data().updated_at,
       }))
       .filter((entry) => Boolean(entry.token));
 
     tokenDocs.sort((a, b) => {
+      const aWeb = a.platform === 'web' ? 1 : 0;
+      const bWeb = b.platform === 'web' ? 1 : 0;
+      if (aWeb !== bWeb) return bWeb - aWeb;
       const aTime = a.updatedAt && typeof a.updatedAt.toMillis === 'function' ? a.updatedAt.toMillis() : 0;
       const bTime = b.updatedAt && typeof b.updatedAt.toMillis === 'function' ? b.updatedAt.toMillis() : 0;
       return bTime - aTime;
     });
 
-    const activeToken = tokenDocs.length > 0 ? tokenDocs[0].token : null;
+    const activeEntry = tokenDocs.length > 0 ? tokenDocs[0] : null;
     if (tokenDocs.length > 1) {
       const batch = db.batch();
       tokenDocs.slice(1).forEach((entry) => {
@@ -95,10 +100,88 @@ const resolveActiveTokens = async (userId, tokenCache) => {
       await batch.commit();
     }
 
-    tokenCache.set(userId, activeToken ? [activeToken] : []);
+    tokenCache.set(userId, activeEntry ? [{ token: activeEntry.token, docId: activeEntry.id }] : []);
   }
 
   return tokenCache.get(userId) || [];
+};
+
+const buildWebPushDataMessage = (tokenEntries, data) => ({
+  tokens: tokenEntries.map((entry) => entry.token),
+  data: Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [key, String(value)])
+  ),
+  webpush: {
+    headers: {
+      Urgency: 'high',
+    },
+    fcmOptions: {
+      link: WEB_PUSH_APP_URL,
+    },
+  },
+});
+
+const collectSendErrors = (result, tokenEntries) => {
+  const errors = [];
+  result.responses.forEach((response, index) => {
+    if (response.success || !response.error) return;
+    errors.push({
+      tokenSuffix: tokenEntries[index]?.token?.slice(-12) || '',
+      code: response.error.code || 'unknown',
+      message: response.error.message || 'Unknown error',
+    });
+  });
+  return errors;
+};
+
+const finalizeMulticastSend = async (logRef, result, tokenEntries, context) => {
+  const invalidEntries = [];
+  result.responses.forEach((response, index) => {
+    if (!response.success && shouldDeleteToken(response.error)) {
+      invalidEntries.push(tokenEntries[index]);
+    }
+  });
+
+  if (invalidEntries.length > 0) {
+    const batch = db.batch();
+    invalidEntries.forEach((entry) => {
+      if (entry?.docId) {
+        batch.delete(db.collection('fcm_tokens').doc(entry.docId));
+      }
+    });
+    await batch.commit();
+  }
+
+  const errorDetails = collectSendErrors(result, tokenEntries);
+  const status = result.failureCount > 0
+    ? (result.successCount > 0 ? 'partial' : 'failed')
+    : 'sent';
+
+  await logRef.set(
+    {
+      status,
+      success_count: result.successCount,
+      failure_count: result.failureCount,
+      error_details: errorDetails.slice(0, 3),
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  if (result.failureCount > 0) {
+    logger.warn('FCM Web Push の送信に失敗しました。', {
+      ...context,
+      webPushLink: WEB_PUSH_APP_URL,
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      errorDetails,
+    });
+  } else if (result.successCount > 0) {
+    logger.info('FCM Web Push を送信しました。', {
+      ...context,
+      successCount: result.successCount,
+    });
+  }
 };
 
 // 15分前・5分前リマインド通知を送信する（当日開始時刻の通知とは別ログIDで管理）
@@ -139,8 +222,8 @@ const sendReminderNotifications = async (scheduleSnapshot, dateKey, timeKey, off
       throw error;
     }
 
-    const tokens = await resolveActiveTokens(userId, tokenCache);
-    if (tokens.length === 0) {
+    const tokenEntries = await resolveActiveTokens(userId, tokenCache);
+    if (tokenEntries.length === 0) {
       await logRef.set(
         {
           status: 'skipped_no_token',
@@ -153,48 +236,22 @@ const sendReminderNotifications = async (scheduleSnapshot, dateKey, timeKey, off
 
     const title = item.title || '予定';
     const body = `${title} ${label}です`;
-    const message = {
-      tokens,
-      data: {
-        scheduleItemId: String(scheduleDoc.id),
-        date: dateKey,
-        time: scheduledTime,
-        title: String(title),
-        body: String(body),
-      },
-      webpush: {
-        fcmOptions: {
-          link: '/',
-        },
-      },
-    };
-
-    const result = await messaging.sendEachForMulticast(message);
-
-    const invalidTokens = [];
-    result.responses.forEach((response, index) => {
-      if (!response.success && shouldDeleteToken(response.error)) {
-        invalidTokens.push(tokens[index]);
-      }
+    const message = buildWebPushDataMessage(tokenEntries, {
+      scheduleItemId: scheduleDoc.id,
+      date: dateKey,
+      time: scheduledTime,
+      title,
+      body,
     });
 
-    if (invalidTokens.length > 0) {
-      const batch = db.batch();
-      invalidTokens.forEach((token) => {
-        batch.delete(db.collection('fcm_tokens').doc(`${userId}_${token}`));
-      });
-      await batch.commit();
-    }
-
-    await logRef.set(
-      {
-        status: result.failureCount > 0 ? 'partial' : 'sent',
-        success_count: result.successCount,
-        failure_count: result.failureCount,
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const result = await messaging.sendEachForMulticast(message);
+    await finalizeMulticastSend(logRef, result, tokenEntries, {
+      userId,
+      scheduleItemId: scheduleDoc.id,
+      dateKey,
+      timeKey,
+      kind: `reminder${offsetMinutes}`,
+    });
   }
 };
 
@@ -210,7 +267,7 @@ exports.sendScheduleStartNotifications = onSchedule(
     const { dateKey, timeKey } = toDateAndTimeKey(now);
     const graceMinutes = 5;
 
-    logger.info('スケジュール開始通知バッチを実行します。', { dateKey, timeKey });
+    logger.info('スケジュール開始通知バッチを実行します。', { dateKey, timeKey, webPushLink: WEB_PUSH_APP_URL });
 
     const scheduleSnapshot = await db
       .collection('schedule_items')
@@ -270,36 +327,8 @@ exports.sendScheduleStartNotifications = onSchedule(
         throw error;
       }
 
-      if (!tokenCache.has(userId)) {
-        const tokenSnapshot = await db.collection('fcm_tokens').where('user_id', '==', userId).get();
-        const tokenDocs = tokenSnapshot.docs
-          .map((tokenDoc) => ({
-            id: tokenDoc.id,
-            token: tokenDoc.data().token,
-            updatedAt: tokenDoc.data().updated_at,
-          }))
-          .filter((entry) => Boolean(entry.token));
-
-        tokenDocs.sort((a, b) => {
-          const aTime = a.updatedAt && typeof a.updatedAt.toMillis === 'function' ? a.updatedAt.toMillis() : 0;
-          const bTime = b.updatedAt && typeof b.updatedAt.toMillis === 'function' ? b.updatedAt.toMillis() : 0;
-          return bTime - aTime;
-        });
-
-        const activeToken = tokenDocs.length > 0 ? tokenDocs[0].token : null;
-        if (tokenDocs.length > 1) {
-          const batch = db.batch();
-          tokenDocs.slice(1).forEach((entry) => {
-            batch.delete(db.collection('fcm_tokens').doc(entry.id));
-          });
-          await batch.commit();
-        }
-
-        tokenCache.set(userId, activeToken ? [activeToken] : []);
-      }
-
-      const tokens = tokenCache.get(userId) || [];
-      if (tokens.length === 0) {
+      const tokenEntries = await resolveActiveTokens(userId, tokenCache);
+      if (tokenEntries.length === 0) {
         await logRef.set(
           {
             status: 'skipped_no_token',
@@ -312,50 +341,22 @@ exports.sendScheduleStartNotifications = onSchedule(
 
       const title = item.title || '予定';
       const body = `${title} 開始時間です`;
-      const message = {
-        tokens,
-        // notification フィールドを付けるとブラウザが自動表示し、
-        // SW 側の onBackgroundMessage(バッジ更新処理)が実行されなくなるため data-only にする
-        data: {
-          scheduleItemId: String(scheduleDoc.id),
-          date: dateKey,
-          time: scheduledTime,
-          title: String(title),
-          body: String(body),
-        },
-        webpush: {
-          fcmOptions: {
-            link: '/',
-          },
-        },
-      };
-
-      const result = await messaging.sendEachForMulticast(message);
-
-      const invalidTokens = [];
-      result.responses.forEach((response, index) => {
-        if (!response.success && shouldDeleteToken(response.error)) {
-          invalidTokens.push(tokens[index]);
-        }
+      const message = buildWebPushDataMessage(tokenEntries, {
+        scheduleItemId: scheduleDoc.id,
+        date: dateKey,
+        time: scheduledTime,
+        title,
+        body,
       });
 
-      if (invalidTokens.length > 0) {
-        const batch = db.batch();
-        invalidTokens.forEach((token) => {
-          batch.delete(db.collection('fcm_tokens').doc(`${userId}_${token}`));
-        });
-        await batch.commit();
-      }
-
-      await logRef.set(
-        {
-          status: result.failureCount > 0 ? 'partial' : 'sent',
-          success_count: result.successCount,
-          failure_count: result.failureCount,
-          updated_at: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
-      );
+      const result = await messaging.sendEachForMulticast(message);
+      await finalizeMulticastSend(logRef, result, tokenEntries, {
+        userId,
+        scheduleItemId: scheduleDoc.id,
+        dateKey,
+        timeKey,
+        kind: 'start',
+      });
     }
 
     logger.info('スケジュール開始通知バッチを完了しました。', {
