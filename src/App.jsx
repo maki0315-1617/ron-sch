@@ -730,10 +730,10 @@ function App() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
 
     try {
+      // ルートスコープの一般キャッシュ用SWがページを制御しているため、
+      // navigator.serviceWorker.ready/controller は使わずFCM専用SWの登録を直接指定する
       const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
-      if (!existing) return
-      const registration = await navigator.serviceWorker.ready
-      const targetWorker = navigator.serviceWorker.controller || registration.active
+      const targetWorker = existing?.active
       if (targetWorker) {
         targetWorker.postMessage({
           type: 'sync-badge-count',
@@ -768,9 +768,7 @@ function App() {
 
     try {
       const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
-      if (!existing) return
-      const registration = await navigator.serviceWorker.ready
-      const targetWorker = navigator.serviceWorker.controller || registration.active
+      const targetWorker = existing?.active
       if (targetWorker) {
         targetWorker.postMessage({ type: 'clear-badge-count' })
       }
@@ -957,9 +955,9 @@ function App() {
       }
 
       if (event.data.type === 'notification-clicked') {
-        navigator.serviceWorker.ready.then((registration) => {
-          if (registration.active) {
-            registration.active.postMessage({ type: 'get-badge-count' })
+        navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope').then((existing) => {
+          if (existing?.active) {
+            existing.active.postMessage({ type: 'get-badge-count' })
           }
         }).catch((error) => {
           console.error('通知件数再取得エラー:', error)
@@ -971,12 +969,9 @@ function App() {
 
     const requestBadgeCount = () => {
       navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope').then((existing) => {
-        if (!existing) return
-        return navigator.serviceWorker.ready.then((registration) => {
-          if (registration.active) {
-            registration.active.postMessage({ type: 'get-badge-count' })
-          }
-        })
+        if (existing?.active) {
+          existing.active.postMessage({ type: 'get-badge-count' })
+        }
       }).catch((error) => {
         console.error('通知件数取得エラー:', error)
       })
