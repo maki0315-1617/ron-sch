@@ -328,11 +328,6 @@ const postMessageToMessagingWorker = async (message) => {
   return true
 }
 
-const requestMessagingBadgeCount = () =>
-  postMessageToMessagingWorker({ type: 'get-badge-count' }).catch((error) => {
-    console.error('通知件数取得エラー:', error)
-  })
-
 const waitForMessagingServiceWorkerActive = (registration, timeoutMs = 15000) => {
   if (registration.active) return Promise.resolve(registration.active)
 
@@ -775,7 +770,7 @@ function App() {
       }
 
       setNotificationEnabled(true)
-      requestMessagingBadgeCount()
+      clearBadgeWhenAppForeground()
     }
 
     // 初回レンダリングとスケジュール取得を優先するため、通知同期は遅延実行
@@ -833,6 +828,14 @@ function App() {
   const clearNotificationBadge = async () => {
     setNotificationBadgeCount(0)
     await setBrowserBadge(0)
+  }
+
+  // 離れている間の未読バッジは、PWA を前面に出したタイミングで確認済みとして消す
+  const clearBadgeWhenAppForeground = () => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+    clearNotificationBadge().catch((error) => {
+      console.error('前面表示時のバッジクリアエラー:', error)
+    })
   }
 
   const enableNotifications = async () => {
@@ -898,7 +901,7 @@ function App() {
     ), 15000, '通知トークンの保存がタイムアウトしました。')
 
     setNotificationEnabled(true)
-    requestMessagingBadgeCount()
+    clearBadgeWhenAppForeground()
   }
 
   const disableNotifications = async () => {
@@ -1030,27 +1033,24 @@ function App() {
       }
 
       if (event.data.type === 'notification-clicked') {
-        requestMessagingBadgeCount()
+        clearBadgeWhenAppForeground()
       }
     }
 
     navigator.serviceWorker.addEventListener('message', handleMessage)
 
-    requestMessagingBadgeCount()
+    clearBadgeWhenAppForeground()
 
-    // スリープ復帰やタブ復帰時に SW 側の実カウントと再同期する
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        requestMessagingBadgeCount()
+        clearBadgeWhenAppForeground()
       }
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('focus', requestMessagingBadgeCount)
 
     return () => {
       navigator.serviceWorker.removeEventListener('message', handleMessage)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('focus', requestMessagingBadgeCount)
     }
   }, [session?.uid])
 
