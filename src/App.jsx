@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { auth, db, deleteFcmToken, getFcmToken, subscribeForegroundNotifications } from './firebase'
 import {
   EmailAuthProvider,
@@ -297,6 +298,40 @@ const loadPublicImageAsDataUrl = async (path, removeLightBackground = false) => 
 const AGGREGATION_MAX_DAYS = 31
 
 const notificationTokenKey = (userId) => `ron-sch-fcm-token:${userId}`
+const FCM_SW_SCOPE = '/firebase-cloud-messaging-push-scope'
+
+const supportsPwaWebPush = () => {
+  if (typeof window === 'undefined') return false
+  if (Capacitor.isNativePlatform()) return false
+  return 'Notification' in window && 'serviceWorker' in navigator
+}
+
+const getMessagingServiceWorkerRegistration = async () => {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null
+  return navigator.serviceWorker.getRegistration(FCM_SW_SCOPE)
+}
+
+const postMessageToMessagingWorker = async (message) => {
+  if (!supportsPwaWebPush()) return false
+
+  let registration = await getMessagingServiceWorkerRegistration()
+  if (!registration) {
+    registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+      scope: FCM_SW_SCOPE,
+    })
+  }
+
+  const worker = registration.active || registration.installing || registration.waiting
+  if (!worker) return false
+
+  worker.postMessage(message)
+  return true
+}
+
+const requestMessagingBadgeCount = () =>
+  postMessageToMessagingWorker({ type: 'get-badge-count' }).catch((error) => {
+    console.error('通知件数取得エラー:', error)
+  })
 
 const isIosDevice = () => typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent)
 
@@ -648,9 +683,11 @@ function App() {
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
-    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+    if (!supportsPwaWebPush()) {
       setNotificationEnabled(false)
-      setNotificationPermission('unsupported')
+      setNotificationPermission(Capacitor.isNativePlatform() ? 'unsupported' : (
+        typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+      ))
       return
     }
 
@@ -663,6 +700,7 @@ function App() {
       if (Notification.permission !== 'granted') {
         if (!cancelled) {
           setNotificationEnabled(false)
+          setNotificationBadgeCount(0)
         }
         return
       }
@@ -671,6 +709,7 @@ function App() {
       if (!storedToken) {
         if (!cancelled) {
           setNotificationEnabled(false)
+          setNotificationBadgeCount(0)
         }
         return
       }
@@ -681,6 +720,7 @@ function App() {
       if (!tokenDoc.exists()) {
         window.localStorage.removeItem(notificationTokenKey(session.uid))
         setNotificationEnabled(false)
+        setNotificationBadgeCount(0)
         return
       }
 
@@ -700,6 +740,7 @@ function App() {
       }
 
       setNotificationEnabled(true)
+      requestMessagingBadgeCount()
     }
 
     // 初回レンダリングとスケジュール取得を優先するため、通知同期は遅延実行
@@ -708,8 +749,6 @@ function App() {
         console.error('通知状態の取得エラー:', error)
       })
     }, 1200)
-
-    setNotificationBadgeCount(0)
 
     return () => {
       cancelled = true
@@ -720,25 +759,21 @@ function App() {
   const getNotificationRegistration = async () => {
     if (notificationRegistrationRef.current) return notificationRegistrationRef.current
     const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
-      scope: '/firebase-cloud-messaging-push-scope',
+      scope: FCM_SW_SCOPE,
     })
     notificationRegistrationRef.current = registration
     return registration
   }
 
   const syncBadgeWithServiceWorker = async (count) => {
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
-
+    if (!supportsPwaWebPush()) return
     try {
-      const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
-      if (!existing) return
-      const registration = await navigator.serviceWorker.ready
-      const targetWorker = navigator.serviceWorker.controller || registration.active
-      if (targetWorker) {
-        targetWorker.postMessage({
-          type: 'sync-badge-count',
-          count: Math.max(Number(count) || 0, 0),
-        })
+      const posted = await postMessageToMessagingWorker({
+        type: 'sync-badge-count',
+        count: Math.max(Number(count) || 0, 0),
+      })
+      if (!posted) {
+        console.warn('通知バッジ同期: FCM Service Worker が未起動のためスキップしました。')
       }
     } catch (error) {
       console.warn('通知バッジ同期エラー:', error)
@@ -763,32 +798,14 @@ function App() {
   const clearNotificationBadge = async () => {
     setNotificationBadgeCount(0)
     await setBrowserBadge(0)
-
-    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
-
-    try {
-      const existing = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope')
-      if (!existing) return
-      const registration = await navigator.serviceWorker.ready
-      const targetWorker = navigator.serviceWorker.controller || registration.active
-      if (targetWorker) {
-        targetWorker.postMessage({ type: 'clear-badge-count' })
-      }
-    } catch (error) {
-      console.warn('起動時のバッジクリアに失敗しました:', error)
-    }
   }
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    clearNotificationBadge().catch((error) => {
-      console.error('起動時のバッジクリアエラー:', error)
-    })
-  }, [])
 
   const enableNotifications = async () => {
     if (!session) return
-    if (!('Notification' in window) || !('serviceWorker' in navigator)) {
+    if (!supportsPwaWebPush()) {
+      if (Capacitor.isNativePlatform()) {
+        throw new Error('ネイティブアプリのプッシュ通知は準備中です。現時点ではブラウザでホーム画面に追加したPWAをご利用ください。')
+      }
       throw new Error('このブラウザでは通知を利用できません。')
     }
 
@@ -834,12 +851,14 @@ function App() {
         user_id: session.uid,
         user_email: session.email || '',
         token,
+        platform: 'web',
         updated_at: serverTimestamp(),
       },
       { merge: true }
     ), 15000, '通知トークンの保存がタイムアウトしました。')
 
     setNotificationEnabled(true)
+    requestMessagingBadgeCount()
   }
 
   const disableNotifications = async () => {
@@ -895,6 +914,7 @@ function App() {
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
+    if (!supportsPwaWebPush()) return
     if (!('Notification' in window)) return
 
     let unsubscribe = () => {}
@@ -906,7 +926,7 @@ function App() {
         if (!active) return
         if (Notification.permission !== 'granted') return
 
-        const title = payload.data?.title ? 'スケジュール通知' : (payload.notification?.title || '予定の開始時刻です')
+        const title = payload.data?.title || payload.notification?.title || 'スケジュール通知'
         const body = payload.data?.body || payload.notification?.body || '開始時間になった予定があります。'
         setNotificationBadgeCount((current) => {
           const next = current + 1
@@ -947,6 +967,7 @@ function App() {
 
   useEffect(() => {
     if (!session || typeof window === 'undefined' || !navigator.serviceWorker) return
+    if (!supportsPwaWebPush()) return
 
     const handleMessage = (event) => {
       if (!event.data) return
@@ -954,53 +975,42 @@ function App() {
       if (event.data.type === 'badge-count') {
         const nextCount = Math.max(Number(event.data.count || 0), 0)
         setNotificationBadgeCount((current) => (current === nextCount ? current : nextCount))
-        setBrowserBadge(nextCount).catch((error) => {
-          console.error('通知件数同期エラー:', error)
-        })
+        if ('setAppBadge' in navigator) {
+          if (nextCount > 0) {
+            navigator.setAppBadge(nextCount).catch((error) => {
+              console.error('通知件数同期エラー:', error)
+            })
+          } else if ('clearAppBadge' in navigator) {
+            navigator.clearAppBadge().catch((error) => {
+              console.error('通知件数同期エラー:', error)
+            })
+          }
+        }
         return
       }
 
       if (event.data.type === 'notification-clicked') {
-        navigator.serviceWorker.ready.then((registration) => {
-          if (registration.active) {
-            registration.active.postMessage({ type: 'get-badge-count' })
-          }
-        }).catch((error) => {
-          console.error('通知件数再取得エラー:', error)
-        })
+        requestMessagingBadgeCount()
       }
     }
 
     navigator.serviceWorker.addEventListener('message', handleMessage)
 
-    const requestBadgeCount = () => {
-      navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope').then((existing) => {
-        if (!existing) return
-        return navigator.serviceWorker.ready.then((registration) => {
-          if (registration.active) {
-            registration.active.postMessage({ type: 'get-badge-count' })
-          }
-        })
-      }).catch((error) => {
-        console.error('通知件数取得エラー:', error)
-      })
-    }
-
-    requestBadgeCount()
+    requestMessagingBadgeCount()
 
     // スリープ復帰やタブ復帰時に SW 側の実カウントと再同期する
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        requestBadgeCount()
+        requestMessagingBadgeCount()
       }
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('focus', requestBadgeCount)
+    window.addEventListener('focus', requestMessagingBadgeCount)
 
     return () => {
       navigator.serviceWorker.removeEventListener('message', handleMessage)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('focus', requestBadgeCount)
+      window.removeEventListener('focus', requestMessagingBadgeCount)
     }
   }, [session?.uid])
 

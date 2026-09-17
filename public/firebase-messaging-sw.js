@@ -95,20 +95,22 @@ const clearBadgeCount = async () => {
 };
 
 messaging.onBackgroundMessage((payload) => {
-  const title = payload.notification?.title || 'スケジュール通知';
+  const title = payload.data?.title || payload.notification?.title || 'スケジュール通知';
   const body = payload.data?.body || payload.notification?.body || '予定の開始時間です。';
 
-  incrementBadgeCount().then((badgeCount) => {
-   if ('setAppBadge' in self.registration) {
-     self.registration.setAppBadge(badgeCount).catch(() => {});
-   }
-  }).catch(() => {});
+  return (async () => {
+    const badgeCount = await incrementBadgeCount().catch(() => null);
+    if (badgeCount !== null && 'setAppBadge' in self.registration) {
+      await self.registration.setAppBadge(badgeCount).catch(() => {});
+    }
 
-  self.registration.showNotification(title, {
-   body,
-   icon: '/favicon.ico',
-   data: payload.data || {},
-  });
+    await self.registration.showNotification(title, {
+      body,
+      icon: '/pwa-192.png',
+      badge: '/pwa-192.png',
+      data: payload.data || {},
+    });
+  })();
 });
 
 self.addEventListener('notificationclick', (event) => {
