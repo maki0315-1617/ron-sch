@@ -36,12 +36,14 @@ const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 const HELP_SITE_URL = 'https://ron-home-app.vercel.app/'
 const HELP_MAIL_ADDRESS = 'ronron201907@gmail.com'
 const SLEEP_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/829d308f0a34444fbf032d3d0b5f467c'
+const APP_DISPLAY_NAME = 'ロンスケ＋ジュール'
+const APP_DISPLAY_NAME_EN = 'Ron Sche+dule'
 
 const helpContent = {
   ja: {
     langLabel: '日本語',
     title: 'ヘルプ',
-    appInfo: 'ロン君のスケジュール　Ver1.00',
+    appInfo: `${APP_DISPLAY_NAME}　Ver1.00`,
     siteLabel: '黒猫ロン君のAI検証ハブサイト',
     mailLabel: 'お問い合わせメール',
     note: 'なお、誹謗中傷のメールはご遠慮願います。',
@@ -51,13 +53,13 @@ const helpContent = {
     fatigueDisclaimer: '「疲れ」のスコアとメッセージは、睡眠記録と予定から算出した生活・予定管理の目安です。医療上の診断・治療・服薬判断の代わりにはなりません。',
     prButton: 'アプリ紹介・PRスライドPDFをダウンロード',
     shortcutButton: 'iPhone用「睡眠記録」ショートカットを取得',
-    about: '『ロン君のスケジュール』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。',
+    about: `『${APP_DISPLAY_NAME}』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。`,
     summary: '予定の登録から通知、進捗確認まで、日々の生活に沿った使い方をサポートします。',
   },
   en: {
     langLabel: 'English',
     title: 'Help',
-    appInfo: "Ron’s Schedule Ver1.00",
+    appInfo: `${APP_DISPLAY_NAME_EN} Ver1.00`,
     siteLabel: "Black Cat Ron-kun's AI Verification Hub",
     mailLabel: 'Contact Email',
     note: 'Please avoid sending abusive or defamatory emails.',
@@ -67,7 +69,7 @@ const helpContent = {
     fatigueDisclaimer: 'The fatigue score is a planning guide from sleep and schedule data. It is not medical diagnosis, treatment, or medication advice.',
     prButton: 'Download App Introduction / PR Slides',
     shortcutButton: 'Get the “Sleep Records” Shortcut for iPhone',
-    about: 'Ron’s Schedule is a simple planning app designed to make daily scheduling easier and help you stay consistent over time.',
+    about: `${APP_DISPLAY_NAME_EN} is a simple planning app designed to make daily scheduling easier and help you stay consistent over time.`,
     summary: 'From adding tasks to checking progress and managing reminders, it supports a smoother daily routine.',
   },
 }
@@ -1042,8 +1044,8 @@ function App() {
   useEffect(() => {
     if (!session || typeof document === 'undefined') return
     document.title = notificationBadgeCount > 0
-      ? `(${notificationBadgeCount}) スケジュール`
-      : 'スケジュール'
+      ? `(${notificationBadgeCount}) ${APP_DISPLAY_NAME}`
+      : APP_DISPLAY_NAME
   }, [session?.uid, notificationBadgeCount])
 
   useEffect(() => {
@@ -2639,7 +2641,7 @@ function App() {
       return
     }
 
-    reportWindow.document.write(`<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>睡眠記録を準備中</title><style>body{margin:0;padding:48px 24px;color:#172033;font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center}.progress-box{max-width:480px;margin:40px auto;text-align:left}.progress-track{height:12px;background:#e2e8f0;border-radius:6px;overflow:hidden}.progress-bar{width:35%;height:100%;background:#0f766e;animation:progress 1.2s ease-in-out infinite alternate}@keyframes progress{from{width:15%}to{width:85%}}</style></head><body><h1>睡眠記録を準備しています</h1><div class="progress-box"><p>対象月の計画数を読み込んでいます...</p><div class="progress-track" role="progressbar" aria-label="読み込み中"><div class="progress-bar"></div></div></div></body></html>`)
+    reportWindow.document.write(`<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>健康生活PDFを準備中</title><style>body{margin:0;padding:48px 24px;color:#172033;font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center}.progress-box{max-width:480px;margin:40px auto;text-align:left}.progress-track{height:12px;background:#e2e8f0;border-radius:6px;overflow:hidden}.progress-bar{width:35%;height:100%;background:#0f766e;animation:progress 1.2s ease-in-out infinite alternate}@keyframes progress{from{width:15%}to{width:85%}}</style></head><body><h1>健康生活PDFを準備しています</h1><div class="progress-box"><p>対象月のデータを読み込んでいます...</p><div class="progress-track" role="progressbar" aria-label="読み込み中"><div class="progress-bar"></div></div></div></body></html>`)
     reportWindow.document.close()
 
     const year = selectedDate.getFullYear()
@@ -2648,6 +2650,7 @@ function App() {
     const monthStartKey = formatDateKey(new Date(year, month, 1))
     const monthEndKey = formatDateKey(new Date(year, month, daysInMonth))
     const completedPlanCounts = {}
+    const scheduleByDate = {}
 
     try {
       const scheduleSnapshot = await getDocs(query(
@@ -2658,9 +2661,16 @@ function App() {
       ))
       scheduleSnapshot.forEach((docSnap) => {
         const item = docSnap.data()
-        if (item.date && item.completed === true) {
+        if (!item.date) return
+        if (item.completed === true) {
           completedPlanCounts[item.date] = (completedPlanCounts[item.date] || 0) + 1
         }
+        if (!scheduleByDate[item.date]) scheduleByDate[item.date] = []
+        scheduleByDate[item.date].push({
+          ...item,
+          id: item.id || docSnap.id,
+          priority: item.priority || 'normal',
+        })
       })
     } catch (error) {
       console.error('月別計画数取得エラー:', error)
@@ -2686,13 +2696,26 @@ function App() {
       }
       return { dateKey, dayName: dayNames[date.getDay()], currentBedtime, previousBedtime, wakeTime, minutes, completedPlanCount: completedPlanCounts[dateKey] || 0 }
     })
+    const todayKey = formatDateKey(new Date())
+    const fatigueByDay = reportRows.map((row, index) => {
+      const date = new Date(year, month, index + 1)
+      const dayScheduleMap = { [row.dateKey]: scheduleByDate[row.dateKey] || [] }
+      const fatigue = computeFatigueScore(date, sleepRecordMap, dayScheduleMap, {
+        isToday: row.dateKey === todayKey,
+      })
+      return { dateKey: row.dateKey, score: fatigue.score, bandLabel: fatigue.bandLabel }
+    })
+    const todayFatigue = fatigueByDay.find((entry) => entry.dateKey === todayKey)
     const formatDuration = (minutes) => minutes === null ? '-' : `${Math.floor(minutes / 60)}時間${minutes % 60}分`
     const recordedSleepMinutes = reportRows.filter((row) => row.minutes !== null).map((row) => row.minutes)
     const averageSleepMinutes = recordedSleepMinutes.length
       ? Math.round(recordedSleepMinutes.reduce((sum, minutes) => sum + minutes, 0) / recordedSleepMinutes.length)
       : null
-    const rows = reportRows.map((row) => `
-      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td></tr>`).join('')
+    const rows = reportRows.map((row, index) => {
+      const fatigue = fatigueByDay[index]
+      return `
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td></tr>`
+    }).join('')
     const chartWidth = 760
     const chartHeight = 310
     const plotLeft = 48
@@ -2725,22 +2748,49 @@ function App() {
         <text x="${plotLeft}" y="260" font-size="11" fill="#0f766e">● 睡眠時間</text><text x="${plotLeft + 110}" y="260" font-size="11" fill="#d97706">■ 完了計画数</text>
       </svg>`
 
-    const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>睡眠記録</title>
+    const fatigueChartPoints = fatigueByDay.map((entry, index) => {
+      const x = reportRows.length === 1 ? (plotLeft + plotRight) / 2 : plotLeft + (plotRight - plotLeft) * index / (reportRows.length - 1)
+      const y = plotBottom - (entry.score / 100) * 180
+      return { ...entry, x, y }
+    })
+    const fatiguePolyline = fatigueChartPoints.map((point) => `${point.x},${point.y}`).join(' ')
+    const fatigueChart = `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="日別の疲れスコア">
+        <line x1="${plotLeft}" y1="${plotBottom}" x2="${plotRight}" y2="${plotBottom}" stroke="#cbd5e1" />
+        <line x1="${plotLeft}" y1="${plotTop}" x2="${plotLeft}" y2="${plotBottom}" stroke="#cbd5e1" />
+        <line x1="${plotLeft}" y1="${plotTop}" x2="${plotRight}" y2="${plotTop}" stroke="#e2e8f0" stroke-dasharray="4 4" />
+        <text x="${plotLeft + 4}" y="${plotTop + 12}" font-size="10" fill="#64748b">100</text>
+        <text x="${plotLeft + 4}" y="${plotBottom - 4}" font-size="10" fill="#64748b">0</text>
+        <polyline points="${fatiguePolyline}" fill="none" stroke="#7c3aed" stroke-width="3" />
+        ${fatigueChartPoints.map((point) => {
+          const isToday = point.dateKey === todayKey
+          const r = isToday ? 6 : 4
+          const fill = isToday ? '#dc2626' : '#7c3aed'
+          return `<circle cx="${point.x}" cy="${point.y}" r="${r}" fill="${fill}"><title>${point.dateKey}: 疲れ ${point.score}（${point.bandLabel}）</title></circle><text x="${point.x}" y="${point.y - 10}" text-anchor="middle" font-size="8" fill="#5b21b6">${point.score}</text>`
+        }).join('')}
+        ${fatigueChartPoints.map((point) => `<text x="${point.x}" y="252" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
+        <text x="${plotLeft}" y="260" font-size="11" fill="#7c3aed">● 疲れスコア（0〜100）</text>
+        ${todayFatigue && todayKey.startsWith(`${year}-${String(month + 1).padStart(2, '0')}`) ? `<text x="${plotRight}" y="260" text-anchor="end" font-size="11" fill="#dc2626">今日: ${todayFatigue.score}（${todayFatigue.bandLabel}）</text>` : ''}
+      </svg>`
+
+    const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>健康生活PDF</title>
       <style>
         @page { size: A4 portrait; margin: 12mm; } * { box-sizing: border-box; }
         body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
         h1 { margin: 0 0 5px; font-size: 24px; } h2 { margin: 22px 0 10px; font-size: 17px; color: #115e59; }
         .period, .output-date { color: #64748b; font-size: 13px; } .output-date { margin: 4px 0 18px; } .average { margin: 0 0 14px; color: #134e4a; font-size: 15px; } .average span { margin-left: 6px; color: #64748b; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; font-size: 12px; } th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
-        th { background: #ccfbf1; color: #115e59; } .chart-box { border: 1px solid #e2e8f0; padding: 10px; } svg { width: 100%; height: auto; }
+        th { background: #ccfbf1; color: #115e59; } .chart-box { border: 1px solid #e2e8f0; padding: 10px; margin-bottom: 14px; } svg { width: 100%; height: auto; }
+        .disclaimer { margin-top: 16px; font-size: 11px; color: #64748b; line-height: 1.5; }
         .empty { color: #64748b; text-align: center; padding: 30px; } .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
         button { border: 0; border-radius: 8px; background: #0f766e; color: white; padding: 10px 18px; font-weight: 700; cursor: pointer; } .close-button { background: #64748b; }
         @media print { .actions { display: none; } }
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
-      <h1>睡眠記録</h1><div class="period">対象期間: ${year}年${month + 1}月</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
+      <h1>健康生活PDF</h1><div class="period">対象期間: ${year}年${month + 1}月（選択中の月）</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
-      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th></tr></thead><tbody>${rows}</tbody></table>
-      <h2>日別睡眠時間・完了計画数</h2><div class="chart-box">${chart}</div></body></html>`
+      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>疲れ</th><th>帯域</th></tr></thead><tbody>${rows}</tbody></table>
+      <h2>日別睡眠時間・完了計画数</h2><div class="chart-box">${chart}</div>
+      <h2>日別の疲れスコア</h2><div class="chart-box">${fatigueChart}</div>
+      <p class="disclaimer">※疲れスコアは睡眠記録と未完了予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
@@ -2862,7 +2912,7 @@ function App() {
 
     const guideContent = {
       ja: {
-        title: 'ロン君のスケジュール 利用ガイド',
+        title: `${APP_DISPLAY_NAME} 利用ガイド`,
         subtitle: '予定の追加から進捗管理まで、日々の計画をすっきり整理して使えるガイドです。',
         sections: [
           {
@@ -2912,8 +2962,7 @@ function App() {
               '時刻を手動で変更した場合は「保存」を押して記録します。',
               '睡眠記録の見出しを押すと、入力欄と詳細を折りたためます。初期状態は開いた状態です。',
               '設定メニューの「睡眠記録表示」で、睡眠記録欄の表示・非表示を切り替えられます。非表示にしても保存済みデータは削除されません。',
-              '「健康生活カウント表示」をオンにすると、ホーム末尾に疲れスコアと最近3日平均睡眠が表示されます（初期はオフ）。詳細はヘルプの「疲れ」判定説明PDFを参照してください。',
-              'メニューの「睡眠記録PDF」から、選択中の月の一覧表と日別グラフを出力できます。',
+              'メニューの「健康生活PDF」から、選択中の月の睡眠一覧・日別グラフ・日別の疲れスコア（折れ線）を出力できます。',
             ],
           },
           {
@@ -2927,7 +2976,7 @@ function App() {
           },
           {
             heading: '7. 進捗状況を確認する',
-            body: '選択日の予定カードの直下に、連続達成日数と今週のバッジが表示されます。健康生活カウント（設定で表示）では選択日の疲れと睡眠平均を確認できます。',
+            body: '選択日の予定カードの直下に、連続達成日数と今週のバッジ（皆勤賞など）が表示されます。予定を完了していくと、継続の手応えを確認しやすくなります。',
             points: [
               '進捗率の推移をPDFとして保存できます。',
               '継続のサポートとして、達成感を感じやすくなります。',
@@ -2935,7 +2984,20 @@ function App() {
             ],
           },
           {
-            heading: '8. スケジュールを集計する',
+            heading: '8. 健康生活カウントを使う',
+            body: '睡眠・予定の負荷などをもとに、選択した日の「疲れ」目安（0〜100）を確認できる機能です。設定メニューの「健康生活カウント表示」で表示できます。初期状態はオフです。',
+            points: [
+              'オンにすると、ホーム画面の末尾（予定リストの下）にセクションが現れます。見出しをタップして開閉できます（月カレンダーと同様）。',
+              '表示内容: 疲れスコア（2行）、睡眠・予定の内訳バー、最近3日の平均睡眠（睡眠記録表示がオンのとき）、歩数（連携状態に応じて表示）。',
+              '月次の疲れ推移はメニューの「健康生活PDF」で日別折れ線グラフとして確認できます。',
+              '疲れは未完了の予定のみを対象に計算します。カレンダーで日付を変えると、その日のデータで更新されます。',
+              'セクション内に医療上の免責（診断・治療の代わりにならない旨）があります。詳しい判定のしくみは、ヘルプの「疲れ」判定の説明PDFを参照してください。',
+              '表示をオフにしている間は、疲れスコアの計算を行いません。',
+              '歩数は端末連携の有無を確認して表示します（未連携のときは「未連携」など）。将来、連携後にスコアへ反映する拡張を予定しています。',
+            ],
+          },
+          {
+            heading: '9. スケジュールを集計する',
             body: 'メニューの「スケジュール集計」から、期間と「全て / 完了のみ」を指定して、予定名ごとの件数と合計時間(分)を集計できます。集計結果はPDFまたはCSVで保存できます。',
             points: [
               '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
@@ -2962,7 +3024,7 @@ function App() {
         closeLabel: '閉じる',
       },
       en: {
-        title: 'Ron’s Schedule User Guide',
+        title: `${APP_DISPLAY_NAME_EN} User Guide`,
         subtitle: 'A simple guide to planning ahead, managing tasks, and tracking your progress in daily life.',
         sections: [
           {
@@ -3012,8 +3074,7 @@ function App() {
               'After changing a time manually, tap “Save” to store the edited value.',
               'Tap the Sleep Records heading to collapse or expand the input and details. It is expanded by default.',
               'Use “Show Sleep Records” in Settings to show or hide the sleep record panel. Hiding it does not delete saved data.',
-              'Turn on “Show Healthy Life Count” in Settings to see fatigue and 3-day sleep average at the bottom of Home (off by default). See Help → fatigue score guide (PDF).',
-              'From the menu, open “Sleep Records PDF” to export a table and a daily sleep-duration chart for the selected month.',
+              'From the menu, open “Healthy Life PDF” to export the month’s sleep table, charts, and daily fatigue score line graph.',
             ],
           },
           {
@@ -3027,7 +3088,7 @@ function App() {
           },
           {
             heading: '7. Track your progress',
-            body: 'Below the schedule cards for the selected day, you see your streak and weekly badge. Healthy Life Count (optional in Settings) shows fatigue and sleep average.',
+            body: 'Below the schedule cards for the selected day, you see your streak and weekly badge (such as perfect-week awards). Completing tasks makes it easier to feel your momentum.',
             points: [
               'Progress trends can be saved as a PDF report.',
               'Motivational indicators help maintain momentum.',
@@ -3035,7 +3096,20 @@ function App() {
             ],
           },
           {
-            heading: '8. Summarize your schedules',
+            heading: '8. Use Healthy Life Count',
+            body: 'This optional feature shows a fatigue score (0–100) for the selected day based on sleep records and incomplete schedule load. Turn it on with “Show Healthy Life Count” in Settings. It is off by default.',
+            points: [
+              'When enabled, a section appears at the bottom of Home (below your schedule list). Tap the heading to expand or collapse it, like the month calendar.',
+              'It shows: fatigue score (two lines), sleep/schedule bars, recent 3-day sleep average (when sleep records are shown), and steps (based on link status).',
+              'Daily fatigue trends for the month are available in the menu as “Healthy Life PDF” (line chart).',
+              'Fatigue uses incomplete tasks only. Changing the selected date recalculates for that day.',
+              'A one-line medical disclaimer appears in the section. For full scoring details, open Help → fatigue score guide (PDF).',
+              'While the feature is off, fatigue score is not calculated.',
+              'Steps reflect whether device linking is available (e.g. “Not linked”). Step data may feed into the score in a future update.',
+            ],
+          },
+          {
+            heading: '9. Summarize your schedules',
             body: 'From the menu, open "Schedule Summary" to choose a date range and either "All" or "Completed only", then get the count and total minutes for each task name. Results can be saved as PDF or CSV.',
             points: [
               'The date range can be up to 31 days; a message appears if it is exceeded.',
@@ -3066,10 +3140,10 @@ function App() {
     const guide = guideContent[lang] || guideContent.ja
     const guideScreenshotPaths = lang === 'en'
       ? [
-        ...Array.from({ length: 7 }, (_, index) => ({ path: `/guide-screen-${index + 1}.png`, alt: `Ron’s Schedule app screen ${index + 1}`, caption: `App screen example ${index + 1}.` })),
+        ...Array.from({ length: 7 }, (_, index) => ({ path: `/guide-screen-${index + 1}.png`, alt: `${APP_DISPLAY_NAME_EN} app screen ${index + 1}`, caption: `App screen example ${index + 1}.` })),
       ]
       : [
-        ...Array.from({ length: 7 }, (_, index) => ({ path: `/guide-screen-${index + 1}.png`, alt: `ロン君のスケジュール画面${index + 1}`, caption: `アプリ画面例 ${index + 1}` })),
+        ...Array.from({ length: 7 }, (_, index) => ({ path: `/guide-screen-${index + 1}.png`, alt: `${APP_DISPLAY_NAME}画面${index + 1}`, caption: `アプリ画面例 ${index + 1}` })),
       ]
     let guideScreenshots
     try {
@@ -3274,7 +3348,7 @@ function App() {
             </div>
             <div class="sheet">
               <div class="topbar">
-                <div class="brand">RON SCH</div>
+                <div class="brand">${escapeHtml(lang === 'en' ? APP_DISPLAY_NAME_EN : APP_DISPLAY_NAME)}</div>
               </div>
               <h1>${guide.title}</h1>
               <p class="subtitle">${guide.subtitle}</p>
@@ -3333,7 +3407,7 @@ function App() {
 
     const isEnglish = lang === 'en'
     const slides = isEnglish ? [
-      { tag: 'RON’S SCHEDULE', title: 'Plan your day.\nMake progress visible.', body: 'A friendly daily schedule app that turns intentions into small, achievable actions.', points: ['Turn a busy day into clear next steps.', 'See progress without losing your focus.'], art: '📅  ✨  🐈‍⬛' },
+      { tag: 'RON SCHE+DULE', title: 'Plan your day.\nMake progress visible.', body: 'A friendly daily schedule app that turns intentions into small, achievable actions.', points: ['Turn a busy day into clear next steps.', 'See progress without losing your focus.'], art: '📅  ✨  🐈‍⬛' },
       { tag: 'ONE PLACE FOR YOUR DAY', title: 'See what matters\nat a glance.', body: 'Schedules, priorities, completion, search, calendar views, and reminders work together in one calm workspace.', points: ['Keep plans, priorities, and reminders together.', 'Find the right task quickly when plans change.'], art: '🗓️  ✅  🔔' },
       { tag: 'SLEEP RECORDS', title: 'Start the morning\nwith a simple tap.', body: 'Save wake-up time and bedtime manually or use Current Time. Review the previous bedtime and your recent average.', points: ['Record wake-up and bedtime in seconds.', 'Compare sleep duration with the recommended eight hours.'], art: '🌙  🛏️  ☀️' },
       { tag: 'RON-KUN’S SUPPORT', title: 'A little advice\nfor today.', body: 'Recent sleep averages are translated into four friendly levels, emojis, and rotating advice from black cat Ron-kun.', points: ['Make recent sleep patterns easier to understand.', 'Receive a gentle suggestion matched to your rhythm.'], art: '🐈‍⬛  💬  😊' },
@@ -3341,7 +3415,7 @@ function App() {
       { tag: 'READY WHEN YOU ARE', title: 'Make today\neasier to begin.', body: 'Use the web app or the iPhone Sleep Records Shortcut for quick access to the moments that matter.', points: ['Open the right view whenever you need it.', 'Keep the daily routine accessible on mobile.'], art: '📱  🚀  🐈‍⬛' },
       { tag: 'APP SCREENS', title: 'Everything you need\nin one place.', body: 'Explore the app screens and find the view that fits your daily routine.', points: ['A calm interface supports repeated daily use.', 'Choose the screen that matches your next action.'], art: '🖥️  📱  ✅' },
     ] : [
-      { tag: 'ロン君のスケジュール', title: '今日を整え、\n前進を見える化。', body: 'やりたいことを小さな行動に変えて、毎日の達成感を支えるスケジュールアプリです。', points: ['一日のやることを見通しやすく整理。', '小さな完了を積み重ねて達成感を実感。'], art: '📅  ✨  🐈‍⬛' },
+      { tag: APP_DISPLAY_NAME, title: '今日を整え、\n前進を見える化。', body: 'やりたいことを小さな行動に変えて、毎日の達成感を支えるスケジュールアプリです。', points: ['一日のやることを見通しやすく整理。', '小さな完了を積み重ねて達成感を実感。'], art: '📅  ✨  🐈‍⬛' },
       { tag: '一日の予定をひとまとめ', title: '大切なことが\nひと目でわかる。', body: '予定、重要度、完了、検索、カレンダー、通知をひとつの落ち着いた画面で管理できます。', points: ['重要度で、先に取り組むことが明確に。', '検索とカレンダーで予定をすぐ確認。'], art: '🗓️  ✅  🔔' },
       { tag: '睡眠記録', title: '朝の記録を\nワンタッチで。', body: '起床と就寝を手動または現在時刻で保存。前日の就寝と最近の平均睡眠時間も確認できます。', points: ['現在時刻ボタンで入力の手間を軽減。', '8時間の目安と日別の睡眠時間を比較。'], art: '🌙  🛏️  ☀️' },
       { tag: 'ロン君のサポート', title: '今日のあなたに\nひとこと。', body: '最近の睡眠平均を4段階で判定し、黒猫ロン君の絵文字と日替わりアドバイスで寄り添います。', points: ['睡眠の状態を4段階でやさしく表示。', '毎日の気分に寄り添うアドバイスを提供。'], art: '🐈‍⬛  💬  😊' },
@@ -3379,7 +3453,7 @@ function App() {
         <img class="ron" src="${ronImage}" alt="黒猫ロン君" />
       </section>`).join('')
 
-    const title = isEnglish ? 'Ron’s Schedule App Introduction' : 'ロン君のスケジュール アプリ紹介'
+    const title = isEnglish ? `${APP_DISPLAY_NAME_EN} App Introduction` : `${APP_DISPLAY_NAME} アプリ紹介`
     const html = `<!doctype html><html lang="${isEnglish ? 'en' : 'ja'}"><head><meta charset="UTF-8" /><title>${title}</title>
       <style>
         @page { size: A4 landscape; margin: 0; } * { box-sizing: border-box; }
@@ -3558,7 +3632,7 @@ function App() {
           <div style={styles.authBox}>
             <div style={styles.brandRow}>
               <CalendarDays size={28} color="#2d6cdf" />
-              <h2 style={styles.brandTitle}>ロン君のスケジュール</h2>
+              <h2 style={styles.brandTitle}>{APP_DISPLAY_NAME}</h2>
             </div>
             <p style={styles.authCaption}>{authMode === 'login' ? 'ログイン画面' : '新規登録画面'}</p>
             {authError && <p style={styles.authError}>{authError}</p>}
@@ -3776,7 +3850,7 @@ function App() {
                         setMenuOpen(false)
                       }}
                     >
-                      <Clock3 size={18} /> 睡眠記録PDF
+                      <Clock3 size={18} /> 健康生活PDF
                     </button>
                     <button
                       type="button"
@@ -3830,7 +3904,7 @@ function App() {
                 )}
               </div>
               <CalendarDays size={26} color="#2563eb" />
-              <h1 style={styles.title} className="app-title">スケジュール</h1>
+              <h1 style={styles.title} className="app-title">{APP_DISPLAY_NAME}</h1>
             </div>
 
             <div style={styles.userArea} className="app-user-area">
@@ -4571,7 +4645,7 @@ function App() {
             )}
 
             {!sleepOnlyMode && (
-              <div style={styles.homeCopyright}>© {new Date().getFullYear()} ロン君のスケジュール</div>
+              <div style={styles.homeCopyright}>© {new Date().getFullYear()} {APP_DISPLAY_NAME}</div>
             )}
           </main>
           )}
@@ -5552,7 +5626,7 @@ const styles = {
   },
   title: {
     margin: 0,
-    fontSize: '28px',
+    fontSize: '22px',
     color: '#0f172a',
     whiteSpace: 'nowrap',
     overflow: 'hidden',

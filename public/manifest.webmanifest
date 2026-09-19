@@ -1,12 +1,12 @@
 {
-  "name": "ロン君の簡易スケジュール管理",
-  "short_name": "ロン君スケジュール",
+  "name": "ロンスケ＋ジュール",
+  "short_name": "ロンスケ＋ジュ",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f8fbff",
   "theme_color": "#2563eb",
-  "description": "ロン君の予定を管理して通知するスケジュールアプリです。",
+  "description": "ロンスケ＋ジュール — 予定を管理して通知するスケジュールアプリです。",
   "shortcuts": [
     {
       "name": "睡眠記録",

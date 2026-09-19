@@ -25,7 +25,7 @@ const content = {
   ja: {
     htmlLang: 'ja',
     title: '「疲れ」表示の見方と判定のしくみ',
-    subtitle: 'ロン君のスケジュール — 画面下部の「健康生活カウント」フッターに表示される疲れスコア（0〜100）の説明です。',
+    subtitle: 'ロンスケ＋ジュール — ホーム画面末尾の「健康生活カウント」に表示される疲れスコア（0〜100）の説明です。',
     saveLabel: 'PDFとして保存 / 印刷',
     closeLabel: '閉じる',
     footer: () => `作成日: ${new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })}`,
@@ -103,7 +103,7 @@ const content = {
   en: {
     htmlLang: 'en',
     title: 'How the Fatigue Score Works',
-    subtitle: 'Ron’s Schedule — explains the 0–100 fatigue score in the fixed footer “Healthy Life Count” area.',
+    subtitle: 'Ron Sche+dule — explains the 0–100 fatigue score in the “Healthy Life Count” section at the bottom of the home screen.',
     saveLabel: 'Save / Print as PDF',
     closeLabel: 'Close',
     footer: () => `Created on: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`,
