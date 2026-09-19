@@ -29,7 +29,9 @@ import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, p
 import { computeFatigueScore, fatigueBandColors } from './fatigueScore'
 import { buildFatigueGuideHtml } from './fatigueGuideDocument'
 import { buildHealthLifeCountPresentation } from './dayFooterPresentation'
-import { getStepsDisplayState } from './stepsDisplay'
+import { getStepsDisplayState, STEPS_LINKED_STORAGE_KEY } from './stepsDisplay'
+import { formatJstIsoTimestamp, getStepsForDisplay, getStepsForScoring } from './stepsCsv'
+import { clearStepsCsvWebOnly, importStepsCsvText, loadStepsByDate, upsertStepsCsvRow } from './stepsCsvStore'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -426,6 +428,10 @@ function App() {
     return typeof window !== 'undefined' && window.localStorage.getItem(HEALTH_LIFE_COUNT_ENABLED_KEY) === 'true'
   })
   const [healthLifeCountCollapsed, setHealthLifeCountCollapsed] = useState(false)
+  const [stepsByDate, setStepsByDate] = useState(null)
+  const [stepManualDraft, setStepManualDraft] = useState('')
+  const [stepsCsvBusy, setStepsCsvBusy] = useState(false)
+  const stepsCsvFileInputRef = useRef(null)
   const [view, setView] = useState('home')
   const [incompleteItems, setIncompleteItems] = useState([])
   const [incompleteLoading, setIncompleteLoading] = useState(false)
@@ -1086,12 +1092,44 @@ function App() {
 
   const selectedHolidayName = holidayMap[selectedKey] || ''
 
+  useEffect(() => {
+    if (!healthLifeCountEnabled) {
+      setStepsByDate(null)
+      return undefined
+    }
+    let cancelled = false
+    loadStepsByDate()
+      .then((map) => {
+        if (!cancelled) setStepsByDate(map)
+      })
+      .catch((error) => {
+        console.error('歩数CSV読込エラー:', error)
+        if (!cancelled) setStepsByDate(new Map())
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [healthLifeCountEnabled])
+
+  useEffect(() => {
+    if (!stepsByDate) {
+      setStepManualDraft('')
+      return
+    }
+    const row = getStepsForDisplay(stepsByDate, selectedKey)
+    setStepManualDraft(row ? String(row.steps) : '')
+  }, [selectedKey, stepsByDate])
+
   const selectedIsToday = useMemo(() => formatDateKey(selectedDate) === formatDateKey(new Date()), [selectedDate])
 
   const fatigue = useMemo(() => {
     if (!healthLifeCountEnabled) return null
-    return computeFatigueScore(selectedDate, sleepRecordMap, scheduleMap, { isToday: selectedIsToday })
-  }, [healthLifeCountEnabled, selectedDate, sleepRecordMap, scheduleMap, selectedIsToday])
+    const stepsForScoring = stepsByDate ? getStepsForScoring(stepsByDate, selectedKey) : null
+    return computeFatigueScore(selectedDate, sleepRecordMap, scheduleMap, {
+      isToday: selectedIsToday,
+      stepsForScoring,
+    })
+  }, [healthLifeCountEnabled, selectedDate, sleepRecordMap, scheduleMap, selectedIsToday, stepsByDate, selectedKey])
 
   const recentSleepSummary = useMemo(() => {
     if (!healthLifeCountEnabled) return { averageMinutes: null, recordedDays: 0, level: null }
@@ -1234,8 +1272,11 @@ function App() {
 
   const stepsDisplay = useMemo(() => {
     if (!healthLifeCountEnabled) return null
-    return getStepsDisplayState()
-  }, [healthLifeCountEnabled])
+    return getStepsDisplayState({
+      stepRow: stepsByDate ? getStepsForDisplay(stepsByDate, selectedKey) : null,
+      csvHasAnyRow: Boolean(stepsByDate && stepsByDate.size > 0),
+    })
+  }, [healthLifeCountEnabled, stepsByDate, selectedKey])
 
   const healthLifeBandColors = healthLifePresentation
     ? fatigueBandColors[healthLifePresentation.band] || fatigueBandColors.normal
@@ -2632,6 +2673,72 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
+  const saveManualStepsForSelectedDay = async () => {
+    if (stepsCsvBusy || !healthLifeCountEnabled) return
+    const trimmed = stepManualDraft.trim()
+    if (!trimmed) {
+      alert('歩数を入力してください。')
+      return
+    }
+    const steps = Number(trimmed.replace(/,/g, ''))
+    if (!Number.isFinite(steps) || steps < 0 || !Number.isInteger(steps)) {
+      alert('0以上の整数で歩数を入力してください。')
+      return
+    }
+    setStepsCsvBusy(true)
+    try {
+      const next = await upsertStepsCsvRow({
+        date: selectedKey,
+        steps,
+        source: 'manual',
+        is_final: true,
+        updated_at: formatJstIsoTimestamp(),
+      })
+      setStepsByDate(next)
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STEPS_LINKED_STORAGE_KEY, 'true')
+      }
+      const wasEmpty = !stepsByDate || stepsByDate.size === 0
+      if (wasEmpty) {
+        alert('歩数を記録しました。保存用CSV（steps_daily.csv 相当）を新規作成しました。')
+      }
+    } catch (error) {
+      console.error('歩数記録エラー:', error)
+      alert(`歩数の保存に失敗しました:\n${error.message}`)
+    } finally {
+      setStepsCsvBusy(false)
+    }
+  }
+
+  const handleStepsCsvFileChange = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || stepsCsvBusy) return
+    setStepsCsvBusy(true)
+    try {
+      const text = await file.text()
+      const next = await importStepsCsvText(text, { replace: false })
+      setStepsByDate(next)
+      if (typeof window !== 'undefined' && next.size > 0) {
+        window.localStorage.setItem(STEPS_LINKED_STORAGE_KEY, 'true')
+      }
+      alert(`歩数CSVを取り込みました（${next.size}日分）。`)
+    } catch (error) {
+      console.error('歩数CSV取込エラー:', error)
+      alert(`歩数CSVの取り込みに失敗しました:\n${error.message}`)
+    } finally {
+      setStepsCsvBusy(false)
+    }
+  }
+
+  const handleClearStepsCsvWeb = async () => {
+    if (Capacitor.isNativePlatform()) return
+    if (!window.confirm('ブラウザに保存した歩数CSV（localStorage）を削除します。fixtures のサンプルファイルは消えません。よろしいですか？')) return
+    await clearStepsCsvWebOnly()
+    setStepsByDate(new Map())
+    setStepManualDraft('')
+  }
+
   const openSleepReport = async () => {
     if (!session) return
 
@@ -2681,6 +2788,13 @@ function App() {
 
     if (reportWindow.closed) return
 
+    let pdfStepsByDate = new Map()
+    try {
+      pdfStepsByDate = await loadStepsByDate()
+    } catch (error) {
+      console.error('健康生活PDF 歩数CSV読込:', error)
+    }
+
     const reportRows = Array.from({ length: daysInMonth }, (_, index) => {
       const date = new Date(year, month, index + 1)
       const dateKey = formatDateKey(date)
@@ -2700,10 +2814,20 @@ function App() {
     const fatigueByDay = reportRows.map((row, index) => {
       const date = new Date(year, month, index + 1)
       const dayScheduleMap = { [row.dateKey]: scheduleByDate[row.dateKey] || [] }
+      const stepsForScoring = getStepsForScoring(pdfStepsByDate, row.dateKey)
       const fatigue = computeFatigueScore(date, sleepRecordMap, dayScheduleMap, {
         isToday: row.dateKey === todayKey,
+        stepsForScoring,
       })
-      return { dateKey: row.dateKey, score: fatigue.score, bandLabel: fatigue.bandLabel }
+      const stepRow = getStepsForDisplay(pdfStepsByDate, row.dateKey)
+      const stepPoints = fatigue.breakdown.steps?.points ?? null
+      return {
+        dateKey: row.dateKey,
+        score: fatigue.score,
+        bandLabel: fatigue.bandLabel,
+        stepCount: stepRow?.steps ?? null,
+        stepPoints,
+      }
     })
     const todayFatigue = fatigueByDay.find((entry) => entry.dateKey === todayKey)
     const formatDuration = (minutes) => minutes === null ? '-' : `${Math.floor(minutes / 60)}時間${minutes % 60}分`
@@ -2713,8 +2837,10 @@ function App() {
       : null
     const rows = reportRows.map((row, index) => {
       const fatigue = fatigueByDay[index]
+      const stepsCell = fatigue.stepCount === null ? '—' : String(fatigue.stepCount)
+      const stepPtsCell = fatigue.stepPoints === null ? '—' : (fatigue.stepPoints > 0 ? `+${fatigue.stepPoints}` : '0')
       return `
-      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td></tr>`
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${stepsCell}</td><td>${stepPtsCell}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td></tr>`
     }).join('')
     const chartWidth = 760
     const chartHeight = 330
@@ -2798,9 +2924,9 @@ function App() {
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
       <h1>健康生活PDF</h1><div class="period">対象期間: ${year}年${month + 1}月（選択中の月）</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
-      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>疲れ</th><th>帯域</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th></tr></thead><tbody>${rows}</tbody></table>
       <h2>日別の健康生活（睡眠・疲れ・完了件数）</h2><div class="chart-box">${combinedChart}</div>
-      <p class="disclaimer">※疲れスコアは睡眠記録と未完了予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
+      <p class="disclaimer">※疲れスコアは睡眠記録と未完了予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
@@ -4628,6 +4754,20 @@ function App() {
                           />
                         </div>
                       </div>
+                      {healthLifePresentation.showStepsBar && (
+                        <div style={styles.footerMetricBarRow}>
+                          <span style={styles.footerMetricBarLabel}>歩数</span>
+                          <div style={styles.footerMetricBarTrack}>
+                            <div
+                              style={{
+                                ...styles.footerMetricBarFill,
+                                width: `${Math.round(healthLifePresentation.stepsBarRatio * 100)}%`,
+                                background: '#6366f1',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                     {healthLifePresentation.sleepAverageLabel && (
                       <div style={styles.footerSleepAverage}>
@@ -4642,6 +4782,54 @@ function App() {
                       }}
                     >
                       {stepsDisplay.label}
+                    </div>
+                    <div style={styles.footerStepsEditor} aria-label="歩数の手入力とCSV取込">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                        value={stepManualDraft}
+                        onChange={(event) => setStepManualDraft(event.target.value)}
+                        placeholder="歩数"
+                        style={styles.footerStepsInput}
+                        disabled={stepsCsvBusy}
+                        aria-label={`${selectedKey} の歩数`}
+                      />
+                      <button
+                        type="button"
+                        style={styles.footerStepsSaveButton}
+                        onClick={saveManualStepsForSelectedDay}
+                        disabled={stepsCsvBusy}
+                      >
+                        記録
+                      </button>
+                      <button
+                        type="button"
+                        style={styles.footerStepsImportButton}
+                        onClick={() => stepsCsvFileInputRef.current?.click()}
+                        disabled={stepsCsvBusy}
+                      >
+                        CSV取込
+                      </button>
+                      <input
+                        ref={stepsCsvFileInputRef}
+                        type="file"
+                        accept=".csv,text/csv"
+                        style={{ display: 'none' }}
+                        onChange={handleStepsCsvFileChange}
+                      />
+                      {!Capacitor.isNativePlatform() && stepsByDate && stepsByDate.size > 0 && (
+                        <button
+                          type="button"
+                          style={styles.footerStepsClearButton}
+                          onClick={handleClearStepsCsvWeb}
+                          disabled={stepsCsvBusy}
+                          title="public/fixtures のサンプルは消えません。ブラウザに保存した歩数CSVだけ削除します。"
+                        >
+                          保存CSVクリア
+                        </button>
+                      )}
                     </div>
                     <div style={styles.healthLifeDisclaimer}>
                       ※医療上の診断・治療の代わりにはなりません。
@@ -5837,6 +6025,49 @@ const styles = {
   footerStepsUnlinked: {
     color: '#64748b',
     fontWeight: 500,
+  },
+  footerStepsEditor: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: '6px',
+    marginTop: '8px',
+  },
+  footerStepsInput: {
+    width: '88px',
+    padding: '6px 8px',
+    borderRadius: '8px',
+    border: '1px solid #cbd5e1',
+    fontSize: '13px',
+  },
+  footerStepsSaveButton: {
+    padding: '6px 10px',
+    borderRadius: '8px',
+    border: 'none',
+    background: '#0f766e',
+    color: '#fff',
+    fontSize: '12px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+  footerStepsImportButton: {
+    padding: '6px 10px',
+    borderRadius: '8px',
+    border: '1px solid #94a3b8',
+    background: '#fff',
+    color: '#334155',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  footerStepsClearButton: {
+    padding: '6px 8px',
+    border: 'none',
+    background: 'transparent',
+    color: '#64748b',
+    fontSize: '11px',
+    textDecoration: 'underline',
+    cursor: 'pointer',
   },
   footerHealthStrip: {
     width: '100%',

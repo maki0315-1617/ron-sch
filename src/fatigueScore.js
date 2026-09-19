@@ -5,6 +5,7 @@ import {
   getSleepDurationMinutes,
   parseTimeValue,
 } from './dateSleepUtils'
+import { computeStepFatiguePoints } from './stepsCsv'
 
 const FATIGUE_CONFIG = {
   targetSleepMinutes: 7 * 60,
@@ -214,10 +215,10 @@ const buildPrimaryHint = (band, sleepPoints, schedulePoints, isToday) => {
  * @param {Date} selectedDate
  * @param {Record<string, object>} sleepRecordMap
  * @param {Record<string, Array>} scheduleMap
- * @param {{ isToday?: boolean }} [options]
+ * @param {{ isToday?: boolean, stepsForScoring?: number|null }} [options]
  */
 export const computeFatigueScore = (selectedDate, sleepRecordMap, scheduleMap, options = {}) => {
-  const { isToday = true } = options
+  const { isToday = true, stepsForScoring = null } = options
   const dateKey = formatDateKey(selectedDate)
   const dayItems = scheduleMap[dateKey] || []
 
@@ -236,7 +237,21 @@ export const computeFatigueScore = (selectedDate, sleepRecordMap, scheduleMap, o
 
   const sleepPoints = clamp(0, FATIGUE_CONFIG.maxSleepPoints, sleepPart.points + rushPts)
   const schedulePoints = schedulePart.points
-  const score = clamp(0, 100, sleepPoints + schedulePoints)
+
+  let stepPoints = 0
+  let stepBreakdown = null
+  if (stepsForScoring !== null && stepsForScoring !== undefined) {
+    const stepPart = computeStepFatiguePoints(stepsForScoring)
+    stepPoints = stepPart.points
+    stepBreakdown = {
+      points: stepPoints,
+      max: stepPart.max,
+      steps: stepsForScoring,
+      details: stepPart.details,
+    }
+  }
+
+  const score = clamp(0, 100, sleepPoints + schedulePoints + stepPoints)
   const { band, bandLabel } = resolveBand(score)
 
   return {
@@ -259,6 +274,7 @@ export const computeFatigueScore = (selectedDate, sleepRecordMap, scheduleMap, o
         highCount: scheduleMetrics.highCount,
         details: schedulePart.details,
       },
+      ...(stepBreakdown ? { steps: stepBreakdown } : {}),
     },
     primaryHint: buildPrimaryHint(band, sleepPoints, schedulePoints, isToday),
     dayLabel: isToday ? '今日' : 'この日',

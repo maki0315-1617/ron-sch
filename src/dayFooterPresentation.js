@@ -25,9 +25,14 @@ export const buildHealthLifeCountPresentation = ({
   const sleepMax = fatigue.breakdown.sleep.max
   const schedulePoints = fatigue.breakdown.schedule.points
   const scheduleMax = fatigue.breakdown.schedule.max
+  const stepPoints = fatigue.breakdown.steps?.points ?? 0
+  const stepMax = fatigue.breakdown.steps?.max ?? 0
 
   const fatigueLine1 = `${fatigue.dayLabel}の疲れ: ${fatigue.bandLabel}（${fatigue.score}） · 未完了 ${fatigue.breakdown.schedule.itemCount}件`
-  const fatigueLine2 = `内訳 睡眠 ${sleepPoints}/${sleepMax} · 予定 ${schedulePoints}/${scheduleMax}（未完了ベース）`
+  const stepSuffix = stepMax > 0 && fatigue.breakdown.steps
+    ? ` · 歩数 ${stepPoints}/${stepMax}`
+    : ''
+  const fatigueLine2 = `内訳 睡眠 ${sleepPoints}/${sleepMax} · 予定 ${schedulePoints}/${scheduleMax}（未完了ベース）${stepSuffix}`
 
   let sleepAverageLabel = null
   if (sleepRecordEnabled) {
@@ -49,6 +54,8 @@ export const buildHealthLifeCountPresentation = ({
     sleepAverageLabel,
     sleepBarRatio: sleepMax > 0 ? sleepPoints / sleepMax : 0,
     scheduleBarRatio: scheduleMax > 0 ? schedulePoints / scheduleMax : 0,
+    stepsBarRatio: stepMax > 0 ? stepPoints / stepMax : 0,
+    showStepsBar: Boolean(fatigue.breakdown.steps),
     band: fatigue.band,
     ariaLabel: `${fatigue.dayLabel}の疲れ ${fatigue.bandLabel} スコア${fatigue.score}`,
   }
