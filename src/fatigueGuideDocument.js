@@ -25,7 +25,7 @@ const content = {
   ja: {
     htmlLang: 'ja',
     title: '「疲れ」表示の見方と判定のしくみ',
-    subtitle: 'ロン君のスケジュール — 選択中の日の下に表示されるスコア（0〜100）の説明です。',
+    subtitle: 'ロン君のスケジュール — 画面下部の「健康生活カウント」フッターに表示される疲れスコア（0〜100）の説明です。',
     saveLabel: 'PDFとして保存 / 印刷',
     closeLabel: '閉じる',
     footer: () => `作成日: ${new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })}`,
@@ -35,11 +35,13 @@ const content = {
     sections: [
       {
         heading: '1. どこに表示されるか',
-        body: 'ホーム画面で「選択中の日」のすぐ下に、「今日の疲れ」または「この日の疲れ」として帯域・スコア・短いメッセージが表示されます。カレンダーで日付を変えると、その日のデータで再計算されます。',
+        body: '設定メニューの「健康生活カウント表示」をオンにすると、<strong>ホーム画面の末尾</strong>（予定リストの下）にセクションが表示されます。初期状態はオフです。見出しをタップして開閉できます（月カレンダーと同様）。',
         points: [
           '「今日」と「この日」は、選択した日付が本日かどうかで切り替わります。',
-          '2行目には未完了予定件数と、睡眠・予定それぞれの加点（最大50点ずつ）を表示します。',
-          '予定の負荷は<strong>未完了の予定のみ</strong>を数えます。完了にすると予定側の点数が下がります。',
+          '1行目: 帯域・スコア・未完了件数。2行目: 睡眠・予定の内訳点数（各最大50）。',
+          '予定の負荷は<strong>未完了の予定のみ</strong>を数えます。',
+          '達成（連続日数・週バッジ）は選択日の<strong>予定カードの直下</strong>に表示されます。',
+          '表示オフ時は疲れスコアの計算を行いません（省電力）。',
         ],
       },
       {
@@ -47,12 +49,12 @@ const content = {
         body: '睡眠側（最大50点）と予定側（最大50点）を足した合計がスコア（0〜100）です。数字が高いほど「予定・睡眠の面で無理しやすい日」と捉えてください。',
         points: [
           '帯域ラベル（軽め／普通／疲れ気味／無理しない日）は、下表のスコア範囲で決まります。',
-          'スコアの数字は予定や睡眠記録を変えると細かく変わりますが、<strong>メッセージは帯域が変わったとき</strong>を中心に切り替わります。',
+          'スコアの数字は予定や睡眠記録を変えると細かく変わります。',
         ],
       },
       {
         heading: '3. 睡眠側（最大50点）',
-        body: `目標睡眠時間は${fatigueScoringReference.targetSleepHours}時間です。直近${fatigueScoringReference.recentSleepDays}日平均は、睡眠記録パネルの「最近3日間の平均」と同じ集計期間です。`,
+        body: `目標睡眠時間は${fatigueScoringReference.targetSleepHours}時間です。直近${fatigueScoringReference.recentSleepDays}日平均は、フッターに表示される値と同じ集計期間です（睡眠記録表示がオンのとき）。`,
         points: [
           '昨夜の睡眠：前日の就寝時刻と、選択日の起床時刻から睡眠時間を計算。目標より短いほど加点（最大30点）。記録がない場合は小さな固定加点。',
           '直近平均：3日分の平均が短い・やや短い・長めなどに応じて加点（最大15点）。記録が少ない場合は固定加点。',
@@ -71,14 +73,25 @@ const content = {
         ],
       },
       {
-        heading: '5. メッセージ（ロン君の一言）の決め方',
-        body: '表示される短文はランダムではなく、帯域と睡眠・予定のどちらが強いかで次のいずれかが選ばれます。',
+        heading: '5. 免責と説明PDF',
+        body: 'セクション内の1行に、医療上の診断・治療の代わりにならない旨と、本PDFへのリンクが表示されます。',
         points: [
-          '無理しない日：「予定を少なめに…」（今日／この日で文言が変わる）。',
-          '疲れ気味・予定側が強い：「予定が詰まっています…」。',
-          '疲れ気味・睡眠側が同程度以上：「睡眠が少し足りません…」。',
-          '普通：「バランスは普通です…」。',
-          '軽め：「コンディションは軽めです…」。',
+          '体調に不安がある場合は専門家に相談してください。',
+        ],
+      },
+      {
+        heading: '6. 歩数（連携状態）',
+        body: '歩数は端末連携の有無を確認して表示します。未連携のときは「歩数: 未連携」、連携済みでデータがない日は「本日のデータなし」、連携済みで取得できた場合は歩数を表示します（ネイティブ連携は順次対応）。',
+        points: [
+          '現時点では多くの環境で未連携表示になります。',
+          '将来、疲れスコアへの反映を検討する場合も、医療判断には用いません。',
+        ],
+      },
+      {
+        heading: '7. 健康生活カウント（今後の拡張）',
+        body: '同一セクションに睡眠・予定・歩数などを載せる「健康生活カウント」として拡張します。',
+        points: [
+          '疲れスコアと平均睡眠が中心の指標です。',
         ],
       },
     ],
@@ -90,7 +103,7 @@ const content = {
   en: {
     htmlLang: 'en',
     title: 'How the Fatigue Score Works',
-    subtitle: 'Ron’s Schedule — explains the 0–100 score shown below the selected date.',
+    subtitle: 'Ron’s Schedule — explains the 0–100 fatigue score in the fixed footer “Healthy Life Count” area.',
     saveLabel: 'Save / Print as PDF',
     closeLabel: 'Close',
     footer: () => `Created on: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`,
@@ -100,11 +113,13 @@ const content = {
     sections: [
       {
         heading: '1. Where it appears',
-        body: 'On Home, directly under “Selected date”, you see “Today’s fatigue” or “This day’s fatigue” with a band label, score, and short message. Changing the calendar date recalculates for that day.',
+        body: 'Turn on “Show Healthy Life Count” in Settings to show a section at the <strong>bottom of Home</strong> (below your schedule list). It is off by default. Tap the heading to expand or collapse, like the month calendar.',
         points: [
-          '“Today” vs “This day” depends on whether the selected date is the current calendar day.',
-          'The second line shows incomplete task count and sleep/schedule subscores (max 50 each).',
-          'Only <strong>incomplete</strong> tasks count toward schedule load. Completing tasks lowers the schedule portion.',
+          '“Today” vs “This day” depends on the selected date.',
+          'Line 1: band, score, incomplete count. Line 2: sleep/schedule subscores (max 50 each).',
+          'Only incomplete tasks count toward schedule load.',
+          'Streak and weekly badge appear <strong>below the schedule cards</strong> for the selected day.',
+          'When hidden, fatigue score is not calculated.',
         ],
       },
       {
@@ -112,12 +127,12 @@ const content = {
         body: 'Sleep (max 50) + schedule (max 50) = total score (0–100). Higher scores suggest a busier or shorter-sleep day in app terms—not a clinical measure.',
         points: [
           'Band labels follow the table below.',
-          'The numeric score updates as you edit data; the <strong>message mainly changes when the band changes</strong>.',
+          'The numeric score updates as you edit data.',
         ],
       },
       {
         heading: '3. Sleep portion (max 50)',
-        body: `Target sleep is ${fatigueScoringReference.targetSleepHours} hours. The recent ${fatigueScoringReference.recentSleepDays}-day average uses the same window as the sleep panel summary.`,
+        body: `Target sleep is ${fatigueScoringReference.targetSleepHours} hours. The recent ${fatigueScoringReference.recentSleepDays}-day average matches the footer when sleep records are enabled.`,
         points: [
           'Last night: from previous bedtime to selected-day wake time; shorter vs target adds points (up to 30). Missing data adds a small fixed amount.',
           'Recent average: short or moderate averages add points (up to 15). Few records add a small fixed amount.',
@@ -136,15 +151,21 @@ const content = {
         ],
       },
       {
-        heading: '5. How the short message is chosen',
-        body: 'Messages are fixed by band (not random):',
+        heading: '5. Disclaimer and PDF',
+        body: 'One line in the section states this is not medical advice, with a link to this PDF.',
+        points: ['Consult a professional if you have health concerns.'],
+      },
+      {
+        heading: '6. Steps (link status)',
+        body: 'Steps show as unlinked, linked with no data today, or linked with a step count once native integration is available.',
         points: [
-          'Heavy band: take it easier today / this day.',
-          'Tired + schedule-heavy: crowded schedule hint.',
-          'Tired + sleep-heavy: short sleep hint.',
-          'Normal: balanced day hint.',
-          'Light: lighter load hint.',
+          'Most environments show “Steps: Not linked” until integration ships.',
         ],
+      },
+      {
+        heading: '7. Healthy Life Count (planned)',
+        body: 'Sleep, schedule load, and steps will live in one optional Home section.',
+        points: ['Fatigue and sleep average are the main metrics today.'],
       },
     ],
     bandTableTitle: 'Score bands',

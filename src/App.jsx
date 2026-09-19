@@ -28,6 +28,8 @@ import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import { computeFatigueScore, fatigueBandColors } from './fatigueScore'
 import { buildFatigueGuideHtml } from './fatigueGuideDocument'
+import { buildHealthLifeCountPresentation } from './dayFooterPresentation'
+import { getStepsDisplayState } from './stepsDisplay'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -76,6 +78,7 @@ const WEEK_START_DAY_KEY = 'ron-sch-week-start-day'
 const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
+const HEALTH_LIFE_COUNT_ENABLED_KEY = 'ron-sch-health-life-count-enabled'
 
 const isSleepShortcutLaunch = () => {
   if (typeof window === 'undefined') return false
@@ -417,6 +420,10 @@ function App() {
     return isSleepShortcutLaunch() || typeof window === 'undefined' || window.localStorage.getItem(SLEEP_RECORD_ENABLED_KEY) !== 'false'
   })
   const [sleepRecordCollapsed, setSleepRecordCollapsed] = useState(false)
+  const [healthLifeCountEnabled, setHealthLifeCountEnabled] = useState(() => {
+    return typeof window !== 'undefined' && window.localStorage.getItem(HEALTH_LIFE_COUNT_ENABLED_KEY) === 'true'
+  })
+  const [healthLifeCountCollapsed, setHealthLifeCountCollapsed] = useState(false)
   const [view, setView] = useState('home')
   const [incompleteItems, setIncompleteItems] = useState([])
   const [incompleteLoading, setIncompleteLoading] = useState(false)
@@ -675,6 +682,11 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(SLEEP_RECORD_ENABLED_KEY, String(sleepRecordEnabled))
   }, [sleepRecordEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(HEALTH_LIFE_COUNT_ENABLED_KEY, String(healthLifeCountEnabled))
+  }, [healthLifeCountEnabled])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -1074,14 +1086,13 @@ function App() {
 
   const selectedIsToday = useMemo(() => formatDateKey(selectedDate) === formatDateKey(new Date()), [selectedDate])
 
-  const fatigue = useMemo(
-    () => computeFatigueScore(selectedDate, sleepRecordMap, scheduleMap, { isToday: selectedIsToday }),
-    [selectedDate, sleepRecordMap, scheduleMap, selectedIsToday]
-  )
-
-  const fatigueColors = fatigueBandColors[fatigue.band] || fatigueBandColors.normal
+  const fatigue = useMemo(() => {
+    if (!healthLifeCountEnabled) return null
+    return computeFatigueScore(selectedDate, sleepRecordMap, scheduleMap, { isToday: selectedIsToday })
+  }, [healthLifeCountEnabled, selectedDate, sleepRecordMap, scheduleMap, selectedIsToday])
 
   const recentSleepSummary = useMemo(() => {
+    if (!healthLifeCountEnabled) return { averageMinutes: null, recordedDays: 0, level: null }
     const records = Array.from({ length: 3 }, (_, index) => {
       const dateKey = formatDateKey(addDays(selectedDate, -(index + 1)))
       const previousDateKey = formatDateKey(addDays(selectedDate, -(index + 2)))
@@ -1095,10 +1106,10 @@ function App() {
       recordedDays: records.length,
       level: getSleepAdviceLevel(averageMinutes),
     }
-  }, [selectedDate, sleepRecordMap])
+  }, [healthLifeCountEnabled, selectedDate, sleepRecordMap])
 
   const sleepLevelEmoji = useMemo(() => {
-    if (!recentSleepSummary.level) return null
+    if (!healthLifeCountEnabled || !recentSleepSummary.level) return null
     return sleepAdviceByLevel[recentSleepSummary.level].emoji
   }, [recentSleepSummary.level])
 
@@ -1181,7 +1192,7 @@ function App() {
       })
   }, [weekDates, scheduleMap])
 
-  // 連続達成日数・週間バッジ・ロン君の表情を予定データから算出（追加のDB読み込みなし）
+  // 連続達成日数・週間バッジを予定データから算出
   const achievementStats = useMemo(() => {
     const todayKey = formatDateKey(new Date())
 
@@ -1197,25 +1208,6 @@ function App() {
       streakCursor = addDays(streakCursor, -1)
     }
 
-    const todayItems = scheduleMap[todayKey] || []
-    const todayRate = todayItems.length > 0 ? todayItems.filter((item) => item.completed).length / todayItems.length : null
-
-    // マスコットは黒猫統一（🐈‍⬛）で表情のみ変化
-    let mascotEmoji = '🐈‍⬛'
-    let mascotMessage = '今日の予定を登録してみましょう'
-    if (todayRate !== null) {
-      if (todayRate >= 0.8) {
-        mascotEmoji = '🐈‍⬛✨'
-        mascotMessage = '今日も完璧！ロン君もご機嫌です'
-      } else if (todayRate >= 0.4) {
-        mascotEmoji = '🐈‍⬛'
-        mascotMessage = 'いい調子！あと少しでコンプリート'
-      } else {
-        mascotEmoji = '🐈‍⬛💦'
-        mascotMessage = 'ロン君が応援してます、ぼちぼち進めよう'
-      }
-    }
-
     const weekItems = weekDates.flatMap((date) => scheduleMap[formatDateKey(date)] || [])
     const weekRate = weekItems.length > 0 ? weekItems.filter((item) => item.completed).length / weekItems.length : null
     let weekBadge = null
@@ -1225,8 +1217,27 @@ function App() {
       else if (weekRate >= 0.4) weekBadge = { icon: '👍', label: '順調ペース' }
     }
 
-    return { streak, mascotEmoji, mascotMessage, weekBadge }
+    return { streak, weekBadge }
   }, [scheduleMap, weekDates])
+
+  const healthLifePresentation = useMemo(() => {
+    if (!healthLifeCountEnabled || !fatigue) return null
+    return buildHealthLifeCountPresentation({
+      fatigue,
+      recentSleepSummary,
+      formatSleepDuration,
+      sleepRecordEnabled,
+    })
+  }, [healthLifeCountEnabled, fatigue, recentSleepSummary, sleepRecordEnabled])
+
+  const stepsDisplay = useMemo(() => {
+    if (!healthLifeCountEnabled) return null
+    return getStepsDisplayState()
+  }, [healthLifeCountEnabled])
+
+  const healthLifeBandColors = healthLifePresentation
+    ? fatigueBandColors[healthLifePresentation.band] || fatigueBandColors.normal
+    : fatigueBandColors.normal
 
   const searchMonthKey = useMemo(() => {
     const year = selectedDate.getFullYear()
@@ -2874,9 +2885,10 @@ function App() {
           },
           {
             heading: '3. 週ごとの一覧と未完了の確認',
-            body: 'メニューから「スケジュール一覧」や「未完了一覧」を開くと、今週の予定や未完了の作業をまとめて確認できます。月ごとの検索機能も使えます。',
+            body: 'メニューから「スケジュール一覧」や「未完了一覧」を開くと、今週の予定や未完了の作業をまとめて確認できます。ホームでは「スケジュールを検索」で予定名を検索できます。',
             points: [
-              '検索機能で、予定名からすぐに目的の予定を見つけられます。',
+              '検索の月移動は、週カレンダーと同じ青いバーで前月・翌月を切り替えます（選択中の日と連動）。',
+              '検索クリア（×）は入力欄の右側です。',
               'スケジュール一覧PDFで、外出先でも簡単に確認できます。',
               '未完了一覧PDFで、やるべきことを整理しやすくなります。',
             ],
@@ -2900,7 +2912,7 @@ function App() {
               '時刻を手動で変更した場合は「保存」を押して記録します。',
               '睡眠記録の見出しを押すと、入力欄と詳細を折りたためます。初期状態は開いた状態です。',
               '設定メニューの「睡眠記録表示」で、睡眠記録欄の表示・非表示を切り替えられます。非表示にしても保存済みデータは削除されません。',
-              '直近3日間の平均睡眠時間を確認できます。選択日の下の「疲れ」表示の詳細は、ヘルプの「疲れ」判定説明PDFを参照してください。',
+              '「健康生活カウント表示」をオンにすると、ホーム末尾に疲れスコアと最近3日平均睡眠が表示されます（初期はオフ）。詳細はヘルプの「疲れ」判定説明PDFを参照してください。',
               'メニューの「睡眠記録PDF」から、選択中の月の一覧表と日別グラフを出力できます。',
             ],
           },
@@ -2915,7 +2927,7 @@ function App() {
           },
           {
             heading: '7. 進捗状況を確認する',
-            body: 'フッターには連続達成日数と今週の進捗状況が表示されます。達成数を見ながら、自分のペースを把握しやすくなっています。',
+            body: '選択日の予定カードの直下に、連続達成日数と今週のバッジが表示されます。健康生活カウント（設定で表示）では選択日の疲れと睡眠平均を確認できます。',
             points: [
               '進捗率の推移をPDFとして保存できます。',
               '継続のサポートとして、達成感を感じやすくなります。',
@@ -2973,9 +2985,10 @@ function App() {
           },
           {
             heading: '3. Review weekly and incomplete tasks',
-            body: 'From the menu, you can open the weekly schedule and incomplete-task list to review what is coming up or still needs attention. You can also search by task name.',
+            body: 'From the menu, open the weekly schedule and incomplete-task list. On Home, use schedule search to find tasks by name.',
             points: [
-              'Search helps you find the task you need in seconds.',
+              'Month navigation for search uses the same blue bar as the week calendar (synced with the selected date).',
+              'Clear search (×) is on the right of the input field.',
               'Weekly and incomplete-task PDF exports make review easy anywhere.',
               'Lists help you focus on what still requires action.',
             ],
@@ -2999,7 +3012,7 @@ function App() {
               'After changing a time manually, tap “Save” to store the edited value.',
               'Tap the Sleep Records heading to collapse or expand the input and details. It is expanded by default.',
               'Use “Show Sleep Records” in Settings to show or hide the sleep record panel. Hiding it does not delete saved data.',
-              'Review the average sleep time for the most recent three days. See Help → fatigue score guide (PDF) for how the fatigue display below the selected date is calculated.',
+              'Turn on “Show Healthy Life Count” in Settings to see fatigue and 3-day sleep average at the bottom of Home (off by default). See Help → fatigue score guide (PDF).',
               'From the menu, open “Sleep Records PDF” to export a table and a daily sleep-duration chart for the selected month.',
             ],
           },
@@ -3014,7 +3027,7 @@ function App() {
           },
           {
             heading: '7. Track your progress',
-            body: 'The footer shows your streak and weekly progress so it is easy to stay aware of your momentum and keep moving forward.',
+            body: 'Below the schedule cards for the selected day, you see your streak and weekly badge. Healthy Life Count (optional in Settings) shows fatigue and sleep average.',
             points: [
               'Progress trends can be saved as a PDF report.',
               'Motivational indicators help maintain momentum.',
@@ -3697,6 +3710,15 @@ function App() {
                           <Check size={18} color={sleepRecordEnabled ? '#2563eb' : 'transparent'} />
                           睡眠記録表示
                         </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
+                          onClick={() => setHealthLifeCountEnabled((current) => !current)}
+                        >
+                          <Check size={18} color={healthLifeCountEnabled ? '#2563eb' : 'transparent'} />
+                          健康生活カウント表示
+                        </button>
                         <label style={styles.settingsSelectLabel}>
                           週の開始を設定
                           <select
@@ -3897,38 +3919,33 @@ function App() {
               <div className="schedule-search-header" style={styles.scheduleSearchHeader}>
                 <div>
                   <h2 className="schedule-search-title" style={styles.scheduleSearchTitle}>スケジュールを検索</h2>
-                  <p className="schedule-search-caption" style={styles.scheduleSearchCaption}>{searchMonthTitle}の予定名から部分一致で検索</p>
+                  <p className="schedule-search-caption" style={styles.scheduleSearchCaption}>予定名から部分一致で検索（対象月は下の表示）</p>
                 </div>
-                <div className="schedule-search-nav" style={styles.scheduleSearchNav}>
-                  <button
-                    type="button"
-                    className="schedule-search-nav-btn"
-                    style={styles.searchNavButton}
-                    onClick={() => changeSearchMonth(-1)}
-                    aria-label="前月"
-                    title="前月"
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                  <span className="schedule-search-nav-month" style={styles.searchNavMonthText}>{searchMonthTitle}</span>
-                  <button
-                    type="button"
-                    className="schedule-search-nav-btn"
-                    style={styles.searchNavButton}
-                    onClick={() => changeSearchMonth(1)}
-                    aria-label="翌月"
-                    title="翌月"
-                  >
-                    <ChevronRight size={18} />
-                  </button>
-                  {scheduleSearchQuery && (
-                    <button type="button" className="schedule-search-clear-btn" style={styles.searchClearButton} onClick={() => {
-                      setScheduleSearchQuery('')
-                    }} aria-label="検索をクリア" title="検索をクリア">
-                      <X size={16} />
-                    </button>
-                  )}
+              </div>
+              <div className="schedule-search-month-nav week-nav" style={styles.weekNav} role="navigation" aria-label="検索対象の月">
+                <button
+                  type="button"
+                  className="week-nav-btn schedule-search-nav-btn"
+                  style={styles.navButton}
+                  onClick={() => changeSearchMonth(-1)}
+                  aria-label="前月"
+                  title="前月"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <div className="schedule-search-nav-month week-nav-title" style={styles.weekTitle}>
+                  {searchMonthTitle}
                 </div>
+                <button
+                  type="button"
+                  className="week-nav-btn schedule-search-nav-btn"
+                  style={styles.navButton}
+                  onClick={() => changeSearchMonth(1)}
+                  aria-label="翌月"
+                  title="翌月"
+                >
+                  <ChevronRight size={16} />
+                </button>
               </div>
               <div className="schedule-search-input-row" style={styles.scheduleSearchInputRow}>
                 <Search size={18} color="#2563eb" />
@@ -3940,6 +3957,18 @@ function App() {
                   placeholder={`${searchMonthTitle}の予定名を入力`}
                   style={styles.scheduleSearchInput}
                 />
+                {scheduleSearchQuery && (
+                  <button
+                    type="button"
+                    className="schedule-search-clear-btn"
+                    style={styles.searchClearButton}
+                    onClick={() => setScheduleSearchQuery('')}
+                    aria-label="検索をクリア"
+                    title="検索をクリア"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
               </div>
               {scheduleSearchQuery.trim() && (
                 <div style={styles.scheduleSearchResults}>
@@ -4206,43 +4235,6 @@ function App() {
                 </div>
               </div>
 
-              <div
-                style={{
-                  ...styles.fatigueStatus,
-                  borderLeftColor: fatigueColors.border,
-                  background: fatigueColors.background,
-                  color: fatigueColors.color,
-                }}
-                role="status"
-                aria-label={`${fatigue.dayLabel}の疲れ ${fatigue.bandLabel} スコア${fatigue.score}`}
-              >
-                <div style={styles.fatigueStatusMain}>
-                  <strong>
-                    {fatigue.dayLabel}の疲れ: {fatigue.bandLabel}（{fatigue.score}）
-                  </strong>
-                  <span style={styles.fatigueStatusNoteInline}>未完了の予定ベース</span>
-                </div>
-                <div style={styles.fatigueStatusMeta}>
-                  未完了 {fatigue.breakdown.schedule.itemCount}件
-                  {' · '}
-                  睡眠 {fatigue.breakdown.sleep.points}/{fatigue.breakdown.sleep.max}
-                  {' · '}
-                  予定 {fatigue.breakdown.schedule.points}/{fatigue.breakdown.schedule.max}
-                </div>
-                <p style={styles.fatigueStatusHint}>{fatigue.primaryHint}</p>
-                <div style={styles.fatigueMedicalNote}>
-                  {helpLang === 'en'
-                    ? 'Not a substitute for medical diagnosis or treatment.'
-                    : '※医療上の診断・治療の代わりにはなりません。'}
-                  <button type="button" style={styles.fatigueGuideLinkButton} onClick={() => openFatigueGuidePdf(helpLang)}>
-                    {helpLang === 'en' ? 'Score guide (PDF)' : '判定の説明（PDF）'}
-                  </button>
-                </div>
-                {sleepRecordEnabled && fatigue.breakdown.sleep.lastNightMinutes === null && recentSleepSummary.recordedDays === 0 && (
-                  <div style={styles.fatigueStatusFootnote}>睡眠記録を入れると、疲れの見立てがより正確になります。</div>
-                )}
-              </div>
-
               {sleepRecordEnabled && <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
                 <div style={styles.sleepRecordTitleRow}>
                   <button
@@ -4306,21 +4298,6 @@ function App() {
                   <strong>{previousSleepRecord?.bedtime || '未記録'}</strong>
                   <span style={styles.previousSleepRecordNote}>前日の記録を表示</span>
                 </div>
-                <aside className="sleep-summary" style={styles.sleepSummary} aria-label="最近3日間の平均睡眠時間">
-                  <div style={styles.sleepSummaryHeading}>最近3日間の平均</div>
-                  {recentSleepSummary.level ? (
-                    <>
-                      <div style={styles.sleepSummaryValue}>
-                        {formatSleepDuration(recentSleepSummary.averageMinutes)}{' '}
-                        {sleepLevelEmoji && <span style={styles.sleepSummaryEmoji}>{sleepLevelEmoji}</span>}
-                      </div>
-                      <div style={styles.sleepSummaryDays}>{recentSleepSummary.recordedDays}/3日を集計</div>
-                      <div style={styles.sleepSummaryFootnote}>詳しいアドバイスは上の「疲れ」表示をご覧ください</div>
-                    </>
-                  ) : (
-                    <div style={styles.sleepSummaryEmpty}>睡眠時間を保存すると表示します</div>
-                  )}
-                </aside>
                 </>}
               </div>}
 
@@ -4501,6 +4478,101 @@ function App() {
                 </div>
               )}
             </section>
+
+            {!sleepOnlyMode && (
+              <section className="achievement-bar" style={styles.achievementBar} aria-label="達成状況">
+                <div className="achievement-item" style={styles.achievementItem}>
+                  <span style={styles.achievementIcon} aria-hidden="true">🔥</span>
+                  <span style={styles.achievementLabel}>{achievementStats.streak}日連続達成</span>
+                </div>
+                {achievementStats.weekBadge && (
+                  <div className="achievement-item" style={styles.achievementBadge}>
+                    <span style={styles.achievementIcon} aria-hidden="true">{achievementStats.weekBadge.icon}</span>
+                    <span style={styles.achievementLabel}>今週: {achievementStats.weekBadge.label}</span>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {!sleepOnlyMode && healthLifeCountEnabled && healthLifePresentation && stepsDisplay && (
+              <section className="health-life-count-section" style={styles.healthLifeCountSection} aria-label="健康生活カウント">
+                <div className="health-life-count-nav" style={styles.healthLifeCountNav}>
+                  <button
+                    type="button"
+                    style={styles.healthLifeCountCollapseButton}
+                    onClick={() => setHealthLifeCountCollapsed((current) => !current)}
+                    aria-expanded={!healthLifeCountCollapsed}
+                    aria-label={healthLifeCountCollapsed ? '健康生活カウントを開く' : '健康生活カウントを閉じる'}
+                  >
+                    {healthLifeCountCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                    <span>健康生活カウント</span>
+                  </button>
+                </div>
+                {!healthLifeCountCollapsed && (
+                  <div
+                    style={{
+                      ...styles.footerHealthStrip,
+                      borderLeftColor: healthLifeBandColors.border,
+                    }}
+                    role="status"
+                    aria-label={healthLifePresentation.ariaLabel}
+                  >
+                    <div style={styles.footerFatigueLine1}>{healthLifePresentation.fatigueLine1}</div>
+                    <div style={styles.footerFatigueLine2}>{healthLifePresentation.fatigueLine2}</div>
+                    <div style={styles.footerMetricBars} aria-hidden="true">
+                      <div style={styles.footerMetricBarRow}>
+                        <span style={styles.footerMetricBarLabel}>睡眠</span>
+                        <div style={styles.footerMetricBarTrack}>
+                          <div
+                            style={{
+                              ...styles.footerMetricBarFill,
+                              width: `${Math.round(healthLifePresentation.sleepBarRatio * 100)}%`,
+                              background: '#14b8a6',
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div style={styles.footerMetricBarRow}>
+                        <span style={styles.footerMetricBarLabel}>予定</span>
+                        <div style={styles.footerMetricBarTrack}>
+                          <div
+                            style={{
+                              ...styles.footerMetricBarFill,
+                              width: `${Math.round(healthLifePresentation.scheduleBarRatio * 100)}%`,
+                              background: '#f59e0b',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    {healthLifePresentation.sleepAverageLabel && (
+                      <div style={styles.footerSleepAverage}>
+                        {healthLifePresentation.sleepAverageLabel}
+                        {sleepLevelEmoji && <span style={styles.footerSleepEmoji}>{sleepLevelEmoji}</span>}
+                      </div>
+                    )}
+                    <div
+                      style={{
+                        ...styles.footerStepsLine,
+                        ...(stepsDisplay.status === 'unlinked' ? styles.footerStepsUnlinked : {}),
+                      }}
+                    >
+                      {stepsDisplay.label}
+                    </div>
+                    <div style={styles.healthLifeDisclaimer}>
+                      ※医療上の診断・治療の代わりにはなりません。
+                      <button type="button" style={styles.fatigueGuideLinkButton} onClick={() => openFatigueGuidePdf(helpLang)}>
+                        {helpLang === 'en' ? 'Score guide (PDF)' : '判定の説明（PDF）'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {!sleepOnlyMode && (
+              <div style={styles.homeCopyright}>© {new Date().getFullYear()} ロン君のスケジュール</div>
+            )}
           </main>
           )}
 
@@ -4575,26 +4647,6 @@ function App() {
               </section>
             </main>
           )}
-
-          <footer style={styles.footer}>
-            <section className="achievement-bar" style={{ ...styles.achievementBar, ...styles.footerAchievementBar }} aria-label="達成状況">
-              <div className="achievement-item" style={styles.achievementItem}>
-                <span style={styles.achievementIcon} aria-hidden="true">🔥</span>
-                <span style={styles.achievementLabel}>{achievementStats.streak}日連続達成</span>
-              </div>
-              <div className="achievement-item" style={styles.achievementItem}>
-                <span style={styles.achievementIcon} aria-hidden="true">{achievementStats.mascotEmoji}</span>
-                <span style={styles.achievementLabel}>{achievementStats.mascotMessage}</span>
-              </div>
-              {achievementStats.weekBadge && (
-                <div className="achievement-item" style={styles.achievementBadge}>
-                  <span style={styles.achievementIcon} aria-hidden="true">{achievementStats.weekBadge.icon}</span>
-                  <span style={styles.achievementLabel}>今週: {achievementStats.weekBadge.label}</span>
-                </div>
-              )}
-            </section>
-            <div>© {new Date().getFullYear()} ロン君のスケジュール</div>
-          </footer>
 
           <button
             type="button"
@@ -5652,6 +5704,155 @@ const styles = {
     overflowY: 'auto',
     overscrollBehavior: 'contain',
   },
+  healthLifeCountSection: {
+    marginTop: '8px',
+    border: '1px solid #dbeafe',
+    borderRadius: '14px',
+    background: '#ffffff',
+    overflow: 'hidden',
+  },
+  healthLifeCountNav: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: '8px 10px',
+    background: '#f0fdfa',
+    borderBottom: '1px solid #ccfbf1',
+  },
+  healthLifeCountCollapseButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: 0,
+    background: 'transparent',
+    color: '#0f766e',
+    fontWeight: 700,
+    fontSize: '13px',
+    cursor: 'pointer',
+    padding: 0,
+  },
+  healthLifeDisclaimer: {
+    marginTop: '10px',
+    fontSize: '11px',
+    lineHeight: 1.5,
+    color: '#64748b',
+  },
+  homeCopyright: {
+    marginTop: '16px',
+    paddingTop: '12px',
+    borderTop: '1px solid #e2e8f0',
+    textAlign: 'center',
+    fontSize: '11px',
+    color: '#94a3b8',
+  },
+  footerStepsLine: {
+    marginTop: '8px',
+    fontSize: '12px',
+    color: '#334155',
+    fontWeight: 600,
+  },
+  footerStepsUnlinked: {
+    color: '#64748b',
+    fontWeight: 500,
+  },
+  footerHealthStrip: {
+    width: '100%',
+    background: '#ffffff',
+    borderLeft: '4px solid #14b8a6',
+    padding: '10px 12px',
+  },
+  footerHealthTitle: {
+    fontSize: '11px',
+    fontWeight: 800,
+    letterSpacing: '0.04em',
+    color: '#0f766e',
+    marginBottom: '6px',
+  },
+  footerFatigueLine1: {
+    fontSize: '13px',
+    fontWeight: 700,
+    color: '#0f172a',
+    lineHeight: 1.45,
+  },
+  footerFatigueLine2: {
+    fontSize: '11px',
+    color: '#64748b',
+    marginTop: '2px',
+    lineHeight: 1.45,
+  },
+  footerMetricBars: {
+    display: 'grid',
+    gap: '4px',
+    marginTop: '8px',
+  },
+  footerMetricBarRow: {
+    display: 'grid',
+    gridTemplateColumns: '36px 1fr',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  footerMetricBarLabel: {
+    fontSize: '10px',
+    color: '#64748b',
+  },
+  footerMetricBarTrack: {
+    height: '6px',
+    borderRadius: '999px',
+    background: '#e2e8f0',
+    overflow: 'hidden',
+  },
+  footerMetricBarFill: {
+    height: '100%',
+    borderRadius: '999px',
+  },
+  footerSleepAverage: {
+    marginTop: '8px',
+    fontSize: '12px',
+    color: '#134e4a',
+    fontWeight: 600,
+  },
+  footerSleepEmoji: {
+    marginLeft: '4px',
+  },
+  footerStepsPlaceholder: {
+    marginTop: '6px',
+    fontSize: '10px',
+    color: '#94a3b8',
+  },
+  footerRonMessage: {
+    display: 'flex',
+    gap: '10px',
+    alignItems: 'flex-start',
+    width: '100%',
+    borderLeft: '4px solid #14b8a6',
+    borderRadius: '12px',
+    padding: '10px 12px',
+  },
+  footerRonEmoji: {
+    fontSize: '22px',
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+  footerRonText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  footerRonParagraph: {
+    margin: 0,
+    fontSize: '13px',
+    lineHeight: 1.55,
+  },
+  footerMedicalNote: {
+    width: '100%',
+    fontSize: '11px',
+    lineHeight: 1.5,
+    textAlign: 'center',
+    color: '#64748b',
+  },
+  footerCopyright: {
+    textAlign: 'center',
+    fontSize: '11px',
+    color: '#94a3b8',
+  },
   footer: {
     marginTop: '10px',
     padding: '12px 14px 10px',
@@ -5950,11 +6151,7 @@ const styles = {
     color: '#16a34a',
   },
   scheduleSearchHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: '12px',
-    marginBottom: '10px',
+    marginBottom: '8px',
   },
   scheduleSearchTitle: {
     color: '#0f172a',
@@ -5964,31 +6161,6 @@ const styles = {
     color: '#64748b',
     fontSize: '12px',
     marginTop: '3px',
-  },
-  scheduleSearchNav: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-  },
-  searchNavButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '34px',
-    height: '34px',
-    border: '1px solid #bfdbfe',
-    borderRadius: '8px',
-    background: '#eff6ff',
-    color: '#2563eb',
-    cursor: 'pointer',
-    padding: 0,
-  },
-  searchNavMonthText: {
-    fontSize: '18px',
-    fontWeight: 700,
-    color: '#1e3a8a',
-    minWidth: '128px',
-    textAlign: 'center',
   },
   searchClearButton: {
     display: 'flex',
@@ -6007,6 +6179,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+    marginTop: '10px',
     border: '1px solid #bfdbfe',
     borderRadius: '8px',
     background: '#f8fbff',
@@ -6151,10 +6324,7 @@ const styles = {
     fontWeight: 600,
   },
   sleepRecordPanel: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) minmax(220px, 280px)',
-    columnGap: '16px',
-    alignItems: 'start',
+    display: 'block',
     borderTop: '1px solid #e8eef7',
     borderBottom: '1px solid #e8eef7',
     padding: '10px 0',
