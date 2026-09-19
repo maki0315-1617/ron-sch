@@ -2717,59 +2717,70 @@ function App() {
       <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td></tr>`
     }).join('')
     const chartWidth = 760
-    const chartHeight = 310
-    const plotLeft = 48
-    const plotRight = chartWidth - 24
-    const plotTop = 40
-    const plotBottom = 220
+    const chartHeight = 330
+    const plotLeft = 52
+    const plotRight = chartWidth - 52
+    const plotTop = 44
+    const plotBottom = 208
+    const barBandTop = 212
+    const barBandBottom = 232
+    const plotHeight = plotBottom - plotTop
+    const barBandHeight = barBandBottom - barBandTop
     const maxMinutes = Math.max(12 * 60, ...reportRows.filter((row) => row.minutes !== null).map((row) => row.minutes))
     const maxCompletedPlans = Math.max(1, ...reportRows.map((row) => row.completedPlanCount))
+    const xForIndex = (index) => (
+      reportRows.length === 1
+        ? (plotLeft + plotRight) / 2
+        : plotLeft + (plotRight - plotLeft) * index / (reportRows.length - 1)
+    )
     const chartPoints = reportRows.map((row, index) => {
-      const x = reportRows.length === 1 ? (plotLeft + plotRight) / 2 : plotLeft + (plotRight - plotLeft) * index / (reportRows.length - 1)
-      const y = 220 - (row.minutes / maxMinutes) * 180
-      return { ...row, x, y }
+      const x = xForIndex(index)
+      const fatigue = fatigueByDay[index]
+      const sleepY = row.minutes === null ? null : plotBottom - (row.minutes / maxMinutes) * plotHeight
+      const fatigueY = plotBottom - (fatigue.score / 100) * plotHeight
+      return { ...row, x, sleepY, fatigueY, fatigueScore: fatigue.score, fatigueBandLabel: fatigue.bandLabel }
     })
-    const sleepPoints = chartPoints.filter((point) => point.minutes !== null)
-    const polyline = sleepPoints.map((point) => `${point.x},${point.y}`).join(' ')
-    const targetY = plotBottom - (8 * 60 / maxMinutes) * 180
-    const bars = chartPoints.map((point) => {
-      const barWidth = Math.max(4, (plotRight - plotLeft) / daysInMonth * 0.58)
-      const barHeight = point.completedPlanCount / maxCompletedPlans * 70
-      return `<rect x="${point.x - barWidth / 2}" y="${plotBottom - barHeight}" width="${barWidth}" height="${barHeight}" fill="#f59e0b" opacity="0.72"><title>${point.dateKey}: 完了 ${point.completedPlanCount}件</title></rect>`
+    const sleepPoints = chartPoints.filter((point) => point.sleepY !== null)
+    const sleepPolyline = sleepPoints.map((point) => `${point.x},${point.sleepY}`).join(' ')
+    const fatiguePolyline = chartPoints.map((point) => `${point.x},${point.fatigueY}`).join(' ')
+    const targetY = plotBottom - (8 * 60 / maxMinutes) * plotHeight
+    const leftHoursLabel = (hours) => `${hours}h`
+    const barWidth = Math.max(4, (plotRight - plotLeft) / daysInMonth * 0.58)
+    const completionBars = chartPoints.map((point) => {
+      const barHeight = point.completedPlanCount / maxCompletedPlans * barBandHeight
+      return `<rect x="${point.x - barWidth / 2}" y="${barBandBottom - barHeight}" width="${barWidth}" height="${barHeight}" fill="#f59e0b" opacity="0.78"><title>${point.dateKey}: 完了 ${point.completedPlanCount}件</title></rect>`
     }).join('')
-    const chart = `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="日別睡眠時間と完了計画数のグラフ">
+    const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`
+    const showTodayLegend = todayFatigue && todayKey.startsWith(monthPrefix)
+    const combinedChart = `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="日別の健康生活（睡眠・疲れ・完了件数）">
+        <rect x="${plotLeft}" y="${barBandTop}" width="${plotRight - plotLeft}" height="${barBandHeight}" fill="#fff7ed" opacity="0.85" />
         <line x1="${plotLeft}" y1="${plotBottom}" x2="${plotRight}" y2="${plotBottom}" stroke="#cbd5e1" />
-        <line x1="${plotLeft}" y1="${plotTop}" x2="${plotLeft}" y2="${plotBottom}" stroke="#cbd5e1" />
-        ${bars}
+        <line x1="${plotLeft}" y1="${plotTop}" x2="${plotLeft}" y2="${plotBottom}" stroke="#94a3b8" />
+        <line x1="${plotRight}" y1="${plotTop}" x2="${plotRight}" y2="${plotBottom}" stroke="#94a3b8" />
+        <line x1="${plotLeft}" y1="${barBandTop}" x2="${plotRight}" y2="${barBandTop}" stroke="#e2e8f0" stroke-dasharray="4 3" />
+        <text x="${plotLeft - 6}" y="${plotTop + 4}" text-anchor="end" font-size="9" fill="#115e59">${leftHoursLabel(Math.round(maxMinutes / 60))}</text>
+        <text x="${plotLeft - 6}" y="${plotBottom}" text-anchor="end" font-size="9" fill="#115e59">0h</text>
+        <text x="${plotLeft - 6}" y="${plotTop + plotHeight / 2 + 3}" text-anchor="end" font-size="8" fill="#64748b">睡眠</text>
+        <text x="${plotRight + 6}" y="${plotTop + 4}" text-anchor="start" font-size="9" fill="#5b21b6">100</text>
+        <text x="${plotRight + 6}" y="${plotBottom}" text-anchor="start" font-size="9" fill="#5b21b6">0</text>
+        <text x="${plotRight + 6}" y="${plotTop + plotHeight / 2 + 3}" text-anchor="start" font-size="8" fill="#64748b">疲れ</text>
         <line x1="${plotLeft}" y1="${targetY}" x2="${plotRight}" y2="${targetY}" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 5" />
-        <text x="${plotRight}" y="${targetY - 6}" text-anchor="end" font-size="11" fill="#b91c1c">推奨 8時間</text>
-        ${sleepPoints.length ? `<polyline points="${polyline}" fill="none" stroke="#0f766e" stroke-width="3" />${sleepPoints.map((point, index) => { const labelY = index % 2 === 0 ? point.y - 8 : point.y + 16; return `<circle cx="${point.x}" cy="${point.y}" r="4" fill="#0f766e" /><text x="${point.x}" y="${labelY}" text-anchor="middle" font-size="8" fill="#115e59">${formatDuration(point.minutes)}</text>` }).join('')}` : ''}
-        ${chartPoints.map((point) => `<text x="${point.x}" y="252" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
-        <text x="${plotLeft}" y="260" font-size="11" fill="#0f766e">● 睡眠時間</text><text x="${plotLeft + 110}" y="260" font-size="11" fill="#d97706">■ 完了計画数</text>
-      </svg>`
-
-    const fatigueChartPoints = fatigueByDay.map((entry, index) => {
-      const x = reportRows.length === 1 ? (plotLeft + plotRight) / 2 : plotLeft + (plotRight - plotLeft) * index / (reportRows.length - 1)
-      const y = plotBottom - (entry.score / 100) * 180
-      return { ...entry, x, y }
-    })
-    const fatiguePolyline = fatigueChartPoints.map((point) => `${point.x},${point.y}`).join(' ')
-    const fatigueChart = `<svg viewBox="0 0 ${chartWidth} ${chartHeight}" role="img" aria-label="日別の疲れスコア">
-        <line x1="${plotLeft}" y1="${plotBottom}" x2="${plotRight}" y2="${plotBottom}" stroke="#cbd5e1" />
-        <line x1="${plotLeft}" y1="${plotTop}" x2="${plotLeft}" y2="${plotBottom}" stroke="#cbd5e1" />
-        <line x1="${plotLeft}" y1="${plotTop}" x2="${plotRight}" y2="${plotTop}" stroke="#e2e8f0" stroke-dasharray="4 4" />
-        <text x="${plotLeft + 4}" y="${plotTop + 12}" font-size="10" fill="#64748b">100</text>
-        <text x="${plotLeft + 4}" y="${plotBottom - 4}" font-size="10" fill="#64748b">0</text>
+        <text x="${plotRight - 4}" y="${targetY - 6}" text-anchor="end" font-size="10" fill="#b91c1c">推奨 8時間</text>
+        ${completionBars}
+        ${sleepPoints.length ? `<polyline points="${sleepPolyline}" fill="none" stroke="#0f766e" stroke-width="3" />${sleepPoints.map((point, index) => { const labelY = index % 2 === 0 ? point.sleepY - 8 : point.sleepY + 14; return `<circle cx="${point.x}" cy="${point.sleepY}" r="4" fill="#0f766e" /><text x="${point.x}" y="${labelY}" text-anchor="middle" font-size="7" fill="#115e59">${formatDuration(point.minutes)}</text>` }).join('')}` : ''}
         <polyline points="${fatiguePolyline}" fill="none" stroke="#7c3aed" stroke-width="3" />
-        ${fatigueChartPoints.map((point) => {
+        ${chartPoints.map((point) => {
           const isToday = point.dateKey === todayKey
           const r = isToday ? 6 : 4
           const fill = isToday ? '#dc2626' : '#7c3aed'
-          return `<circle cx="${point.x}" cy="${point.y}" r="${r}" fill="${fill}"><title>${point.dateKey}: 疲れ ${point.score}（${point.bandLabel}）</title></circle><text x="${point.x}" y="${point.y - 10}" text-anchor="middle" font-size="8" fill="#5b21b6">${point.score}</text>`
+          return `<circle cx="${point.x}" cy="${point.fatigueY}" r="${r}" fill="${fill}"><title>${point.dateKey}: 疲れ ${point.fatigueScore}（${point.fatigueBandLabel}）</title></circle><text x="${point.x}" y="${point.fatigueY - 10}" text-anchor="middle" font-size="8" fill="#5b21b6">${point.fatigueScore}</text>`
         }).join('')}
-        ${fatigueChartPoints.map((point) => `<text x="${point.x}" y="252" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
-        <text x="${plotLeft}" y="260" font-size="11" fill="#7c3aed">● 疲れスコア（0〜100）</text>
-        ${todayFatigue && todayKey.startsWith(`${year}-${String(month + 1).padStart(2, '0')}`) ? `<text x="${plotRight}" y="260" text-anchor="end" font-size="11" fill="#dc2626">今日: ${todayFatigue.score}（${todayFatigue.bandLabel}）</text>` : ''}
+        ${chartPoints.map((point) => `<text x="${point.x}" y="248" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
+        <text x="${plotLeft}" y="268" font-size="10" fill="#0f766e">● 睡眠（左・時間）</text>
+        <text x="${plotLeft + 130}" y="268" font-size="10" fill="#7c3aed">● 疲れ（右・0〜100）</text>
+        <text x="${plotLeft + 280}" y="268" font-size="10" fill="#d97706">■ 完了件数（下帯・相対）</text>
+        ${showTodayLegend ? `<text x="${plotRight}" y="268" text-anchor="end" font-size="10" fill="#dc2626">今日の疲れ: ${todayFatigue.score}（${todayFatigue.bandLabel}）</text>` : ''}
+        <text x="${plotLeft}" y="284" font-size="9" fill="#64748b">左軸＝睡眠時間　右軸＝疲れスコア　下の橙棒＝その日に完了した予定件数（当月最大を基準にした高さの目安）</text>
       </svg>`
 
     const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>健康生活PDF</title>
@@ -2779,7 +2790,7 @@ function App() {
         h1 { margin: 0 0 5px; font-size: 24px; } h2 { margin: 22px 0 10px; font-size: 17px; color: #115e59; }
         .period, .output-date { color: #64748b; font-size: 13px; } .output-date { margin: 4px 0 18px; } .average { margin: 0 0 14px; color: #134e4a; font-size: 15px; } .average span { margin-left: 6px; color: #64748b; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; font-size: 12px; } th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
-        th { background: #ccfbf1; color: #115e59; } .chart-box { border: 1px solid #e2e8f0; padding: 10px; margin-bottom: 14px; } svg { width: 100%; height: auto; }
+        th { background: #ccfbf1; color: #115e59; } .chart-box { border: 1px solid #e2e8f0; padding: 10px; margin-bottom: 14px; } .chart-note { margin: 6px 0 0; font-size: 10px; color: #64748b; line-height: 1.45; } svg { width: 100%; height: auto; }
         .disclaimer { margin-top: 16px; font-size: 11px; color: #64748b; line-height: 1.5; }
         .empty { color: #64748b; text-align: center; padding: 30px; } .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
         button { border: 0; border-radius: 8px; background: #0f766e; color: white; padding: 10px 18px; font-weight: 700; cursor: pointer; } .close-button { background: #64748b; }
@@ -2788,8 +2799,7 @@ function App() {
       <h1>健康生活PDF</h1><div class="period">対象期間: ${year}年${month + 1}月（選択中の月）</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
       <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>疲れ</th><th>帯域</th></tr></thead><tbody>${rows}</tbody></table>
-      <h2>日別睡眠時間・完了計画数</h2><div class="chart-box">${chart}</div>
-      <h2>日別の疲れスコア</h2><div class="chart-box">${fatigueChart}</div>
+      <h2>日別の健康生活（睡眠・疲れ・完了件数）</h2><div class="chart-box">${combinedChart}</div>
       <p class="disclaimer">※疲れスコアは睡眠記録と未完了予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
@@ -2962,7 +2972,7 @@ function App() {
               '時刻を手動で変更した場合は「保存」を押して記録します。',
               '睡眠記録の見出しを押すと、入力欄と詳細を折りたためます。初期状態は開いた状態です。',
               '設定メニューの「睡眠記録表示」で、睡眠記録欄の表示・非表示を切り替えられます。非表示にしても保存済みデータは削除されません。',
-              'メニューの「健康生活PDF」から、選択中の月の睡眠一覧・日別グラフ・日別の疲れスコア（折れ線）を出力できます。',
+              'メニューの「健康生活PDF」から、選択中の月の睡眠一覧と、睡眠・疲れ・完了件数を1枚にまとめた日別グラフを出力できます。',
             ],
           },
           {
@@ -2989,7 +2999,7 @@ function App() {
             points: [
               'オンにすると、ホーム画面の末尾（予定リストの下）にセクションが現れます。見出しをタップして開閉できます（月カレンダーと同様）。',
               '表示内容: 疲れスコア（2行）、睡眠・予定の内訳バー、最近3日の平均睡眠（睡眠記録表示がオンのとき）、歩数（連携状態に応じて表示）。',
-              '月次の疲れ推移はメニューの「健康生活PDF」で日別折れ線グラフとして確認できます。',
+              '月次の疲れ推移はメニューの「健康生活PDF」の統合グラフ（左＝睡眠・右＝疲れ・下帯＝完了件数）で確認できます。',
               '疲れは未完了の予定のみを対象に計算します。カレンダーで日付を変えると、その日のデータで更新されます。',
               'セクション内に医療上の免責（診断・治療の代わりにならない旨）があります。詳しい判定のしくみは、ヘルプの「疲れ」判定の説明PDFを参照してください。',
               '表示をオフにしている間は、疲れスコアの計算を行いません。',
@@ -3074,7 +3084,7 @@ function App() {
               'After changing a time manually, tap “Save” to store the edited value.',
               'Tap the Sleep Records heading to collapse or expand the input and details. It is expanded by default.',
               'Use “Show Sleep Records” in Settings to show or hide the sleep record panel. Hiding it does not delete saved data.',
-              'From the menu, open “Healthy Life PDF” to export the month’s sleep table, charts, and daily fatigue score line graph.',
+              'From the menu, open “Healthy Life PDF” to export the month’s sleep table and a combined daily chart (sleep, fatigue, completed tasks).',
             ],
           },
           {
@@ -3101,7 +3111,7 @@ function App() {
             points: [
               'When enabled, a section appears at the bottom of Home (below your schedule list). Tap the heading to expand or collapse it, like the month calendar.',
               'It shows: fatigue score (two lines), sleep/schedule bars, recent 3-day sleep average (when sleep records are shown), and steps (based on link status).',
-              'Daily fatigue trends for the month are available in the menu as “Healthy Life PDF” (line chart).',
+              'Monthly fatigue trends appear in “Healthy Life PDF” as one chart (left: sleep, right: fatigue, bottom band: completed tasks).',
               'Fatigue uses incomplete tasks only. Changing the selected date recalculates for that day.',
               'A one-line medical disclaimer appears in the section. For full scoring details, open Help → fatigue score guide (PDF).',
               'While the feature is off, fatigue score is not calculated.',
