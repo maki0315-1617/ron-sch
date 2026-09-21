@@ -109,6 +109,24 @@ img {
   user-select: none;
 }
 
+.schedule-list {
+  position: relative;
+}
+
+.schedule-card-mobile:has(.schedule-action-menu[open]) {
+  position: relative;
+  z-index: 120;
+}
+
+.schedule-action-menu {
+  position: relative;
+}
+
+.schedule-action-menu-list {
+  max-height: min(70vh, 360px);
+  overflow-y: auto;
+}
+
 .schedule-action-menu-item {
   transition: background-color 0.15s ease, color 0.15s ease;
 }
@@ -519,13 +537,10 @@ img {
   }
 
   .schedule-action-menu-list {
-    top: 36px !important;
-    right: 0 !important;
     width: 220px !important;
     padding: 8px 6px !important;
     border-radius: 12px !important;
     box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22), 0 4px 10px rgba(0, 0, 0, 0.08) !important;
-    z-index: 60 !important;
   }
 
   .schedule-action-menu-item {

@@ -57,6 +57,12 @@ const parseTimeValue = (time = '00:00') => {
   return Number(hourText || 0) * 60 + Number(minuteText || 0);
 };
 
+/** タスク（isTask）・時刻なしは通知対象外 */
+const isNotificationScheduleItem = (item) => {
+  if (!item || item.isTask === true) return false;
+  return Boolean(item.time);
+};
+
 const isDueWithinGraceWindow = (scheduledTime, nowTime, graceMinutes) => {
   const scheduledMinutes = parseTimeValue(scheduledTime);
   const nowMinutes = parseTimeValue(nowTime);
@@ -190,7 +196,7 @@ const sendReminderNotifications = async (scheduleSnapshot, dateKey, timeKey, off
 
   const reminderItems = scheduleSnapshot.docs.filter((scheduleDoc) => {
     const item = scheduleDoc.data();
-    if (!item.user_id || item.completed === true) {
+    if (!item.user_id || item.completed === true || !isNotificationScheduleItem(item)) {
       return false;
     }
     return isDueForReminder(item.time || '00:00', timeKey, offsetMinutes, graceMinutes);
@@ -287,7 +293,7 @@ exports.sendScheduleStartNotifications = onSchedule(
 
     const dueItems = scheduleSnapshot.docs.filter((scheduleDoc) => {
       const item = scheduleDoc.data();
-      if (!item.user_id || item.completed === true) {
+      if (!item.user_id || item.completed === true || !isNotificationScheduleItem(item)) {
         return false;
       }
       return isDueWithinGraceWindow(item.time || '00:00', timeKey, graceMinutes);

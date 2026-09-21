@@ -19,6 +19,7 @@ import {
   getDocs,
   query,
   setDoc,
+  deleteField,
   serverTimestamp,
   updateDoc,
   writeBatch,
@@ -32,6 +33,24 @@ import { buildHealthLifeCountPresentation } from './dayFooterPresentation'
 import { getStepsDisplayState, STEPS_LINKED_STORAGE_KEY } from './stepsDisplay'
 import { formatJstIsoTimestamp, getStepsForDisplay, getStepsForScoring } from './stepsCsv'
 import { clearStepsCsvWebOnly, importStepsCsvText, loadStepsByDate, upsertStepsCsvRow } from './stepsCsvStore'
+import {
+  buildScheduleRelationTimeChangeConfirm,
+  filterTimedSchedules,
+  findRelatedScheduleItem,
+  findPriorScheduleBlockingComplete,
+  findDependentScheduleItem,
+  formatScheduleTimeRange,
+  formatScheduleRelationLine,
+  isScheduleTask,
+  isRelatablePreviousSchedule,
+  normalizeScheduleItem,
+  pickSameDayRecommendedPrevious,
+  resolveRelationItemId,
+  scheduleRelationPointsToItem,
+  scheduleItemHasOrderRelation,
+  scheduleItemRelationsValidAt,
+  sortDayScheduleItems,
+} from './scheduleItemUtils'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -127,7 +146,7 @@ const isValidTimeRange = (startTime, endTime) => {
 
 // 開始時刻までの残り分数から緊急度を判定（5分前=critical, 15分前=warning）
 const getScheduleUrgency = (item, nowMs) => {
-  if (item.completed || !item.date) return 'none'
+  if (item.completed || !item.date || isScheduleTask(item)) return 'none'
   const startAt = new Date(`${item.date}T${item.time || '09:00'}:00`)
   if (Number.isNaN(startAt.getTime())) return 'none'
   const minutesUntilStart = (startAt.getTime() - nowMs) / 60000
@@ -148,14 +167,21 @@ const isSameScheduleRelation = (a, b) => {
   return Boolean(a && b && a.id === b.id && a.date === b.date)
 }
 
-const isRelatablePreviousSchedule = (candidate, selected) => {
-  if (candidate.date === selected.date) {
-    return parseTimeValue(candidate.endTime || '10:00') < parseTimeValue(selected.time || '09:00')
-  }
-  return candidate.date < selected.date
-}
-
 const relationKeyFromItem = (item) => `${item.date}_${item.id}`
+
+const INCOMPLETE_PREVIOUS_SCHEDULE_MSG = '先に終わらせるスケジュールが完了していません'
+
+const TASK_CONVERT_REQUIRES_UNLINK_MSG = '順番の指定を解除してから、タスクに変更してください。'
+
+const SCHEDULE_DELETE_REQUIRES_UNLINK_MSG = '関連する順番指定があるため、予定を削除できません。関連を解除してから削除してください。'
+
+const COMPLETED_SCHEDULE_NOT_EDITABLE_MSG = '完了済みのため、編集できません。'
+
+const MOVE_WITH_RELATION_CONFIRM_MSG = '関連付けがある予定を別の日へ移動します。移動先の日付（関連が同日の場合は時刻）が順番と矛盾する場合は、関連付けのみ自動で解除され、予定自体は移動されます。よろしいですか？'
+
+const MOVE_RELATION_STRIPPED_NOTICE = '移動先の日付・時刻と関連の順番が矛盾したため、関連付けを解除して移動しました。'
+
+const FUTURE_FOUR_WEEKS_COPY_DONE_MSG = (count) => `未来4週間に${count}件の予定をコピーしました。`
 
 const getMonthCalendarDays = (monthDate) => {
   const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1)
@@ -389,6 +415,11 @@ function App() {
   const doubleTapHintShownRef = useRef(false)
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
+  const [scheduleActionNotice, setScheduleActionNotice] = useState(null)
+  const scheduleRelationTimeConfirmRef = useRef(null)
+  const [scheduleRelationTimeConfirm, setScheduleRelationTimeConfirm] = useState(null)
+  const scheduleAppConfirmRef = useRef(null)
+  const [scheduleAppConfirm, setScheduleAppConfirm] = useState(null)
   const [relatedChainModal, setRelatedChainModal] = useState({ open: false, loading: false, items: [] })
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [notificationEnabled, setNotificationEnabled] = useState(false)
@@ -657,11 +688,23 @@ function App() {
         }
       })
     }
-    document.addEventListener('mousedown', handleScheduleActionMenuOutside)
-    document.addEventListener('touchstart', handleScheduleActionMenuOutside)
+    document.addEventListener('click', handleScheduleActionMenuOutside)
     return () => {
-      document.removeEventListener('mousedown', handleScheduleActionMenuOutside)
-      document.removeEventListener('touchstart', handleScheduleActionMenuOutside)
+      document.removeEventListener('click', handleScheduleActionMenuOutside)
+    }
+  }, [])
+
+  useEffect(() => {
+    const closeOpenMenus = () => {
+      document.querySelectorAll('details.schedule-action-menu[open]').forEach((details) => {
+        details.removeAttribute('open')
+      })
+    }
+    window.addEventListener('scroll', closeOpenMenus, true)
+    window.addEventListener('resize', closeOpenMenus)
+    return () => {
+      window.removeEventListener('scroll', closeOpenMenus, true)
+      window.removeEventListener('resize', closeOpenMenus)
     }
   }, [])
 
@@ -1085,10 +1128,7 @@ function App() {
     setSelectedDate((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1))
   }
 
-  const selectedItems = useMemo(() => {
-    const items = scheduleMap[selectedKey] || []
-    return [...items].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
-  }, [scheduleMap, selectedKey])
+  const selectedItems = useMemo(() => sortDayScheduleItems(scheduleMap[selectedKey] || []), [scheduleMap, selectedKey])
 
   const selectedHolidayName = holidayMap[selectedKey] || ''
 
@@ -1228,6 +1268,10 @@ function App() {
       })
       .sort((a, b) => {
         if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+        const aTask = isScheduleTask(a)
+        const bTask = isScheduleTask(b)
+        if (aTask !== bTask) return aTask ? 1 : -1
+        if (aTask && bTask) return String(a.id).localeCompare(String(b.id))
         return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
       })
   }, [weekDates, scheduleMap])
@@ -1305,7 +1349,7 @@ function App() {
 
     return allItems
       .filter((item) => (item.title || '予定').toLocaleLowerCase('ja-JP').includes(normalizedQuery))
-      .sort((a, b) => (a.date || '').localeCompare(b.date || '') || parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00'))
+      .sort((a, b) => (a.date || '').localeCompare(b.date || '') || parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00') || String(a.id).localeCompare(String(b.id)))
   }, [scheduleMap, scheduleSearchQuery, searchMonthKey])
 
   const fetchWeekSchedule = async () => {
@@ -1330,22 +1374,11 @@ function App() {
           nextMap[dateKey] = []
         }
 
-        nextMap[dateKey].push({
-          id: item.id || docSnap.id,
-          title: item.title || '予定',
-          time: item.time || '09:00',
-          endTime: item.endTime || '10:00',
-          details: item.details || '',
-          completed: item.completed === true,
-          priority: item.priority || 'normal',
-          date: dateKey,
-          relatedPrev: item.relatedPrev || null,
-          relatedNext: item.relatedNext || null,
-        })
+        nextMap[dateKey].push(normalizeScheduleItem(item, docSnap.id))
       })
 
       Object.keys(nextMap).forEach((key) => {
-        nextMap[key].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
+        nextMap[key] = sortDayScheduleItems(nextMap[key])
       })
 
       setScheduleMap(nextMap)
@@ -1382,22 +1415,11 @@ function App() {
           partialMap[dateKey] = []
         }
 
-        partialMap[dateKey].push({
-          id: item.id || docSnap.id,
-          title: item.title || '予定',
-          time: item.time || '09:00',
-          endTime: item.endTime || '10:00',
-          details: item.details || '',
-          completed: item.completed === true,
-          priority: item.priority || 'normal',
-          date: dateKey,
-          relatedPrev: item.relatedPrev || null,
-          relatedNext: item.relatedNext || null,
-        })
+        partialMap[dateKey].push(normalizeScheduleItem(item, docSnap.id))
       })
 
       Object.keys(partialMap).forEach((key) => {
-        partialMap[key].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
+        partialMap[key] = sortDayScheduleItems(partialMap[key])
       })
 
       setScheduleMap((current) => ({ ...current, ...partialMap }))
@@ -1420,7 +1442,7 @@ function App() {
       const next = { ...current }
       const existingList = next[item.date] || []
       const filtered = existingList.filter((entry) => entry.id !== item.id)
-      const updatedList = [...filtered, item].sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
+      const updatedList = sortDayScheduleItems([...filtered, item])
       next[item.date] = updatedList
       return next
     })
@@ -1610,10 +1632,13 @@ function App() {
     setSelectedDate(new Date())
   }
 
-  const hasScheduleRelation = (item) => Boolean(item?.relatedPrev || item?.relatedNext)
+  const hasScheduleRelation = (item) => {
+    const latest = getLatestScheduleItem(item) || item
+    return scheduleItemHasOrderRelation(scheduleMap, latest)
+  }
 
   const getDateConflictingItems = async (dateKey, item, ignoreExistingId = null) => {
-    if (!session || !item) return []
+    if (!session || !item || isScheduleTask(item)) return []
 
     const targetStart = parseTimeValue(item.time || '09:00')
     const targetEnd = parseTimeValue(item.endTime || '10:00')
@@ -1637,6 +1662,8 @@ function App() {
 
         const candidateDate = candidate.date || dateKey
         if (candidateDate !== dateKey) return
+
+        if (candidate.isTask === true) return
 
         const candidateStart = parseTimeValue(candidate.time || '09:00')
         const candidateEnd = parseTimeValue(candidate.endTime || '10:00')
@@ -1721,11 +1748,6 @@ function App() {
       return
     }
 
-    if (hasScheduleRelation(item)) {
-      alert('関連を削除してから実行してください。')
-      return
-    }
-
     if (mode === 'move') {
       if (targetDate === item.date) {
         alert('移動先の日付は現在の予定日と異なる日付を選択してください。')
@@ -1734,6 +1756,13 @@ function App() {
     }
 
     const targetDateKey = formatDateKey(new Date(`${targetDate}T00:00:00`))
+
+    if (mode === 'move' && hasScheduleRelation(item)) {
+      if (!(await askScheduleAppConfirm(MOVE_WITH_RELATION_CONFIRM_MSG, {
+        title: '移動の確認',
+        confirmLabel: '移動する',
+      }))) return
+    }
 
     if (!skipDuplicateCheck) {
       const conflictingItems = await getDateConflictingItems(targetDateKey, item, mode === 'move' ? item.id : null)
@@ -1764,7 +1793,7 @@ function App() {
         setScheduleMap((current) => {
           const next = { ...current }
           const targetList = next[targetDateKey] || []
-          next[targetDateKey] = [...targetList, newItem].sort((entryA, entryB) => parseTimeValue(entryA.time) - parseTimeValue(entryB.time))
+          next[targetDateKey] = sortDayScheduleItems([...targetList, newItem])
           return next
         })
         invalidateScheduleWeeks([item.date, targetDateKey])
@@ -1772,29 +1801,46 @@ function App() {
         setSelectedDate(new Date(`${targetDateKey}T00:00:00`))
         closeMoveCopyDialog()
         await fetchWeekSchedule()
-        alert(`${targetDateKey} に予定を複製しました`)
+        const copiedNote = hasScheduleRelation(item) ? '（関連付けはコピーされていません）' : ''
+        alert(`${targetDateKey} に予定を複製しました${copiedNote}`)
         return
       }
 
+      const { latest, priorItem, nextItem } = await loadScheduleRelationNeighbors(item)
+      const relationsValid = scheduleItemRelationsValidAt(latest, targetDateKey, { priorItem, nextItem })
+      const relationStripped = hasScheduleRelation(latest) && !relationsValid
+      const relatedPrev = relationStripped ? null : (latest.relatedPrev || null)
+      const relatedNext = relationStripped ? null : (latest.relatedNext || null)
+
       const sourceRef = doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`)
+      const destRef = doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${item.id}`)
       const movedItem = {
-        ...item,
+        ...latest,
         user_id: session.uid,
         date: targetDateKey,
-        completed: item.completed === true,
-        relatedPrev: null,
-        relatedNext: null,
+        completed: latest.completed === true,
+        relatedPrev,
+        relatedNext,
       }
 
-      await setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${item.id}`), movedItem)
-      await deleteDoc(sourceRef)
+      const batch = writeBatch(db)
+      batch.set(destRef, movedItem)
+      batch.delete(sourceRef)
+
+      if (relationStripped) {
+        await queueDetachScheduleItemRelations(batch, latest, session.uid)
+      } else if (hasScheduleRelation(latest)) {
+        await queueUpdateRelationSnapshotsAfterMove(batch, movedItem, session.uid, { priorItem, nextItem })
+      }
+
+      await batch.commit()
       setScheduleMap((current) => {
         const next = { ...current }
         if (next[item.date]) {
           next[item.date] = next[item.date].filter((entry) => entry.id !== item.id)
         }
         const targetList = next[targetDateKey] || []
-        next[targetDateKey] = [...targetList.filter((entry) => entry.id !== item.id), movedItem].sort((entryA, entryB) => parseTimeValue(entryA.time) - parseTimeValue(entryB.time))
+        next[targetDateKey] = sortDayScheduleItems([...targetList.filter((entry) => entry.id !== item.id), movedItem])
         return next
       })
       invalidateScheduleWeeks([item.date, targetDateKey])
@@ -1802,7 +1848,11 @@ function App() {
       setSelectedDate(new Date(`${targetDateKey}T00:00:00`))
       closeMoveCopyDialog()
       await fetchWeekSchedule()
-      alert(`${item.date} から ${targetDateKey} に予定を移動しました`)
+      if (relationStripped) {
+        notifyScheduleAction(MOVE_RELATION_STRIPPED_NOTICE)
+      } else {
+        alert(`${item.date} から ${targetDateKey} に予定を移動しました`)
+      }
     } catch (error) {
       console.error('予定の複製/移動エラー:', error)
       alert(`予定の${mode === 'copy' ? '複製' : '移動'}に失敗しました:\n${error.message}`)
@@ -1814,23 +1864,25 @@ function App() {
   }
 
   const openDetail = (item) => {
-    if (item.completed) {
-      alert('完了済みの予定は編集できません。')
+    const latest = getLatestScheduleItem(item) || item
+    if (latest.completed === true) {
+      notifyScheduleAction(COMPLETED_SCHEDULE_NOT_EDITABLE_MSG)
       return
     }
     setSaveAsCommonTitle(false)
     setCommonTitlesExpanded(false)
     setDetailDraft({
-      id: item.id,
-      title: item.title || '予定',
-      time: item.time || '09:00',
-      endTime: item.endTime || '10:00',
-      details: item.details || '',
-      completed: item.completed === true,
-      priority: item.priority || 'normal',
-      date: item.date || selectedKey,
-      relatedPrev: item.relatedPrev || null,
-      relatedNext: item.relatedNext || null,
+      id: latest.id,
+      title: latest.title || '予定',
+      isTask: isScheduleTask(latest),
+      time: latest.time || '09:00',
+      endTime: latest.endTime || '10:00',
+      details: latest.details || '',
+      completed: latest.completed === true,
+      priority: latest.priority || 'normal',
+      date: latest.date || selectedKey,
+      relatedPrev: latest.relatedPrev || null,
+      relatedNext: latest.relatedNext || null,
     })
   }
 
@@ -1899,38 +1951,342 @@ function App() {
     }
   }
 
+  const getLatestScheduleItem = (item) => {
+    if (!item?.date || !item?.id) return item
+    return (scheduleMap[item.date] || []).find((entry) => entry.id === item.id) || item
+  }
+
+  const resolveOrderRelationForItem = async (item) => {
+    if (!item) return false
+    const latest = getLatestScheduleItem(item) || item
+    if (scheduleItemHasOrderRelation(scheduleMap, latest)) return true
+    if (!session || !latest.date || !latest.id) return false
+    try {
+      const snap = await getDoc(doc(db, 'schedule_items', `${session.uid}_${latest.date}_${latest.id}`))
+      if (!snap.exists()) return false
+      const persisted = normalizeScheduleItem(snap.data(), snap.id)
+      return scheduleItemHasOrderRelation(scheduleMap, persisted)
+    } catch (error) {
+      console.error('順番指定の確認エラー:', error)
+      return false
+    }
+  }
+
+  const notifyScheduleAction = (message) => {
+    setScheduleActionNotice(message)
+  }
+
+  const askScheduleRelationTimeConfirm = (message, allowProceed = true) => new Promise((resolve) => {
+    scheduleRelationTimeConfirmRef.current = resolve
+    setScheduleRelationTimeConfirm({ message, allowProceed })
+  })
+
+  const finishScheduleRelationTimeConfirm = (confirmed) => {
+    const resolve = scheduleRelationTimeConfirmRef.current
+    scheduleRelationTimeConfirmRef.current = null
+    setScheduleRelationTimeConfirm(null)
+    if (typeof resolve === 'function') resolve(confirmed)
+  }
+
+  const askScheduleAppConfirm = (message, options = {}) => new Promise((resolve) => {
+    scheduleAppConfirmRef.current = resolve
+    setScheduleAppConfirm({
+      message,
+      title: options.title || '確認',
+      confirmLabel: options.confirmLabel || 'OK',
+    })
+  })
+
+  const finishScheduleAppConfirm = (confirmed) => {
+    const resolve = scheduleAppConfirmRef.current
+    scheduleAppConfirmRef.current = null
+    setScheduleAppConfirm(null)
+    if (typeof resolve === 'function') resolve(confirmed)
+  }
+
+  const closeAllScheduleActionMenus = () => {
+    document.querySelectorAll('details.schedule-action-menu[open]').forEach((details) => {
+      details.removeAttribute('open')
+    })
+  }
+
+  const closeOtherScheduleActionMenus = (currentDetails) => {
+    document.querySelectorAll('details.schedule-action-menu[open]').forEach((details) => {
+      if (details !== currentDetails) details.removeAttribute('open')
+    })
+  }
+
+  const handleScheduleActionMenuToggle = (event) => {
+    const detailsEl = event.currentTarget
+    if (detailsEl.open) {
+      closeOtherScheduleActionMenus(detailsEl)
+    }
+  }
+
+  const handleScheduleListPointerDownCapture = (event) => {
+    if (!(event.target instanceof Element)) return
+    if (event.target.closest('.schedule-actions-mobile, .schedule-action-menu-list')) return
+    if (event.target.closest('details.schedule-action-menu[open]')) return
+    closeAllScheduleActionMenus()
+  }
+
+  const resolveTimedScheduleIndex = (item, timedItems) => {
+    if (isScheduleTask(item)) return -1
+    let idx = timedItems.findIndex((entry) => entry.id === item.id)
+    if (idx >= 0) return idx
+    idx = timedItems.findIndex((entry) => (
+      entry.id && item.id && String(entry.id) === String(item.id)
+    ))
+    if (idx >= 0) return idx
+    return timedItems.findIndex((entry) => (
+      (entry.title || '予定') === (item.title || '予定')
+      && (entry.time || '09:00') === (item.time || '09:00')
+      && (entry.endTime || '10:00') === (item.endTime || '10:00')
+    ))
+  }
+
+  const isScheduleSectionSwipeTarget = (target) => {
+    if (!(target instanceof Element)) return false
+    return Boolean(target.closest(
+      'button, summary, details.schedule-action-menu, input, select, textarea, a, label, [role="button"]',
+    ))
+  }
+
+  const loadScheduleItemFromFirestore = async (dateKey, relation) => {
+    if (!session || !dateKey || !relation) return null
+    const idsToTry = new Set()
+    const resolved = resolveRelationItemId(relation, session.uid)
+    if (resolved) idsToTry.add(resolved)
+    if (relation.id) idsToTry.add(String(relation.id))
+
+    for (const itemId of idsToTry) {
+      try {
+        const snap = await getDoc(doc(db, 'schedule_items', `${session.uid}_${dateKey}_${itemId}`))
+        if (snap.exists()) {
+          return normalizeScheduleItem(snap.data(), snap.id)
+        }
+      } catch (error) {
+        console.error('予定取得エラー:', error)
+      }
+    }
+
+    if (relation.id && String(relation.id).includes('_')) {
+      try {
+        const snap = await getDoc(doc(db, 'schedule_items', String(relation.id)))
+        if (snap.exists()) {
+          return normalizeScheduleItem(snap.data(), snap.id)
+        }
+      } catch (error) {
+        console.error('予定取得エラー:', error)
+      }
+    }
+
+    return null
+  }
+
+  const loadScheduleRelationNeighbors = async (item) => {
+    const latestFromMap = getLatestScheduleItem(item) || item
+    const latest = {
+      ...latestFromMap,
+      relatedPrev: latestFromMap.relatedPrev || item.relatedPrev || null,
+      relatedNext: latestFromMap.relatedNext || item.relatedNext || null,
+    }
+
+    let priorItem = findPriorScheduleBlockingComplete(scheduleMap, latest, session?.uid)
+    if (!priorItem && latest.relatedPrev) {
+      priorItem = findRelatedScheduleItem(scheduleMap, latest.relatedPrev)
+      if (!priorItem) {
+        priorItem = await loadScheduleItemFromFirestore(latest.relatedPrev.date, latest.relatedPrev)
+      }
+    }
+
+    let nextItem = findDependentScheduleItem(scheduleMap, latest, session?.uid)
+    if (!nextItem && latest.relatedNext) {
+      nextItem = findRelatedScheduleItem(scheduleMap, latest.relatedNext)
+      if (!nextItem) {
+        nextItem = await loadScheduleItemFromFirestore(latest.relatedNext.date, latest.relatedNext)
+      }
+    }
+
+    return { latest, priorItem, nextItem }
+  }
+
+  const scheduleItemDocRef = (uid, dateKey, relationOrItem) => {
+    const rawId = relationOrItem?.id
+    if (!uid || !dateKey || !rawId) return null
+    const itemId = resolveRelationItemId(relationOrItem, uid) || rawId
+    return doc(db, 'schedule_items', `${uid}_${dateKey}_${itemId}`)
+  }
+
+  const queueDetachScheduleItemRelations = async (batch, item, uid) => {
+    if (!batch || !item || !uid) return
+    const itemRelation = toScheduleRelation(item)
+
+    if (item.relatedPrev?.date && item.relatedPrev?.id) {
+      const priorRef = scheduleItemDocRef(uid, item.relatedPrev.date, item.relatedPrev)
+      if (priorRef) {
+        const snap = await getDoc(priorRef)
+        if (snap.exists() && isSameScheduleRelation(snap.data().relatedNext, itemRelation)) {
+          batch.update(priorRef, { relatedNext: null })
+        }
+      }
+    }
+
+    if (item.relatedNext?.date && item.relatedNext?.id) {
+      const nextRef = scheduleItemDocRef(uid, item.relatedNext.date, item.relatedNext)
+      if (nextRef) {
+        const snap = await getDoc(nextRef)
+        if (snap.exists() && isSameScheduleRelation(snap.data().relatedPrev, itemRelation)) {
+          batch.update(nextRef, { relatedPrev: null })
+        }
+      }
+    }
+
+    for (const dateKey of Object.keys(scheduleMap || {})) {
+      for (const entry of scheduleMap[dateKey] || []) {
+        if (isScheduleTask(entry) || !entry.relatedNext?.date) continue
+        if (!scheduleRelationPointsToItem(entry.relatedNext, item, uid)) continue
+        const entryRef = scheduleItemDocRef(uid, entry.date, entry)
+        if (entryRef) batch.update(entryRef, { relatedNext: null })
+      }
+    }
+  }
+
+  const queueUpdateRelationSnapshotsAfterMove = async (batch, movedItem, uid, { priorItem, nextItem }) => {
+    if (!batch || !movedItem || !uid) return
+    const movedRelation = toScheduleRelation(movedItem)
+
+    const prior = priorItem || (movedItem.relatedPrev
+      ? findRelatedScheduleItem(scheduleMap, movedItem.relatedPrev)
+      : null)
+    if (prior?.date && prior?.id) {
+      const priorRef = scheduleItemDocRef(uid, prior.date, prior)
+      if (priorRef) batch.update(priorRef, { relatedNext: movedRelation })
+    }
+
+    const next = nextItem || (movedItem.relatedNext
+      ? findRelatedScheduleItem(scheduleMap, movedItem.relatedNext)
+      : null)
+    if (next?.date && next?.id) {
+      const nextRef = scheduleItemDocRef(uid, next.date, next)
+      if (nextRef) batch.update(nextRef, { relatedPrev: movedRelation })
+    }
+
+    for (const dateKey of Object.keys(scheduleMap || {})) {
+      for (const entry of scheduleMap[dateKey] || []) {
+        if (isScheduleTask(entry) || !entry.relatedNext?.date) continue
+        if (!scheduleRelationPointsToItem(entry.relatedNext, movedItem, uid)) continue
+        const entryRef = scheduleItemDocRef(uid, entry.date, entry)
+        if (entryRef) batch.update(entryRef, { relatedNext: movedRelation })
+      }
+    }
+  }
+
+  const confirmScheduleRelationTimeChangeIfNeeded = async (item, newStart, newEnd, newDate) => {
+    if (isScheduleTask(item)) return true
+    const latestFromMap = getLatestScheduleItem(item) || item
+    const latest = {
+      ...latestFromMap,
+      relatedPrev: latestFromMap.relatedPrev || item.relatedPrev || null,
+      relatedNext: latestFromMap.relatedNext || item.relatedNext || null,
+    }
+    const originalStart = latest.time || '09:00'
+    const originalEnd = latest.endTime || '10:00'
+    const originalDate = latest.date
+    const targetDate = newDate || originalDate
+    const timesChanged = newStart !== originalStart || newEnd !== originalEnd
+    const dateChanged = targetDate !== originalDate
+    if (!timesChanged && !dateChanged) return true
+    if (!scheduleItemHasOrderRelation(scheduleMap, latest)) return true
+
+    const { priorItem, nextItem } = await loadScheduleRelationNeighbors(latest)
+
+    const { warningLines, blockLines } = buildScheduleRelationTimeChangeConfirm({
+      item: latest,
+      newStart,
+      newEnd,
+      originalStart,
+      originalEnd,
+      newDate: targetDate,
+      originalDate,
+      priorItem,
+      nextItem,
+    })
+
+    if (blockLines.length > 0) {
+      await askScheduleRelationTimeConfirm(
+        `${blockLines.join('\n\n')}\n\n関連と日時に矛盾があるため、変更できません。`,
+        false,
+      )
+      return false
+    }
+
+    if (warningLines.length === 0) return true
+
+    return askScheduleRelationTimeConfirm(
+      `${warningLines.join('\n\n')}\n\nこの内容で日時を変更しますか？`,
+      true,
+    )
+  }
+
+  const ensurePriorScheduleCompleteBeforeComplete = async (item, chainItems = []) => {
+    if (!session || item.completed || isScheduleTask(item)) return true
+
+    let previousItem = findPriorScheduleBlockingComplete(scheduleMap, item, session?.uid)
+
+    if (!previousItem && chainItems.length > 0) {
+      for (const entry of chainItems) {
+        if (isScheduleTask(entry) || !entry.relatedNext?.date) continue
+        if (scheduleRelationPointsToItem(entry.relatedNext, item)) {
+          previousItem = entry
+          break
+        }
+      }
+      if (!previousItem && item.relatedPrev?.date) {
+        previousItem = chainItems.find((entry) => {
+          if (entry.date !== item.relatedPrev.date) return false
+          if (item.relatedPrev.id) return entry.id === item.relatedPrev.id
+          return (
+            (entry.title || '予定') === (item.relatedPrev.title || '予定')
+            && (entry.time || '09:00') === (item.relatedPrev.time || '09:00')
+          )
+        }) || null
+      }
+    }
+
+    if (!previousItem && item.relatedPrev?.date) {
+      previousItem = await loadScheduleItemFromFirestore(item.relatedPrev.date, item.relatedPrev)
+    }
+
+    if (!previousItem) return true
+
+    if (previousItem.completed !== true) {
+      notifyScheduleAction(INCOMPLETE_PREVIOUS_SCHEDULE_MSG)
+      return false
+    }
+    return true
+  }
+
   const toggleRelatedItemCompleted = async (item) => {
     if (!session) return
 
-    const confirmMessage = item.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
+    const latestItem = getLatestScheduleItem(item)
+
+    if (!latestItem.completed) {
+      const allowed = await ensurePriorScheduleCompleteBeforeComplete(latestItem, relatedChainModal.items)
+      if (!allowed) return
+    }
+
+    const confirmMessage = latestItem.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
     if (!window.confirm(confirmMessage)) return
 
     try {
-      if (!item.completed && item.relatedPrev?.id && item.relatedPrev?.date) {
-        let previousItem = relatedChainModal.items.find((entry) => entry.id === item.relatedPrev.id && entry.date === item.relatedPrev.date)
-        if (!previousItem) {
-          const previousRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedPrev.date}_${item.relatedPrev.id}`)
-          const previousSnap = await getDoc(previousRef)
-          if (previousSnap.exists()) {
-            previousItem = previousSnap.data()
-          }
-        }
-        if (!previousItem) {
-          alert('関連する前の予定が見つかりません。')
-          return
-        }
-        if (previousItem.completed !== true) {
-          alert('関連する前の予定が未完了のため、この予定は完了できません。')
-          return
-        }
-      }
-
-      const nextItem = { ...item, completed: !item.completed, user_id: session.uid }
-      await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), nextItem)
+      const nextItem = { ...latestItem, completed: !latestItem.completed, user_id: session.uid }
+      await setDoc(doc(db, 'schedule_items', `${session.uid}_${latestItem.date}_${latestItem.id}`), nextItem)
       upsertScheduleItemLocal(nextItem)
       setRelatedChainModal((prev) => ({
         ...prev,
-        items: prev.items.map((entry) => (entry.id === item.id && entry.date === item.date ? nextItem : entry)),
+        items: prev.items.map((entry) => (entry.id === latestItem.id && entry.date === latestItem.date ? nextItem : entry)),
       }))
       fetchWeekSchedule()
     } catch (error) {
@@ -1939,7 +2295,9 @@ function App() {
     }
   }
 
-  const openSchedulePreview = (item) => setSchedulePreview(item)
+  const openSchedulePreview = (item) => {
+    setSchedulePreview(getLatestScheduleItem(item) || item)
+  }
 
   const closeSchedulePreview = () => setSchedulePreview(null)
 
@@ -1949,11 +2307,12 @@ function App() {
 
   const editScheduleFromPreview = () => {
     if (!schedulePreview) return
-    if (schedulePreview.completed) {
-      alert('完了済みの予定は編集できません。')
+    const latest = getLatestScheduleItem(schedulePreview) || schedulePreview
+    if (latest.completed === true) {
+      notifyScheduleAction(COMPLETED_SCHEDULE_NOT_EDITABLE_MSG)
       return
     }
-    openDetail(schedulePreview)
+    openDetail(latest)
     closeSchedulePreview()
   }
 
@@ -1995,36 +2354,90 @@ function App() {
       return
     }
 
+    const isTask = detailDraft.isTask === true
     const startTime = detailDraft.time || '09:00'
     const endTime = detailDraft.endTime || '10:00'
 
-    // 時間の妥当性チェック
-    if (!isValidTimeRange(startTime, endTime)) {
+    if (!isTask && !isValidTimeRange(startTime, endTime)) {
       alert('開始時刻は終了時刻より前に設定してください')
       return
     }
 
+    const itemId = detailDraft.id || `s-${Date.now()}`
+    const dateKey = detailDraft.date || selectedKey
+
+    if (isTask && (await resolveOrderRelationForItem({ ...detailDraft, id: itemId, date: dateKey }))) {
+      notifyScheduleAction(TASK_CONVERT_REQUIRES_UNLINK_MSG)
+      return
+    }
+
+    if (!isTask) {
+      const confirmed = await confirmScheduleRelationTimeChangeIfNeeded(
+        { ...detailDraft, id: itemId, date: dateKey },
+        startTime,
+        endTime,
+        dateKey,
+      )
+      if (!confirmed) return
+    }
+
     setSavingDraft(true)
     try {
-      const itemId = detailDraft.id || `s-${Date.now()}`
-      const item = {
+      const itemRef = doc(db, 'schedule_items', `${session.uid}_${dateKey}_${itemId}`)
+
+      const baseFields = {
         id: itemId,
         user_id: session.uid,
         title: detailDraft.title.trim(),
-        time: startTime,
-        endTime: endTime,
         details: detailDraft.details || '',
         completed: detailDraft.completed === true,
         priority: detailDraft.priority || 'normal',
-        date: detailDraft.date || selectedKey,
-        relatedPrev: detailDraft.relatedPrev || null,
-        relatedNext: detailDraft.relatedNext || null,
+        date: dateKey,
+        isTask,
       }
 
-      await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${itemId}`), item)
-      upsertScheduleItemLocal(item)
+      const batch = writeBatch(db)
+
+      if (isTask) {
+        batch.set(itemRef, {
+          ...baseFields,
+          time: deleteField(),
+          endTime: deleteField(),
+          relatedPrev: deleteField(),
+          relatedNext: deleteField(),
+        }, { merge: true })
+      } else {
+        batch.set(itemRef, {
+          ...baseFields,
+          time: startTime,
+          endTime: endTime,
+          relatedPrev: detailDraft.relatedPrev || null,
+          relatedNext: detailDraft.relatedNext || null,
+        }, { merge: true })
+      }
+
+      await batch.commit()
+
+      const localItem = isTask
+        ? normalizeScheduleItem({
+          ...baseFields,
+          isTask: true,
+          time: null,
+          endTime: null,
+          relatedPrev: null,
+          relatedNext: null,
+        })
+        : {
+          ...baseFields,
+          time: startTime,
+          endTime: endTime,
+          relatedPrev: detailDraft.relatedPrev || null,
+          relatedNext: detailDraft.relatedNext || null,
+        }
+
+      upsertScheduleItemLocal(localItem)
       if (saveAsCommonTitle) {
-        await addCommonTitle(item.title)
+        await addCommonTitle(localItem.title)
       }
       setSaveAsCommonTitle(false)
       setDetailDraft(null)
@@ -2039,6 +2452,13 @@ function App() {
 
   const deleteScheduleItem = async (item) => {
     if (!session) return
+
+    const latest = getLatestScheduleItem(item) || item
+    if (scheduleItemHasOrderRelation(scheduleMap, latest)) {
+      notifyScheduleAction(SCHEDULE_DELETE_REQUIRES_UNLINK_MSG)
+      return
+    }
+
     const selectedRef = doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`)
 
     try {
@@ -2049,9 +2469,9 @@ function App() {
         return
       }
 
-      const currentItem = selectedSnap.data()
-      if (hasScheduleRelation(currentItem)) {
-        alert('関連付けされている予定は削除できません。関連付けを解除してから削除してください。')
+      const persisted = normalizeScheduleItem(selectedSnap.data(), selectedSnap.id)
+      if (scheduleItemHasOrderRelation(scheduleMap, persisted)) {
+        notifyScheduleAction(SCHEDULE_DELETE_REQUIRES_UNLINK_MSG)
         fetchWeekSchedule()
         return
       }
@@ -2061,7 +2481,12 @@ function App() {
       return
     }
 
-    if (!window.confirm(`「${item.title}」を削除しますか？`)) return
+    const itemKind = isScheduleTask(latest) ? 'タスク' : '予定'
+    const displayTitle = latest.title || itemKind
+    if (!(await askScheduleAppConfirm(
+      `「${displayTitle}」の${itemKind}を削除しますか？`,
+      { title: '削除の確認', confirmLabel: '削除する' },
+    ))) return
 
     try {
       await deleteDoc(selectedRef)
@@ -2083,6 +2508,7 @@ function App() {
   // タップ間隔を自前で判定し、ダブルタップ時のみプレビューを開く（一回の軽いタッチでは開かない）
   const DOUBLE_TAP_THRESHOLD_MS = 350
   const handleScheduleCardTap = (item) => {
+    closeAllScheduleActionMenus()
     const now = Date.now()
     const last = lastCardTapRef.current
     if (last.id === item.id && now - last.time < DOUBLE_TAP_THRESHOLD_MS) {
@@ -2091,6 +2517,10 @@ function App() {
     } else {
       lastCardTapRef.current = { id: item.id, time: now }
     }
+  }
+
+  const stopScheduleCardActionBubble = (event) => {
+    event.stopPropagation()
   }
 
   const handleAddSchedule = () => {
@@ -2103,6 +2533,7 @@ function App() {
     setDetailDraft({
       id: `new-${Date.now()}`,
       title: '',
+      isTask: false,
       time: '09:00',
       endTime: '10:00',
       details: '',
@@ -2117,26 +2548,19 @@ function App() {
   const toggleCompleted = async (item) => {
     if (!session) return
 
-    const confirmMessage = item.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
-    if (!window.confirm(confirmMessage)) return
-
     try {
-      if (!item.completed && item.relatedPrev?.id && item.relatedPrev?.date) {
-        const previousRef = doc(db, 'schedule_items', `${session.uid}_${item.relatedPrev.date}_${item.relatedPrev.id}`)
-        const previousSnap = await getDoc(previousRef)
-        if (!previousSnap.exists()) {
-          alert('関連する前の予定が見つかりません。関連付けを解除するか、予定を確認してください。')
-          return
-        }
-        const previousItem = previousSnap.data()
-        if (previousItem.completed !== true) {
-          alert('関連する前の予定が未完了のため、この予定は完了できません。')
-          return
-        }
+      const latestItem = getLatestScheduleItem(item) || item
+
+      if (!latestItem.completed) {
+        const allowed = await ensurePriorScheduleCompleteBeforeComplete(latestItem)
+        if (!allowed) return
       }
 
-      const nextItem = { ...item, completed: !item.completed, user_id: session.uid }
-      await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), nextItem)
+      const confirmMessage = latestItem.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
+      if (!(await askScheduleAppConfirm(confirmMessage))) return
+
+      const nextItem = { ...latestItem, completed: !latestItem.completed, user_id: session.uid }
+      await setDoc(doc(db, 'schedule_items', `${session.uid}_${latestItem.date}_${latestItem.id}`), nextItem)
       upsertScheduleItemLocal(nextItem)
       fetchWeekSchedule()
     } catch (error) {
@@ -2174,9 +2598,9 @@ function App() {
   }
 
   const moveScheduleItem = async (item, direction) => {
-    if (!session || item.completed) return
+    if (!session || item.completed || isScheduleTask(item)) return
 
-    const items = selectedItems
+    const items = filterTimedSchedules(selectedItems)
     const index = items.findIndex((entry) => entry.id === item.id)
     if (index < 0) return
 
@@ -2247,6 +2671,13 @@ function App() {
 
     if (!newStartTime) return
 
+    const relationTimeConfirmed = await confirmScheduleRelationTimeChangeIfNeeded(
+      item,
+      newStartTime,
+      newEndTime,
+    )
+    if (!relationTimeConfirmed) return
+
     const updatedItem = {
       ...item,
       time: newStartTime,
@@ -2269,23 +2700,29 @@ function App() {
   const copyToFutureFourWeeks = async (item) => {
     if (!session) return
 
-    const sourceDate = new Date(`${item.date}T00:00:00`)
+    const latest = getLatestScheduleItem(item) || item
+    const sourceDate = new Date(`${latest.date}T00:00:00`)
     const targetDates = Array.from({ length: 4 }, (_, index) => formatDateKey(addDays(sourceDate, (index + 1) * 7)))
+    const displayTitle = latest.title || (isScheduleTask(latest) ? 'タスク' : '予定')
 
-    if (!window.confirm(`未来4週間（${targetDates.length}件）に「${item.title}」をコピーしますか？`)) return
+    if (!(await askScheduleAppConfirm(
+      `未来4週間（${targetDates.length}件）に「${displayTitle}」をコピーしますか？\n\n複製先には関連付けはコピーされません。`,
+      { title: '未来4週間コピーの確認', confirmLabel: 'コピーする' },
+    ))) return
 
     try {
-      await Promise.all(targetDates.map((targetDateKey) => {
-        const newItemId = `s-${Date.now()}-${targetDateKey}`
+      await Promise.all(targetDates.map((targetDateKey, index) => {
+        const newItemId = `s-${Date.now()}-${index}-${targetDateKey}`
         const newItem = {
           id: newItemId,
           user_id: session.uid,
-          title: item.title,
-          time: item.time,
-          endTime: item.endTime,
-          details: item.details,
+          title: latest.title,
+          isTask: isScheduleTask(latest),
+          time: isScheduleTask(latest) ? null : latest.time,
+          endTime: isScheduleTask(latest) ? null : latest.endTime,
+          details: latest.details,
           completed: false,
-          priority: item.priority || 'normal',
+          priority: latest.priority || 'normal',
           date: targetDateKey,
           relatedPrev: null,
           relatedNext: null,
@@ -2294,7 +2731,7 @@ function App() {
         return setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
       }))
       fetchWeekSchedule()
-      alert(`未来4週間に${targetDates.length}件の予定をコピーしました`)
+      notifyScheduleAction(FUTURE_FOUR_WEEKS_COPY_DONE_MSG(targetDates.length))
     } catch (error) {
       console.error('未来4週間コピーエラー:', error)
       alert(`未来4週間コピーに失敗しました:\n${error.message}`)
@@ -2303,8 +2740,21 @@ function App() {
 
   const closeRelationDialog = () => setRelationDialog(null)
 
+  const dismissScheduleActionNotice = () => {
+    setScheduleActionNotice(null)
+    closeSchedulePreview()
+    closeDetail()
+    closeRelationDialog()
+    closeMoveCopyDialog()
+    setRelatedChainModal({ open: false, loading: false, items: [] })
+  }
+
   const openRelationDialog = async (item) => {
     if (!session) return
+    if (isScheduleTask(item)) {
+      alert('タスクには「先に終わらせる予定」を設定できません。')
+      return
+    }
 
     try {
       const q = query(collection(db, 'schedule_items'), where('user_id', '==', session.uid))
@@ -2313,22 +2763,12 @@ function App() {
 
       snapshot.forEach((docSnap) => {
         const entry = docSnap.data()
-        allItems.push({
-          id: entry.id || docSnap.id,
-          title: entry.title || '予定',
-          time: entry.time || '09:00',
-          endTime: entry.endTime || '10:00',
-          details: entry.details || '',
-          completed: entry.completed === true,
-          priority: entry.priority || 'normal',
-          date: entry.date,
-          relatedPrev: entry.relatedPrev || null,
-          relatedNext: entry.relatedNext || null,
-        })
+        allItems.push(normalizeScheduleItem(entry, docSnap.id))
       })
 
       const candidates = allItems
         .filter((candidate) => {
+          if (isScheduleTask(candidate)) return false
           if (candidate.id === item.id && candidate.date === item.date) return false
           if (candidate.completed) return false
           return isRelatablePreviousSchedule(candidate, item)
@@ -2338,10 +2778,19 @@ function App() {
           return parseTimeValue(b.endTime || '10:00') - parseTimeValue(a.endTime || '10:00')
         })
 
+      const sameDayCandidates = candidates.filter((candidate) => candidate.date === item.date)
+      const otherDayCandidates = candidates.filter((candidate) => candidate.date !== item.date)
+      const recommended = pickSameDayRecommendedPrevious(candidates, item)
+      const recommendedKey = recommended ? relationKeyFromItem(recommended) : ''
+
       setRelationDialog({
         item,
         candidates,
-        selectedCandidateKey: item.relatedPrev ? relationKeyFromItem(item.relatedPrev) : '',
+        sameDayCandidates,
+        otherDayCandidates,
+        showOtherDays: otherDayCandidates.length > 0 && sameDayCandidates.length === 0,
+        recommendedKey,
+        selectedCandidateKey: item.relatedPrev ? relationKeyFromItem(item.relatedPrev) : recommendedKey,
       })
     } catch (error) {
       console.error('関連付け候補取得エラー:', error)
@@ -2349,16 +2798,22 @@ function App() {
     }
   }
 
-  const applyScheduleRelation = async () => {
+  const applyRecommendedScheduleRelation = () => {
+    if (!relationDialog?.recommendedKey) return
+    void applyScheduleRelation(relationDialog.recommendedKey)
+  }
+
+  const applyScheduleRelation = async (overrideCandidateKey) => {
     if (!session || !relationDialog) return
-    if (!relationDialog.selectedCandidateKey) {
-      alert('関連付け対象の予定を選択してください。')
+    const selectedCandidateKey = overrideCandidateKey || relationDialog.selectedCandidateKey
+    if (!selectedCandidateKey) {
+      alert('先に終わらせる予定を選択してください。')
       return
     }
 
     const selectedItem = relationDialog.item
     const selectedItemRef = toScheduleRelation(selectedItem)
-    const nextPreviousItem = relationDialog.candidates.find((candidate) => relationKeyFromItem(candidate) === relationDialog.selectedCandidateKey)
+    const nextPreviousItem = relationDialog.candidates.find((candidate) => relationKeyFromItem(candidate) === selectedCandidateKey)
     if (!nextPreviousItem) {
       alert('選択した関連付け対象が見つかりません。')
       return
@@ -2387,6 +2842,16 @@ function App() {
       }
 
       await batch.commit()
+
+      upsertScheduleItemLocal({
+        ...selectedItem,
+        relatedPrev: toScheduleRelation(nextPreviousItem),
+      })
+      upsertScheduleItemLocal({
+        ...nextPreviousItem,
+        relatedNext: toScheduleRelation(selectedItem),
+      })
+
       closeRelationDialog()
       fetchWeekSchedule()
       alert('関連付けを更新しました。')
@@ -2457,13 +2922,7 @@ function App() {
       const dateKey = item.date
       const dayDate = new Date(`${dateKey}T00:00:00`)
       items.push({
-        id: item.id || docSnap.id,
-        title: item.title || '予定',
-        time: item.time || '09:00',
-        endTime: item.endTime || '10:00',
-        details: item.details || '',
-        completed: item.completed === true,
-        priority: item.priority || 'normal',
+        ...normalizeScheduleItem({ ...item, date: dateKey }, docSnap.id),
         dateKey,
         dayName: dayNames[dayDate.getDay()],
         isPast: dateKey < todayKey,
@@ -2472,6 +2931,10 @@ function App() {
 
     items.sort((a, b) => {
       if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+      const aTask = isScheduleTask(a)
+      const bTask = isScheduleTask(b)
+      if (aTask !== bTask) return aTask ? 1 : -1
+      if (aTask && bTask) return String(a.id).localeCompare(String(b.id))
       return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
     })
     return items
@@ -2549,6 +3012,7 @@ function App() {
       snapshot.forEach((docSnap) => {
         const item = docSnap.data()
         if (aggFilter === 'completed' && item.completed !== true) return
+        if (item.isTask === true) return
         const title = item.title || '予定'
         const minutes = Math.max(0, parseTimeValue(item.endTime || '10:00') - parseTimeValue(item.time || '09:00'))
         const current = groups.get(title) || { title, count: 0, totalMinutes: 0 }
@@ -2769,15 +3233,11 @@ function App() {
       scheduleSnapshot.forEach((docSnap) => {
         const item = docSnap.data()
         if (!item.date) return
-        if (item.completed === true) {
+        if (item.completed === true && item.isTask !== true) {
           completedPlanCounts[item.date] = (completedPlanCounts[item.date] || 0) + 1
         }
         if (!scheduleByDate[item.date]) scheduleByDate[item.date] = []
-        scheduleByDate[item.date].push({
-          ...item,
-          id: item.id || docSnap.id,
-          priority: item.priority || 'normal',
-        })
+        scheduleByDate[item.date].push(normalizeScheduleItem(item, docSnap.id))
       })
     } catch (error) {
       console.error('月別計画数取得エラー:', error)
@@ -2904,9 +3364,9 @@ function App() {
         ${chartPoints.map((point) => `<text x="${point.x}" y="248" text-anchor="middle" font-size="10" fill="#64748b">${point.dateKey.slice(8)}</text>`).join('')}
         <text x="${plotLeft}" y="268" font-size="10" fill="#0f766e">● 睡眠（左・時間）</text>
         <text x="${plotLeft + 130}" y="268" font-size="10" fill="#7c3aed">● 疲れ（右・0〜100）</text>
-        <text x="${plotLeft + 280}" y="268" font-size="10" fill="#d97706">■ 完了件数（下帯・相対）</text>
+        <text x="${plotLeft + 280}" y="268" font-size="10" fill="#d97706">■ 完了件数（下帯・時刻あり予定）</text>
         ${showTodayLegend ? `<text x="${plotRight}" y="268" text-anchor="end" font-size="10" fill="#dc2626">今日の疲れ: ${todayFatigue.score}（${todayFatigue.bandLabel}）</text>` : ''}
-        <text x="${plotLeft}" y="284" font-size="9" fill="#64748b">左軸＝睡眠時間　右軸＝疲れスコア　下の橙棒＝その日に完了した予定件数（当月最大を基準にした高さの目安）</text>
+        <text x="${plotLeft}" y="284" font-size="9" fill="#64748b">左軸＝睡眠時間　右軸＝疲れスコア　下の橙棒＝その日に完了した時刻あり予定の件数（当月最大を基準にした高さの目安）</text>
       </svg>`
 
     const html = `<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>健康生活PDF</title>
@@ -2926,7 +3386,7 @@ function App() {
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
       <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th></tr></thead><tbody>${rows}</tbody></table>
       <h2>日別の健康生活（睡眠・疲れ・完了件数）</h2><div class="chart-box">${combinedChart}</div>
-      <p class="disclaimer">※疲れスコアは睡眠記録と未完了予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
+      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
@@ -2974,7 +3434,7 @@ function App() {
       ? reportItems.map((item) => `
           <tr class="${item.isPast ? 'past-schedule' : ''}">
             <td>${escapeHtml(item.dateKey)} (${item.dayName})</td>
-            <td>${escapeHtml(`${item.time} - ${item.endTime}`)}</td>
+            <td>${escapeHtml(isScheduleTask(item) ? '—' : `${item.time} - ${item.endTime}`)}</td>
             <td>${escapeHtml(item.title)}</td>
             <td>${escapeHtml(item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常')}</td>
             <td>${escapeHtml(item.details || '')}</td>
@@ -3053,8 +3513,9 @@ function App() {
         sections: [
           {
             heading: '1. 予定を登録する',
-            body: '画面の「追加」ボタンを押すと、予定の入力フォームが開きます。タイトル、開始時刻、終了時刻、重要度、詳細メモを入力して保存できます。定例タイトルを使えば、繰り返し同じ予定を素早く入力できます。',
+            body: '画面の「追加」ボタンから、時刻ありのスケジュールまたは「タスク」チェックをオンにした時刻なしの ToDo を登録できます。定例タイトルで繰り返し入力も速くなります。',
             points: [
+              '「タスク」は時刻・通知・先に終わらせる予定の指定がありません。一覧では時刻あり予定の下に並びます。',
               '定例タイトルを使うと、よく使う予定名をすぐに選べます。',
               '重要度を「重要」にすると、視認性が高くなります。',
               '詳細メモには、会議内容や持ち物などを残せます。',
@@ -3062,11 +3523,12 @@ function App() {
           },
           {
             heading: '2. 予定を管理する',
-            body: '各予定カードでは、完了、複製、移動、削除、前の予定との関連付けを行えます。カードをダブルタップすると、詳細プレビューを確認できます。',
+            body: '各カードから完了・複製・移動・削除ができます。時刻あり予定だけ「先に終わらせる予定を選ぶ」で、完了順を1本の流れとして指定できます。ダブルタップで詳細プレビュー。',
             points: [
-              '予定の重複がある場合は、事前に確認メッセージが表示されます。',
-              '「複製 / 移動」機能で別の日付への移動が簡単です。',
-              '関連付け機能で、連続して行う予定を流れとして管理できます。',
+              '先に終わらせる予定が未完了の間、その予定は完了にできません。',
+              '同日の直前候補はおすすめボタンでワンタップ設定できます。別日は「別の日を選ぶ」から選べます。',
+              '順番を先に終わらせたい準備は、時刻付きスケジュールにすると指定しやすいです（タスクには関連付けがありません）。',
+              '「複製 / 移動」で別日へ移せます。複製先には関連付けは付きません。関連がある予定の移動は、矛盾がある場合のみ関連が自動解除されます。',
             ],
           },
           {
@@ -3103,7 +3565,7 @@ function App() {
           },
           {
             heading: '6. 通知を使う',
-            body: '右上の通知ボタンから、予定の開始時刻を通知で受け取れます。ブラウザの通知許可が必要です。',
+            body: '右上の通知ボタンから、時刻ありスケジュールの開始時刻を通知で受け取れます。タスクには通知しません。ブラウザの通知許可が必要です。',
             points: [
               '通知がオンの場合、予定開始時刻に音や表示で知らせます。',
               'iPhone / Safari はホーム画面に追加後に設定してください。',
@@ -3112,7 +3574,7 @@ function App() {
           },
           {
             heading: '7. 進捗状況を確認する',
-            body: '選択日の予定カードの直下に、連続達成日数と今週のバッジ（皆勤賞など）が表示されます。予定を完了していくと、継続の手応えを確認しやすくなります。',
+            body: '選択日の予定カードの直下に、連続達成日数と今週のバッジが表示されます。達成の判定はその日のスケジュールとタスクの両方を含みます（全部完了で達成）。',
             points: [
               '進捗率の推移をPDFとして保存できます。',
               '継続のサポートとして、達成感を感じやすくなります。',
@@ -3121,12 +3583,12 @@ function App() {
           },
           {
             heading: '8. 健康生活カウントを使う',
-            body: '睡眠・予定の負荷などをもとに、選択した日の「疲れ」目安（0〜100）を確認できる機能です。設定メニューの「健康生活カウント表示」で表示できます。初期状態はオフです。',
+            body: '睡眠・時刻あり予定の負荷などをもとに、選択した日の「疲れ」目安（0〜100）を確認できる機能です。設定メニューの「健康生活カウント表示」で表示できます。初期状態はオフです。',
             points: [
               'オンにすると、ホーム画面の末尾（予定リストの下）にセクションが現れます。見出しをタップして開閉できます（月カレンダーと同様）。',
               '表示内容: 疲れスコア（2行）、睡眠・予定の内訳バー、最近3日の平均睡眠（睡眠記録表示がオンのとき）、歩数（連携状態に応じて表示）。',
-              '月次の疲れ推移はメニューの「健康生活PDF」の統合グラフ（左＝睡眠・右＝疲れ・下帯＝完了件数）で確認できます。',
-              '疲れは未完了の予定のみを対象に計算します。カレンダーで日付を変えると、その日のデータで更新されます。',
+              '月次の疲れ推移はメニューの「健康生活PDF」の統合グラフ（左＝睡眠・右＝疲れ・下帯＝完了した時刻あり予定）で確認できます。',
+              '疲れと内訳の件数は未完了の時刻あり予定のみです。タスクは含みません。達成（連続日数など）はタスク込みです。',
               'セクション内に医療上の免責（診断・治療の代わりにならない旨）があります。詳しい判定のしくみは、ヘルプの「疲れ」判定の説明PDFを参照してください。',
               '表示をオフにしている間は、疲れスコアの計算を行いません。',
               '歩数は端末連携の有無を確認して表示します（未連携のときは「未連携」など）。将来、連携後にスコアへ反映する拡張を予定しています。',
@@ -3134,7 +3596,7 @@ function App() {
           },
           {
             heading: '9. スケジュールを集計する',
-            body: 'メニューの「スケジュール集計」から、期間と「全て / 完了のみ」を指定して、予定名ごとの件数と合計時間(分)を集計できます。集計結果はPDFまたはCSVで保存できます。',
+            body: 'メニューの「スケジュール集計」から、期間と「全て / 完了のみ」を指定して、時刻あり予定名ごとの件数と合計時間(分)を集計できます。タスクは集計に含みません。集計結果はPDFまたはCSVで保存できます。',
             points: [
               '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
               '予定名が完全一致するものを1件として集計します。表記を揃えたい場合は定例タイトルの利用が便利です。',
@@ -3165,8 +3627,9 @@ function App() {
         sections: [
           {
             heading: '1. Create a schedule',
-            body: 'Tap the Add button to open the schedule form. Enter the title, start time, end time, priority, and notes, then save. Reusing saved common titles helps you add recurring tasks quickly.',
+            body: 'Tap Add to create a timed schedule or turn on “Task” for a to-do without times. Saved common titles speed up recurring entries.',
             points: [
+              'Tasks have no times, notifications, or “finish this first” links. They appear below timed items for that day.',
               'Common titles let you reuse familiar task names in seconds.',
               'Setting a task to High priority makes it stand out more clearly.',
               'Notes are useful for keeping meeting details, packing lists, or reminders.',
@@ -3174,11 +3637,12 @@ function App() {
           },
           {
             heading: '2. Manage your schedule',
-            body: 'Each schedule card lets you mark tasks as complete, duplicate them, move them to another date, delete them, or link them to related tasks. Double-tapping a card opens a detailed preview.',
+            body: 'Each card supports complete, duplicate, move, and delete. Timed schedules can link to one prior item you must finish first. Double-tap for preview.',
             points: [
-              'Overlapping schedules are checked automatically before saving.',
-              'The copy and move tools make it easy to reschedule tasks.',
-              'Related tasks can be linked to show a clear sequence of work.',
+              'You cannot complete a schedule until its linked prior item is complete.',
+              'Use the recommended same-day button for the item right before yours, or open “Pick another day” for earlier dates.',
+              'If order matters, make prep a timed schedule and link it—tasks cannot be linked.',
+              'Copy/move works across dates; clear order links before moving a linked schedule.',
             ],
           },
           {
@@ -3215,7 +3679,7 @@ function App() {
           },
           {
             heading: '6. Use notifications',
-            body: 'Tap the notification button in the upper-right corner to receive reminders when a scheduled task is about to start. Browser notification permission is required.',
+            body: 'Tap the notification button in the upper-right corner to receive reminders when a timed schedule is about to start. Tasks do not send notifications. Browser notification permission is required.',
             points: [
               'When notifications are enabled, you will receive a reminder at the scheduled time.',
               'For iPhone and Safari, add the app to your home screen before enabling alerts.',
@@ -3224,7 +3688,7 @@ function App() {
           },
           {
             heading: '7. Track your progress',
-            body: 'Below the schedule cards for the selected day, you see your streak and weekly badge (such as perfect-week awards). Completing tasks makes it easier to feel your momentum.',
+            body: 'Below the schedule cards for the selected day, you see your streak and weekly badge. Achievement counts both timed schedules and tasks (all must be complete).',
             points: [
               'Progress trends can be saved as a PDF report.',
               'Motivational indicators help maintain momentum.',
@@ -3233,12 +3697,12 @@ function App() {
           },
           {
             heading: '8. Use Healthy Life Count',
-            body: 'This optional feature shows a fatigue score (0–100) for the selected day based on sleep records and incomplete schedule load. Turn it on with “Show Healthy Life Count” in Settings. It is off by default.',
+            body: 'This optional feature shows a fatigue score (0–100) for the selected day based on sleep records and incomplete timed schedule load. Turn it on with “Show Healthy Life Count” in Settings. It is off by default.',
             points: [
               'When enabled, a section appears at the bottom of Home (below your schedule list). Tap the heading to expand or collapse it, like the month calendar.',
               'It shows: fatigue score (two lines), sleep/schedule bars, recent 3-day sleep average (when sleep records are shown), and steps (based on link status).',
-              'Monthly fatigue trends appear in “Healthy Life PDF” as one chart (left: sleep, right: fatigue, bottom band: completed tasks).',
-              'Fatigue uses incomplete tasks only. Changing the selected date recalculates for that day.',
+              'Monthly fatigue trends appear in “Healthy Life PDF” as one chart (left: sleep, right: fatigue, bottom band: completed timed schedules).',
+              'Fatigue and schedule subscores use incomplete timed schedules only—not tasks. Streak/achievement includes tasks.',
               'A one-line medical disclaimer appears in the section. For full scoring details, open Help → fatigue score guide (PDF).',
               'While the feature is off, fatigue score is not calculated.',
               'Steps reflect whether device linking is available (e.g. “Not linked”). Step data may feed into the score in a future update.',
@@ -3246,7 +3710,7 @@ function App() {
           },
           {
             heading: '9. Summarize your schedules',
-            body: 'From the menu, open "Schedule Summary" to choose a date range and either "All" or "Completed only", then get the count and total minutes for each task name. Results can be saved as PDF or CSV.',
+            body: 'From the menu, open "Schedule Summary" to choose a date range and either "All" or "Completed only", then get the count and total minutes for each timed schedule title. Tasks are excluded. Results can be saved as PDF or CSV.',
             points: [
               'The date range can be up to 31 days; a message appears if it is exceeded.',
               'Tasks are grouped by exact title match. Use common titles to keep names consistent.',
@@ -4197,7 +4661,7 @@ function App() {
                       }}
                     >
                       <span style={styles.scheduleSearchResultTitle}>{item.title || '予定'}</span>
-                      <span style={styles.scheduleSearchResultMeta}>{item.date}　{item.time || '09:00'} - {item.endTime || '10:00'}</span>
+                      <span style={styles.scheduleSearchResultMeta}>{item.date}　{isScheduleTask(item) ? 'タスク' : formatScheduleTimeRange(item)}</span>
                     </button>
                   ))}
                   {scheduleSearchResults.length === 0 && (
@@ -4397,10 +4861,16 @@ function App() {
               className="schedule-section"
               style={{ ...styles.scheduleSection, ...(weekCalendarEnabled && weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
+                dayTouchRef.current = null
+                if (isScheduleSectionSwipeTarget(event.target)) return
                 dayTouchRef.current = event.changedTouches[0].clientX
               }}
               onTouchEnd={(event) => {
                 if (dayTouchRef.current === null) return
+                if (isScheduleSectionSwipeTarget(event.target)) {
+                  dayTouchRef.current = null
+                  return
+                }
                 const distance = event.changedTouches[0].clientX - dayTouchRef.current
                 dayTouchRef.current = null
                 if (Math.abs(distance) > 50) {
@@ -4533,20 +5003,30 @@ function App() {
               ) : selectedItems.length === 0 ? (
                 <div style={styles.emptyState}>この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
               ) : (
-                <div className="schedule-list" style={styles.scheduleList}>
+                <div
+                  className="schedule-list"
+                  style={styles.scheduleList}
+                  onPointerDownCapture={handleScheduleListPointerDownCapture}
+                >
                   {selectedItems.map((item, index) => {
-                    const isFirst = index === 0
-                    const isLast = index === selectedItems.length - 1
-                    const hasOverlap = selectedItems.some((other) => {
+                    const timedItems = filterTimedSchedules(selectedItems)
+                    const taskItem = isScheduleTask(item)
+                    const timedIndex = resolveTimedScheduleIndex(item, timedItems)
+                    const isFirst = taskItem || timedIndex === 0
+                    const isLast = taskItem || (timedIndex >= 0 && timedIndex === timedItems.length - 1)
+                    const hasOverlap = !taskItem && timedItems.some((other) => {
                       return other.id !== item.id && isTimeOverlap(item.time || '09:00', item.endTime || '10:00', other.time || '09:00', other.endTime || '10:00')
                     })
-                    const timeDisplay = `${item.time || '09:00'} - ${item.endTime || '10:00'}`
+                    const timeDisplay = taskItem ? 'タスク' : `${item.time || '09:00'} - ${item.endTime || '10:00'}`
                     
                     let timeBoxStyle = styles.scheduleTimeBox
                     let clockIconColor = '#2563eb'
 
                     if (item.completed) {
                       timeBoxStyle = { ...styles.scheduleTimeBox, background: '#d1d5db', color: '#6b7280' }
+                      clockIconColor = '#6b7280'
+                    } else if (taskItem) {
+                      timeBoxStyle = { ...styles.scheduleTimeBox, background: '#f3f4f6', color: '#374151', border: '1px dashed #9ca3af' }
                       clockIconColor = '#6b7280'
                     } else if (item.priority === 'high') {
                       timeBoxStyle = { ...styles.scheduleTimeBox, background: '#fee2e2', color: '#dc2626' }
@@ -4573,7 +5053,7 @@ function App() {
                     >
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
                         <div style={timeBoxStyle}>
-                          <Clock3 size={16} color={clockIconColor} />
+                          {!taskItem && <Clock3 size={16} color={clockIconColor} />}
                           <span>{timeDisplay}</span>
                         </div>
                         {hasOverlap && (
@@ -4604,53 +5084,75 @@ function App() {
                               style={{ ...styles.completeButton, ...(item.completed ? styles.completedButton : {}) }}
                               aria-label={item.completed ? '完了を取り消す' : '予定を完了にする'}
                               onClick={(event) => {
-                                event.stopPropagation()
-                                toggleCompleted(item)
+                                stopScheduleCardActionBubble(event)
+                                closeAllScheduleActionMenus()
+                                void toggleCompleted(getLatestScheduleItem(item))
                               }}
                               title={item.completed ? '完了を取り消す' : '完了にする'}
                             >
                               <Check size={16} />
                             </button>
-                            <details className="schedule-action-menu" style={styles.scheduleActionMenu} onClick={(event) => event.stopPropagation()}>
-                              <summary className="schedule-action-menu-summary" style={styles.scheduleActionMenuButton} aria-label="予定の操作" title="予定の操作">
+                            <details
+                              className="schedule-action-menu"
+                              style={styles.scheduleActionMenu}
+                              onClick={stopScheduleCardActionBubble}
+                              onToggle={handleScheduleActionMenuToggle}
+                            >
+                              <summary
+                                className="schedule-action-menu-summary"
+                                style={styles.scheduleActionMenuButton}
+                                aria-label="予定の操作"
+                                title="予定の操作"
+                              >
                                 <MoreHorizontal size={20} />
                               </summary>
                               <div className="schedule-action-menu-list" style={styles.scheduleActionMenuList}>
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  event.stopPropagation()
                                   closeScheduleActionMenu(event)
-                                  if (!item.completed && !isFirst) moveScheduleItem(item, 'up')
-                                }} disabled={item.completed || isFirst}>
+                                  if (item.completed) return
+                                  if (isFirst) {
+                                    notifyScheduleAction('時刻順でいちばん上の予定のため、これ以上上には移動できません。')
+                                    return
+                                  }
+                                  void moveScheduleItem(item, 'up')
+                                }} disabled={item.completed}>
                                   <ChevronUp size={18} /> <span>上に移動</span>
                                 </button>
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  event.stopPropagation()
                                   closeScheduleActionMenu(event)
                                   if (!item.completed && !isLast) moveScheduleItem(item, 'down')
                                 }} disabled={item.completed || isLast}>
                                   <ChevronDown size={18} /> <span>下に移動</span>
                                 </button>
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  event.stopPropagation()
                                   closeScheduleActionMenu(event)
                                   if (!item.completed) openMoveCopyDialog(item)
                                 }} disabled={item.completed}>
                                   <Copy size={18} /> <span>複製 / 移動</span>
                                 </button>
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  event.stopPropagation()
                                   closeScheduleActionMenu(event)
                                   if (!item.completed) copyToFutureFourWeeks(item)
                                 }} disabled={item.completed}>
                                   <Repeat2 size={18} /> <span>未来4週間にコピー</span>
                                 </button>
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                  event.stopPropagation()
                                   closeScheduleActionMenu(event)
-                                  if (!item.completed) openRelationDialog(item)
-                                }} disabled={item.completed}>
-                                  <Link2 size={18} /> <span>前の予定と関連付け</span>
+                                  if (!item.completed && !taskItem) openRelationDialog(item)
+                                }} disabled={item.completed || taskItem}>
+                                  <Link2 size={18} /> <span>先に終わらせる予定を選ぶ</span>
                                 </button>
                                 <button type="button" className="schedule-action-menu-item schedule-action-delete-item" style={{ ...styles.scheduleActionMenuItem, ...styles.scheduleActionDelete }} onClick={(event) => {
+                                  event.stopPropagation()
                                   closeScheduleActionMenu(event)
                                   deleteScheduleItem(item)
                                 }}>
-                                  <Trash2 size={18} /> <span>予定を削除</span>
+                                  <Trash2 size={18} /> <span>{taskItem ? 'タスクを削除' : '予定を削除'}</span>
                                 </button>
                               </div>
                             </details>
@@ -4660,26 +5162,30 @@ function App() {
                         <div style={styles.scheduleDetailText}>
                           {item.details ? item.details : '詳細なし'}
                         </div>
-                        {item.relatedPrev && (
-                          <div
-                            style={styles.relationInfoTextLink}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              openRelatedSchedule(item.relatedPrev)
-                            }}
-                          >
-                            関連: {item.relatedPrev.date} {item.relatedPrev.time}-{item.relatedPrev.endTime} {item.relatedPrev.title}
-                          </div>
-                        )}
-                        {item.relatedNext && (
-                          <div
-                            style={styles.relationInfoTextLink}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              openRelatedSchedule(item.relatedNext)
-                            }}
-                          >
-                            次の関連: {item.relatedNext.date} {item.relatedNext.time}-{item.relatedNext.endTime} {item.relatedNext.title}
+                        {!taskItem && (item.relatedPrev || item.relatedNext) && (
+                          <div style={styles.relationInfoGroup} aria-label="順番指定">
+                            {item.relatedPrev && (
+                              <div
+                                style={styles.relationInfoTextLink}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openRelatedSchedule(item.relatedPrev)
+                                }}
+                              >
+                                先に終わらせる: {formatScheduleRelationLine(item.relatedPrev)}
+                              </div>
+                            )}
+                            {item.relatedNext && (
+                              <div
+                                style={styles.relationInfoTextLink}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  openRelatedSchedule(item.relatedNext)
+                                }}
+                              >
+                                このあと完了待ち: {formatScheduleRelationLine(item.relatedNext)}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -4870,7 +5376,7 @@ function App() {
                         {scheduleListItems.map((item) => (
                           <tr key={`${item.dateKey}_${item.id}`} style={item.isPast ? styles.listRowPast : undefined}>
                             <td style={styles.listTd}>{item.dateKey} ({item.dayName})</td>
-                            <td style={styles.listTd}>{item.time} - {item.endTime}</td>
+                            <td style={styles.listTd}>{isScheduleTask(item) ? '—' : `${item.time} - ${item.endTime}`}</td>
                             <td style={styles.listTd}>{item.title}</td>
                             <td style={styles.listTd}>{item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常'}</td>
                             <td style={styles.listTd}>{item.completed ? '完了' : '未完了'}</td>
@@ -4907,7 +5413,7 @@ function App() {
                         {incompleteItems.map((item) => (
                           <tr key={`${item.dateKey}_${item.id}`} style={item.isPast ? styles.listRowPast : undefined}>
                             <td style={styles.listTd}>{item.dateKey} ({item.dayName})</td>
-                            <td style={styles.listTd}>{item.time} - {item.endTime}</td>
+                            <td style={styles.listTd}>{isScheduleTask(item) ? '—' : `${item.time} - ${item.endTime}`}</td>
                             <td style={styles.listTd}>{item.title}</td>
                             <td style={styles.listTd}>{item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常'}</td>
                           </tr>
@@ -4937,80 +5443,153 @@ function App() {
                 <div style={styles.modalHeader}>
                   <div style={styles.modalTitleWrap}>
                     <Link2 size={18} color="#ca8a04" />
-                    <h3 style={styles.modalTitle}>前の予定との関連付け</h3>
+                    <h3 style={styles.modalTitle}>先に終わらせる予定を選ぶ</h3>
                   </div>
                   <button type="button" style={styles.closeButton} onClick={closeRelationDialog}>閉じる</button>
                 </div>
 
+                <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                  この予定を完了する前に、先に終わらせる予定を1つ選びます。先が未完了の間は、この予定を完了にできません。
+                </p>
+
                 <div style={styles.relationTargetBox}>
                   <strong>{relationDialog.item.title}</strong>
                   <div style={styles.relationTargetMeta}>
-                    {relationDialog.item.date} {relationDialog.item.time} - {relationDialog.item.endTime}
+                    {relationDialog.item.date} {formatScheduleTimeRange(relationDialog.item)}
                   </div>
                 </div>
 
                 {relationDialog.item.relatedPrev && (
                   <div style={styles.currentRelationBox}>
-                    現在の関連: {relationDialog.item.relatedPrev.date} {relationDialog.item.relatedPrev.time} - {relationDialog.item.relatedPrev.endTime} {relationDialog.item.relatedPrev.title}
+                    現在の指定: {relationDialog.item.relatedPrev.date} {relationDialog.item.relatedPrev.time} - {relationDialog.item.relatedPrev.endTime} {relationDialog.item.relatedPrev.title}
+                  </div>
+                )}
+
+                {relationDialog.recommendedKey && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <button
+                      type="button"
+                      style={{ ...styles.primaryButton, background: '#ca8a04', width: '100%' }}
+                      onClick={applyRecommendedScheduleRelation}
+                    >
+                      おすすめ（同日の直前）を先に終わらせる予定にする
+                    </button>
                   </div>
                 )}
 
                 {relationDialog.candidates.length === 0 ? (
-                  <div style={styles.emptyState}>関連付けできる前の予定がありません。</div>
+                  <div style={styles.emptyState}>選べる予定がありません。</div>
                 ) : (
-                  <div style={styles.relationTableWrap}>
-                    <table style={styles.relationTable}>
-                      <thead>
-                        <tr>
-                          <th style={styles.relationTableHeadCell}>選択</th>
-                          <th style={styles.relationTableHeadCell}>日付</th>
-                          <th style={styles.relationTableHeadCell}>時間</th>
-                          <th style={styles.relationTableHeadCell}>予定名</th>
-                          <th style={styles.relationTableHeadCell}>状態</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {relationDialog.candidates.map((candidate) => {
-                          const candidateKey = relationKeyFromItem(candidate)
-                          const disabled = Boolean(candidate.relatedNext && !isSameScheduleRelation(candidate.relatedNext, toScheduleRelation(relationDialog.item)))
-                          return (
-                            <tr key={candidateKey} style={disabled ? styles.disabledRelationRow : undefined}>
-                              <td style={styles.relationTableCell}>
-                                <input
-                                  type="radio"
-                                  name="schedule-relation"
-                                  value={candidateKey}
-                                  checked={relationDialog.selectedCandidateKey === candidateKey}
-                                  disabled={disabled}
-                                  onChange={() => setRelationDialog((current) => (current ? { ...current, selectedCandidateKey: candidateKey } : current))}
-                                />
-                              </td>
-                              <td style={styles.relationTableCell}>{candidate.date}</td>
-                              <td style={styles.relationTableCell}>{candidate.time} - {candidate.endTime}</td>
-                              <td style={styles.relationTableCell}>{candidate.title}</td>
-                              <td style={styles.relationTableCell}>
-                                {disabled ? '次予定が設定済み' : candidate.completed ? '完了' : '未完了'}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                  <>
+                    {(relationDialog.sameDayCandidates || []).length > 0 && (
+                      <>
+                        <div style={{ fontWeight: 700, marginBottom: '8px', color: '#92400e' }}>今日・この前</div>
+                        <div style={styles.relationTableWrap}>
+                          <table style={styles.relationTable}>
+                            <thead>
+                              <tr>
+                                <th style={styles.relationTableHeadCell}>選択</th>
+                                <th style={styles.relationTableHeadCell}>時間</th>
+                                <th style={styles.relationTableHeadCell}>予定名</th>
+                                <th style={styles.relationTableHeadCell}>状態</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(relationDialog.sameDayCandidates || []).slice(0, 3).map((candidate) => {
+                                const candidateKey = relationKeyFromItem(candidate)
+                                const disabled = Boolean(candidate.relatedNext && !isSameScheduleRelation(candidate.relatedNext, toScheduleRelation(relationDialog.item)))
+                                return (
+                                  <tr key={candidateKey} style={disabled ? styles.disabledRelationRow : undefined}>
+                                    <td style={styles.relationTableCell}>
+                                      <input
+                                        type="radio"
+                                        name="schedule-relation"
+                                        value={candidateKey}
+                                        checked={relationDialog.selectedCandidateKey === candidateKey}
+                                        disabled={disabled}
+                                        onChange={() => setRelationDialog((current) => (current ? { ...current, selectedCandidateKey: candidateKey } : current))}
+                                      />
+                                    </td>
+                                    <td style={styles.relationTableCell}>{candidate.time} - {candidate.endTime}</td>
+                                    <td style={styles.relationTableCell}>{candidate.title}</td>
+                                    <td style={styles.relationTableCell}>
+                                      {disabled ? '後ろの予定が設定済み' : '未完了'}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                    {(relationDialog.otherDayCandidates || []).length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          style={{ ...styles.secondaryButton, marginTop: '12px', marginBottom: '8px' }}
+                          onClick={() => setRelationDialog((current) => (current ? { ...current, showOtherDays: !current.showOtherDays } : current))}
+                        >
+                          {relationDialog.showOtherDays ? '別の日を選ぶ（閉じる）' : '別の日を選ぶ'}
+                        </button>
+                        {relationDialog.showOtherDays && (
+                          <div style={styles.relationTableWrap}>
+                            <table style={styles.relationTable}>
+                              <thead>
+                                <tr>
+                                  <th style={styles.relationTableHeadCell}>選択</th>
+                                  <th style={styles.relationTableHeadCell}>日付</th>
+                                  <th style={styles.relationTableHeadCell}>時間</th>
+                                  <th style={styles.relationTableHeadCell}>予定名</th>
+                                  <th style={styles.relationTableHeadCell}>状態</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(relationDialog.otherDayCandidates || []).map((candidate) => {
+                                  const candidateKey = relationKeyFromItem(candidate)
+                                  const disabled = Boolean(candidate.relatedNext && !isSameScheduleRelation(candidate.relatedNext, toScheduleRelation(relationDialog.item)))
+                                  return (
+                                    <tr key={candidateKey} style={disabled ? styles.disabledRelationRow : undefined}>
+                                      <td style={styles.relationTableCell}>
+                                        <input
+                                          type="radio"
+                                          name="schedule-relation"
+                                          value={candidateKey}
+                                          checked={relationDialog.selectedCandidateKey === candidateKey}
+                                          disabled={disabled}
+                                          onChange={() => setRelationDialog((current) => (current ? { ...current, selectedCandidateKey: candidateKey } : current))}
+                                        />
+                                      </td>
+                                      <td style={styles.relationTableCell}>{candidate.date}</td>
+                                      <td style={styles.relationTableCell}>{candidate.time} - {candidate.endTime}</td>
+                                      <td style={styles.relationTableCell}>{candidate.title}</td>
+                                      <td style={styles.relationTableCell}>
+                                        {disabled ? '後ろの予定が設定済み' : '未完了'}
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
                 )}
 
                 <div style={styles.modalActionRow}>
                   {relationDialog.item.relatedPrev && (
-                    <button type="button" style={styles.unlinkButton} onClick={clearScheduleRelation}>関連解除</button>
+                    <button type="button" style={styles.unlinkButton} onClick={clearScheduleRelation}>順番の指定をやめる</button>
                   )}
                   <button type="button" style={styles.secondaryButton} onClick={closeRelationDialog}>キャンセル</button>
                   <button
                     type="button"
                     style={styles.primaryButton}
-                    onClick={applyScheduleRelation}
+                    onClick={() => void applyScheduleRelation()}
                     disabled={!relationDialog.selectedCandidateKey}
                   >
-                    関連付けする
+                    指定する
                   </button>
                 </div>
               </div>
@@ -5031,15 +5610,25 @@ function App() {
                 <div style={styles.relationTargetBox}>
                   <strong>{moveCopyDialog.item.title}</strong>
                   <div style={styles.relationTargetMeta}>
-                    {moveCopyDialog.item.date} {moveCopyDialog.item.time} - {moveCopyDialog.item.endTime}
+                    {moveCopyDialog.item.date} {isScheduleTask(moveCopyDialog.item) ? '（タスク）' : formatScheduleTimeRange(moveCopyDialog.item)}
                   </div>
                 </div>
 
                 {hasScheduleRelation(moveCopyDialog.item) ? (
-                  <div style={{ ...styles.currentRelationBox, background: '#fee2e2', borderColor: '#fecaca', color: '#991b1b' }}>
-                    この予定は関連付け済みのため、移動はできません。関連を削除してから実行してください。
+                  <div style={{ ...styles.currentRelationBox, background: '#eff6ff', borderColor: '#bfdbfe', color: '#1e3a8a' }}>
+                    <strong>関連付けについて</strong>
+                    <div style={{ marginTop: '6px' }}>
+                      複製先の予定には関連付けはコピーされません。
+                    </div>
+                    <div style={{ marginTop: '6px' }}>
+                      移動時は関連付けを維持できます。移動先の日付（関連が同日の場合は時刻）と矛盾する場合のみ、関連付けが自動で解除されます。
+                    </div>
                   </div>
-                ) : null}
+                ) : (
+                  <div style={{ ...styles.currentRelationBox, background: '#f8fafc', borderColor: '#e2e8f0', color: '#475569' }}>
+                    複製先の予定には関連付けはコピーされません。
+                  </div>
+                )}
 
                 {moveCopyDialog.duplicateConflicts?.length > 0 && (
                   <div style={{ ...styles.currentRelationBox, background: '#fff7ed', borderColor: '#fed7aa', color: '#9a4d00' }}>
@@ -5114,7 +5703,7 @@ function App() {
                     type="button"
                     style={{ ...styles.primaryButton, background: '#0f766e' }}
                     onClick={() => executeMoveOrCopy('move')}
-                    disabled={hasScheduleRelation(moveCopyDialog.item) || !moveCopyDialog.targetDate}
+                    disabled={!moveCopyDialog.targetDate}
                   >
                     移動
                   </button>
@@ -5148,27 +5737,33 @@ function App() {
                 <div style={styles.previewMeta}>{formatDisplayDate(new Date(`${schedulePreview.date}T00:00:00`))}　{schedulePreview.time || '09:00'} - {schedulePreview.endTime || '10:00'}</div>
                 <h2 style={styles.previewTitle}>{schedulePreview.title || '予定'}</h2>
                 <div style={styles.previewDetails}>{schedulePreview.details || '詳細メモはありません。'}</div>
-                {schedulePreview.relatedPrev && (
-                  <div
-                    style={styles.relationInfoTextLink}
-                    onClick={() => openRelatedSchedule(schedulePreview.relatedPrev)}
-                  >
-                    関連: {schedulePreview.relatedPrev.date} {schedulePreview.relatedPrev.time}-{schedulePreview.relatedPrev.endTime} {schedulePreview.relatedPrev.title}
-                  </div>
-                )}
-                {schedulePreview.relatedNext && (
-                  <div
-                    style={styles.relationInfoTextLink}
-                    onClick={() => openRelatedSchedule(schedulePreview.relatedNext)}
-                  >
-                    次の関連: {schedulePreview.relatedNext.date} {schedulePreview.relatedNext.time}-{schedulePreview.relatedNext.endTime} {schedulePreview.relatedNext.title}
+                {!isScheduleTask(schedulePreview) && (schedulePreview.relatedPrev || schedulePreview.relatedNext) && (
+                  <div style={styles.relationInfoGroup} aria-label="順番指定">
+                    {schedulePreview.relatedPrev && (
+                      <div
+                        style={styles.relationInfoTextLink}
+                        onClick={() => openRelatedSchedule(schedulePreview.relatedPrev)}
+                      >
+                        先に終わらせる: {formatScheduleRelationLine(schedulePreview.relatedPrev)}
+                      </div>
+                    )}
+                    {schedulePreview.relatedNext && (
+                      <div
+                        style={styles.relationInfoTextLink}
+                        onClick={() => openRelatedSchedule(schedulePreview.relatedNext)}
+                      >
+                        このあと完了待ち: {formatScheduleRelationLine(schedulePreview.relatedNext)}
+                      </div>
+                    )}
                   </div>
                 )}
                 <div style={styles.modalActionRow}>
                   <button type="button" style={styles.secondaryButton} onClick={closeSchedulePreview}>閉じる</button>
-                  <button type="button" style={styles.primaryButton} onClick={editScheduleFromPreview}>
-                    <PencilLine size={17} /> 編集
-                  </button>
+                  {!schedulePreview.completed && (
+                    <button type="button" style={styles.primaryButton} onClick={editScheduleFromPreview}>
+                      <PencilLine size={17} /> 編集
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -5448,6 +6043,45 @@ function App() {
                   <option value="high">重要</option>
                 </select>
 
+                <label style={styles.commonTitleCheckboxRow}>
+                  <input
+                    type="checkbox"
+                    checked={detailDraft.isTask === true}
+                    disabled={
+                      !detailDraft.isTask
+                      && scheduleItemHasOrderRelation(scheduleMap, getLatestScheduleItem(detailDraft) || detailDraft)
+                    }
+                    onChange={(e) => {
+                      const nextIsTask = e.target.checked
+                      setDetailDraft((prev) => {
+                        if (!prev) return null
+                        if (nextIsTask) {
+                          const base = getLatestScheduleItem(prev) || prev
+                          if (scheduleItemHasOrderRelation(scheduleMap, base)) {
+                            notifyScheduleAction(TASK_CONVERT_REQUIRES_UNLINK_MSG)
+                            return prev
+                          }
+                          return { ...prev, isTask: true }
+                        }
+                        return {
+                          ...prev,
+                          isTask: false,
+                          time: prev.time || '09:00',
+                          endTime: prev.endTime || '10:00',
+                        }
+                      })
+                    }}
+                  />
+                  タスク（時刻なし・通知なし・関連付けなし）
+                </label>
+                {!detailDraft.isTask && scheduleItemHasOrderRelation(scheduleMap, getLatestScheduleItem(detailDraft) || detailDraft) && (
+                  <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#b45309', lineHeight: 1.5 }}>
+                    順番の指定があるため、タスクに変更できません。カードのメニューから順番の指定を解除してください。
+                  </p>
+                )}
+
+                {!detailDraft.isTask && (
+                  <>
                 <label style={styles.fieldLabel}>開始時間</label>
                 <div style={styles.timeFieldRow}>
                   <input
@@ -5481,6 +6115,8 @@ function App() {
                     現在時刻設定
                   </button>
                 </div>
+                  </>
+                )}
 
                 <label style={styles.fieldLabel}>詳細メモ</label>
                 <textarea
@@ -5626,6 +6262,72 @@ function App() {
                   >
                     {deletingAccount ? '削除中…' : 'アカウントを削除する'}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {scheduleAppConfirm && (
+            <div
+              style={styles.modalOverlayFront}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="schedule-app-confirm-title"
+            >
+              <div className="schedule-modal" style={{ ...styles.modal, maxWidth: '420px' }} onClick={(event) => event.stopPropagation()}>
+                <h3 id="schedule-app-confirm-title" style={{ ...styles.modalTitle, margin: '0 0 12px' }}>{scheduleAppConfirm.title}</h3>
+                <p style={{ margin: '0 0 18px', fontSize: '15px', lineHeight: 1.55, color: '#334155', whiteSpace: 'pre-line' }}>
+                  {scheduleAppConfirm.message}
+                </p>
+                <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end', gap: '10px' }}>
+                  <button type="button" style={styles.secondaryButton} onClick={() => finishScheduleAppConfirm(false)}>キャンセル</button>
+                  <button type="button" style={styles.primaryButton} onClick={() => finishScheduleAppConfirm(true)}>{scheduleAppConfirm.confirmLabel}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {scheduleRelationTimeConfirm && (
+            <div
+              style={styles.modalOverlayFront}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="schedule-relation-time-confirm-title"
+            >
+              <div className="schedule-modal" style={{ ...styles.modal, maxWidth: '420px' }} onClick={(event) => event.stopPropagation()}>
+                <h3 id="schedule-relation-time-confirm-title" style={{ ...styles.modalTitle, margin: '0 0 12px' }}>
+                  {scheduleRelationTimeConfirm.allowProceed ? '日時変更の確認' : '日時を変更できません'}
+                </h3>
+                <p style={{ margin: '0 0 18px', fontSize: '15px', lineHeight: 1.55, color: '#334155', whiteSpace: 'pre-line' }}>
+                  {scheduleRelationTimeConfirm.message}
+                </p>
+                <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end', gap: '10px' }}>
+                  {scheduleRelationTimeConfirm.allowProceed ? (
+                    <>
+                      <button type="button" style={styles.secondaryButton} onClick={() => finishScheduleRelationTimeConfirm(false)}>キャンセル</button>
+                      <button type="button" style={styles.primaryButton} onClick={() => finishScheduleRelationTimeConfirm(true)}>変更する</button>
+                    </>
+                  ) : (
+                    <button type="button" style={styles.primaryButton} onClick={() => finishScheduleRelationTimeConfirm(false)}>閉じる</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {scheduleActionNotice && (
+            <div
+              style={styles.modalOverlayFront}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="schedule-action-notice-title"
+              onClick={dismissScheduleActionNotice}
+            >
+              <div className="schedule-modal" style={{ ...styles.modal, maxWidth: '420px' }} onClick={(event) => event.stopPropagation()}>
+                <h3 id="schedule-action-notice-title" style={{ ...styles.modalTitle, margin: '0 0 12px' }}>お知らせ</h3>
+                <p style={{ margin: '0 0 18px', fontSize: '15px', lineHeight: 1.55, color: '#334155' }}>{scheduleActionNotice}</p>
+                <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
+                  <button type="button" style={styles.primaryButton} onClick={dismissScheduleActionNotice}>OK</button>
                 </div>
               </div>
             </div>
@@ -7004,6 +7706,7 @@ const styles = {
   },
   scheduleActionMenu: {
     position: 'relative',
+    isolation: 'isolate',
   },
   scheduleActionMenuButton: {
     display: 'flex',
@@ -7020,15 +7723,17 @@ const styles = {
   },
   scheduleActionMenuList: {
     position: 'absolute',
-    top: '38px',
+    top: 'calc(100% + 4px)',
     right: 0,
-    zIndex: 50,
+    zIndex: 200,
     width: '220px',
     padding: '8px 6px',
     border: '1px solid #dfeaf7',
     borderRadius: '10px',
     background: '#ffffff',
     boxShadow: '0 12px 28px rgba(15, 23, 42, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06)',
+    maxHeight: 'min(70vh, 360px)',
+    overflowY: 'auto',
   },
   scheduleActionMenuItem: {
     display: 'flex',
@@ -7168,6 +7873,12 @@ const styles = {
     lineHeight: 1.6,
     wordBreak: 'break-word',
   },
+  relationInfoGroup: {
+    marginTop: '6px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
   relationInfoText: {
     marginTop: '6px',
     fontSize: '12px',
@@ -7197,6 +7908,16 @@ const styles = {
     justifyContent: 'center',
     padding: '20px',
     zIndex: 50,
+  },
+  modalOverlayFront: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(15, 23, 42, 0.65)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '20px',
+    zIndex: 1000,
   },
   modal: {
     width: '100%',

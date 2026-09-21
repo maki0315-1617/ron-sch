@@ -6,6 +6,7 @@ import {
   parseTimeValue,
 } from './dateSleepUtils'
 import { computeStepFatiguePoints } from './stepsCsv'
+import { filterTimedSchedules } from './scheduleItemUtils'
 
 const FATIGUE_CONFIG = {
   targetSleepMinutes: 7 * 60,
@@ -105,7 +106,7 @@ const computeSleepFatiguePoints = (selectedDate, sleepRecordMap) => {
 }
 
 const computeScheduleLoadMetrics = (items) => {
-  const sorted = [...(items || [])]
+  const sorted = [...filterTimedSchedules(items)]
     .filter((item) => item.completed !== true)
     .sort((a, b) => parseTimeValue(a.time) - parseTimeValue(b.time))
 

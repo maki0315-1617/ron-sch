@@ -28,7 +28,7 @@ export const buildHealthLifeCountPresentation = ({
   const stepPoints = fatigue.breakdown.steps?.points ?? 0
   const stepMax = fatigue.breakdown.steps?.max ?? 0
 
-  const fatigueLine1 = `${fatigue.dayLabel}の疲れ: ${fatigue.bandLabel}（${fatigue.score}） · 未完了 ${fatigue.breakdown.schedule.itemCount}件`
+  const fatigueLine1 = `${fatigue.dayLabel}の疲れ: ${fatigue.bandLabel}（${fatigue.score}） · 未完了の時刻あり予定 ${fatigue.breakdown.schedule.itemCount}件`
   const stepSuffix = stepMax > 0 && fatigue.breakdown.steps
     ? ` · 歩数 ${stepPoints}/${stepMax}`
     : ''
