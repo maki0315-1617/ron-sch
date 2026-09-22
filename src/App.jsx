@@ -107,11 +107,39 @@ const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
 const HEALTH_LIFE_COUNT_ENABLED_KEY = 'ron-sch-health-life-count-enabled'
+const DEMO_MODE_STORAGE_KEY = 'ron-sch-demo-mode'
+const DEMO_NOTICE_SEEN_KEY = 'ron-sch-demo-notice-seen'
+const DEMO_MAX_PER_DAY = 5
+const DEMO_MAX_TOTAL = 20
 
 const isSleepShortcutLaunch = () => {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('sleep') === '1'
 }
+
+/** ?demo=1 でデモモード開始。セッション中は維持。?demo=0 で解除 */
+const resolveDemoModeFromLocation = () => {
+  if (typeof window === 'undefined') return false
+  try {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('demo') === '1') {
+      window.sessionStorage.setItem(DEMO_MODE_STORAGE_KEY, '1')
+      return true
+    }
+    if (params.get('demo') === '0') {
+      window.sessionStorage.removeItem(DEMO_MODE_STORAGE_KEY)
+      window.sessionStorage.removeItem(DEMO_NOTICE_SEEN_KEY)
+      return false
+    }
+    return window.sessionStorage.getItem(DEMO_MODE_STORAGE_KEY) === '1'
+  } catch {
+    return new URLSearchParams(window.location.search).get('demo') === '1'
+  }
+}
+
+const DEMO_LIMIT_REACHED_MSG = (
+  `デモ版ではスケジュールを1日${DEMO_MAX_PER_DAY}件・全体${DEMO_MAX_TOTAL}件まで登録できます。上限に達したため追加できません。`
+)
 
 const formatCurrentTime = () => {
   const now = new Date()
@@ -518,6 +546,8 @@ function App() {
   const scheduleSectionRef = useRef(null)
   const selectedKey = formatDateKey(selectedDate)
   const sleepOnlyMode = isSleepShortcutLaunch()
+  const [demoMode, setDemoMode] = useState(() => resolveDemoModeFromLocation())
+  const [demoWelcomeOpen, setDemoWelcomeOpen] = useState(false)
 
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -567,6 +597,100 @@ function App() {
     })
     return () => unsubscribe()
   }, [])
+
+  useEffect(() => {
+    const active = resolveDemoModeFromLocation()
+    setDemoMode(active)
+  }, [])
+
+  useEffect(() => {
+    if (!demoMode || !session) {
+      setDemoWelcomeOpen(false)
+      return
+    }
+    try {
+      if (window.sessionStorage.getItem(DEMO_NOTICE_SEEN_KEY) === '1') {
+        setDemoWelcomeOpen(false)
+        return
+      }
+    } catch {
+      // ignore
+    }
+    setDemoWelcomeOpen(true)
+  }, [demoMode, session?.uid])
+
+  const dismissDemoWelcome = () => {
+    try {
+      window.sessionStorage.setItem(DEMO_NOTICE_SEEN_KEY, '1')
+    } catch {
+      // ignore
+    }
+    setDemoWelcomeOpen(false)
+  }
+
+  const countScheduleItemsFromMap = () => {
+    let total = 0
+    const byDate = {}
+    Object.entries(scheduleMap || {}).forEach(([dateKey, list]) => {
+      const count = (list || []).length
+      total += count
+      byDate[dateKey] = (byDate[dateKey] || 0) + count
+    })
+    return { total, byDate }
+  }
+
+  const countScheduleItemsFromFirestore = async () => {
+    if (!session) return countScheduleItemsFromMap()
+    try {
+      const snapshot = await getDocs(query(
+        collection(db, 'schedule_items'),
+        where('user_id', '==', session.uid),
+      ))
+      let total = 0
+      const byDate = {}
+      snapshot.forEach((docSnap) => {
+        const dateKey = docSnap.data()?.date
+        if (!dateKey) return
+        total += 1
+        byDate[dateKey] = (byDate[dateKey] || 0) + 1
+      })
+      return { total, byDate }
+    } catch (error) {
+      console.warn('デモ件数の取得に失敗したため、表示中データを使います:', error)
+      return countScheduleItemsFromMap()
+    }
+  }
+
+  /** @param {{ dateKey: string, count: number }[]} creates */
+  const ensureDemoCanCreateScheduleItems = async (creates) => {
+    if (!demoMode || !session) return true
+    const additions = (creates || []).filter((entry) => entry?.dateKey && entry.count > 0)
+    if (additions.length === 0) return true
+
+    const addTotal = additions.reduce((sum, entry) => sum + entry.count, 0)
+    const { total, byDate } = await countScheduleItemsFromFirestore()
+
+    if (total + addTotal > DEMO_MAX_TOTAL) {
+      await askScheduleAppConfirm(DEMO_LIMIT_REACHED_MSG, {
+        title: 'デモ版の登録上限',
+        confirmLabel: 'OK',
+        hideCancel: true,
+      })
+      return false
+    }
+
+    for (const { dateKey, count } of additions) {
+      if ((byDate[dateKey] || 0) + count > DEMO_MAX_PER_DAY) {
+        await askScheduleAppConfirm(DEMO_LIMIT_REACHED_MSG, {
+          title: 'デモ版の登録上限',
+          confirmLabel: 'OK',
+          hideCancel: true,
+        })
+        return false
+      }
+    }
+    return true
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -1808,6 +1932,31 @@ function App() {
       }
     }
 
+    const sourceLatestForLimit = getLatestScheduleItem(item) || item
+    const childTasksForLimit = !isScheduleTask(sourceLatestForLimit)
+      ? findChildTasksForParent(scheduleMap, sourceLatestForLimit)
+      : []
+    const bundleCount = 1 + childTasksForLimit.length
+
+    if (mode === 'copy') {
+      const allowed = await ensureDemoCanCreateScheduleItems([{ dateKey: targetDateKey, count: bundleCount }])
+      if (!allowed) return
+    } else if (mode === 'move' && demoMode) {
+      const sourceDateKey = sourceLatestForLimit.date || item.date
+      // 別日への移動のみ当日上限を見る（同一日内は件数不変）
+      if (sourceDateKey !== targetDateKey) {
+        const { byDate } = await countScheduleItemsFromFirestore()
+        if ((byDate[targetDateKey] || 0) + bundleCount > DEMO_MAX_PER_DAY) {
+          await askScheduleAppConfirm(DEMO_LIMIT_REACHED_MSG, {
+            title: 'デモ版の登録上限',
+            confirmLabel: 'OK',
+            hideCancel: true,
+          })
+          return
+        }
+      }
+    }
+
     try {
       if (mode === 'copy') {
         const sourceLatest = getLatestScheduleItem(item) || item
@@ -2495,6 +2644,12 @@ function App() {
     }
 
     const existingLatest = getLatestScheduleItem({ id: itemId, date: dateKey }) || null
+    const isNewScheduleItem = !(scheduleMap[dateKey] || []).some((entry) => entry.id === itemId)
+    if (isNewScheduleItem) {
+      const allowed = await ensureDemoCanCreateScheduleItems([{ dateKey, count: 1 }])
+      if (!allowed) return
+    }
+
     const convertingScheduleToTask = Boolean(
       isTask
       && !isChildTask
@@ -2934,6 +3089,12 @@ function App() {
       `未来4週間（${targetDates.length}件）に「${displayTitle}」をコピーしますか？${childNote}`,
       { title: '未来4週間コピーの確認', confirmLabel: 'コピーする' },
     ))) return
+
+    const perWeekCount = 1 + childTasks.length
+    const allowed = await ensureDemoCanCreateScheduleItems(
+      targetDates.map((dateKey) => ({ dateKey, count: perWeekCount })),
+    )
+    if (!allowed) return
 
     try {
       const batch = writeBatch(db)
@@ -3894,6 +4055,7 @@ function App() {
               'Appleのページが開いたら「ショートカットを取得」をタップし、内容を確認して追加します。',
               'ショートカットアプリで追加したショートカットの「・・・」を開き、共有ボタンから「ホーム画面に追加」を選びます。',
               'ホーム画面の「睡眠記録」アイコンをタップし、アプリにログインすると睡眠記録だけの画面が開きます。',
+              '睡眠専用画面ではログアウトやアカウント削除は行えません。通常のアプリURLから開いたときのみ可能です。',
               '初回はSafariでログインが必要な場合があります。パスワードやFirebaseの秘密情報はショートカットに入力しません。',
             ],
           },
@@ -4012,6 +4174,7 @@ function App() {
               'When Apple’s page opens, tap “Get Shortcut”, review the actions, and add it.',
               'In the Shortcuts app, open the shortcut menu, tap Share, and choose “Add to Home Screen”.',
               'Tap the new Sleep Records icon on the Home Screen and sign in when prompted.',
+              'In Sleep-only mode, log out and account deletion are unavailable. Use the normal app URL for those actions.',
               'You may need to sign in through Safari the first time. Never enter a password or Firebase secret into the shortcut.',
             ],
           },
@@ -4563,7 +4726,15 @@ function App() {
           </div>
         </div>
       ) : (
-        <div style={styles.appShell} className={`app-shell${sleepOnlyMode ? ' sleep-only-mode' : ''}`}>
+        <div style={styles.appShell} className={`app-shell${sleepOnlyMode ? ' sleep-only-mode' : ''}${demoMode ? ' demo-mode' : ''}`}>
+          {demoMode && session && (
+            <div className="demo-mode-banner" style={styles.demoModeBanner} role="status">
+              <strong style={styles.demoModeBadge}>DEMO</strong>
+              <span>
+                デモ版です。登録は1日{DEMO_MAX_PER_DAY}件・全体{DEMO_MAX_TOTAL}件まで。ログアウト／アカウント削除はできません。
+              </span>
+            </div>
+          )}
           {loading && (
             <div style={styles.progressBarTrack}>
               <div style={styles.progressBarFill} />
@@ -4762,31 +4933,35 @@ function App() {
                     >
                       <HelpCircle size={18} /> ヘルプ
                     </button>
-                    <div style={styles.menuDivider} />
-                    <button
-                      type="button"
-                      role="menuitem"
-                      style={{ ...styles.menuItem, ...styles.menuItemDanger }}
-                      onClick={() => {
-                        setMenuOpen(false)
-                        signOut(auth)
-                      }}
-                    >
-                      <LogOut size={18} /> ログアウト
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      style={{ ...styles.menuItem, ...styles.menuItemDanger }}
-                      onClick={() => {
-                        setMenuOpen(false)
-                        setDeleteAccountError('')
-                        setDeletePassword('')
-                        setDeleteAccountModalOpen(true)
-                      }}
-                    >
-                      <UserX size={18} /> アカウント削除
-                    </button>
+                    {!sleepOnlyMode && !demoMode && (
+                      <>
+                        <div style={styles.menuDivider} />
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={{ ...styles.menuItem, ...styles.menuItemDanger }}
+                          onClick={() => {
+                            setMenuOpen(false)
+                            signOut(auth)
+                          }}
+                        >
+                          <LogOut size={18} /> ログアウト
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={{ ...styles.menuItem, ...styles.menuItemDanger }}
+                          onClick={() => {
+                            setMenuOpen(false)
+                            setDeleteAccountError('')
+                            setDeletePassword('')
+                            setDeleteAccountModalOpen(true)
+                          }}
+                        >
+                          <UserX size={18} /> アカウント削除
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -6806,6 +6981,32 @@ function App() {
               </div>
             </div>
           )}
+
+          {demoWelcomeOpen && (
+            <div
+              style={styles.modalOverlayFront}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="demo-welcome-title"
+            >
+              <div className="schedule-modal" style={{ ...styles.modal, maxWidth: '440px' }} onClick={(event) => event.stopPropagation()}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                  <strong style={styles.demoModeBadge}>DEMO</strong>
+                  <h3 id="demo-welcome-title" style={{ ...styles.modalTitle, margin: 0 }}>デモ版のご案内</h3>
+                </div>
+                <p style={{ margin: '0 0 10px', fontSize: '15px', lineHeight: 1.55, color: '#334155' }}>
+                  この画面はデモ用です。機能を一通りお試しいただけます。
+                </p>
+                <ul style={{ margin: '0 0 18px', paddingLeft: '1.2em', fontSize: '14px', lineHeight: 1.6, color: '#475569' }}>
+                  <li>スケジュール登録は1日{DEMO_MAX_PER_DAY}件・全体{DEMO_MAX_TOTAL}件まで</li>
+                  <li>ログアウトとアカウント削除は利用できません</li>
+                </ul>
+                <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
+                  <button type="button" style={styles.primaryButton} onClick={dismissDemoWelcome}>はじめる</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </>
@@ -6902,6 +7103,32 @@ const styles = {
     maxWidth: '960px',
     margin: '0 auto',
     padding: '12px 10px 20px',
+  },
+  demoModeBanner: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '10px',
+    marginBottom: '10px',
+    padding: '10px 12px',
+    borderRadius: '12px',
+    border: '1px solid #fcd34d',
+    background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)',
+    color: '#78350f',
+    fontSize: '13px',
+    lineHeight: 1.5,
+  },
+  demoModeBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    padding: '2px 8px',
+    borderRadius: '6px',
+    background: '#f59e0b',
+    color: '#fff',
+    fontSize: '11px',
+    fontWeight: 700,
+    letterSpacing: '0.04em',
   },
   header: {
     display: 'flex',

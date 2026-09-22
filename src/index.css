@@ -193,6 +193,11 @@ img {
   transform: translateY(0);
 }
 
+.demo-mode-banner {
+  position: relative;
+  z-index: 5;
+}
+
 .sleep-only-mode .app-header,
 .sleep-only-mode .month-calendar-section,
 .sleep-only-mode .schedule-search-section,
