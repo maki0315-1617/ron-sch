@@ -116,15 +116,21 @@ img {
 .schedule-card-mobile:has(.schedule-action-menu[open]) {
   position: relative;
   z-index: 120;
+  overflow: visible;
 }
 
 .schedule-action-menu {
   position: relative;
 }
 
+.schedule-action-menu[open] {
+  z-index: 250;
+}
+
 .schedule-action-menu-list {
   max-height: min(70vh, 360px);
   overflow-y: auto;
+  z-index: 250;
 }
 
 .schedule-action-menu-item {

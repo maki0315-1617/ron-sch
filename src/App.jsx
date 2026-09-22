@@ -8031,6 +8031,7 @@ const styles = {
     userSelect: 'none',
     WebkitUserSelect: 'none',
     touchAction: 'manipulation',
+    overflow: 'visible',
   },
   completedScheduleCard: {
     background: '#e5e7eb',
@@ -8067,6 +8068,7 @@ const styles = {
   scheduleBody: {
     flex: 1,
     minWidth: 0,
+    overflow: 'visible',
   },
   scheduleTitleRow: {
     display: 'flex',
@@ -8074,6 +8076,8 @@ const styles = {
     justifyContent: 'space-between',
     gap: '12px',
     marginBottom: '4px',
+    position: 'relative',
+    zIndex: 2,
   },
   scheduleTitleWrap: {
     display: 'flex',
@@ -8175,7 +8179,6 @@ const styles = {
   },
   scheduleActionMenu: {
     position: 'relative',
-    isolation: 'isolate',
   },
   scheduleActionMenuButton: {
     display: 'flex',
@@ -8194,7 +8197,7 @@ const styles = {
     position: 'absolute',
     top: 'calc(100% + 4px)',
     right: 0,
-    zIndex: 200,
+    zIndex: 300,
     width: '220px',
     padding: '8px 6px',
     border: '1px solid #dfeaf7',
@@ -8355,6 +8358,8 @@ const styles = {
     gap: '6px',
     paddingTop: '8px',
     borderTop: '1px dashed #cbd5e1',
+    position: 'relative',
+    zIndex: 0,
   },
   childTaskRow: {
     display: 'flex',
@@ -8365,10 +8370,13 @@ const styles = {
     borderRadius: '8px',
     background: '#f8fafc',
     border: '1px solid #e2e8f0',
+    position: 'relative',
+    zIndex: 0,
   },
   childTaskRowCompleted: {
-    background: '#f1f5f9',
-    opacity: 0.9,
+    background: '#eef2f7',
+    borderColor: '#d8dee8',
+    color: '#64748b',
   },
   childTaskTitle: {
     flex: 1,
