@@ -36,11 +36,16 @@ import { clearStepsCsvWebOnly, importStepsCsvText, loadStepsByDate, upsertStepsC
 import {
   buildScheduleRelationTimeChangeConfirm,
   filterTimedSchedules,
+  filterTopLevelDayItems,
+  findChildTasksForParent,
+  findParentScheduleItem,
   findRelatedScheduleItem,
   findPriorScheduleBlockingComplete,
   findDependentScheduleItem,
+  formatChildTaskParentLabel,
   formatScheduleTimeRange,
   formatScheduleRelationLine,
+  isScheduleChildTask,
   isScheduleTask,
   isRelatablePreviousSchedule,
   normalizeScheduleItem,
@@ -140,10 +145,6 @@ const isTimeOverlap = (time1, endTime1, time2, endTime2) => {
   return start1 < end2 && start2 < end1
 }
 
-const isValidTimeRange = (startTime, endTime) => {
-  return parseTimeValue(startTime) < parseTimeValue(endTime)
-}
-
 // 開始時刻までの残り分数から緊急度を判定（5分前=critical, 15分前=warning）
 const getScheduleUrgency = (item, nowMs) => {
   if (item.completed || !item.date || isScheduleTask(item)) return 'none'
@@ -173,15 +174,45 @@ const INCOMPLETE_PREVIOUS_SCHEDULE_MSG = '先に終わらせるスケジュー�
 
 const TASK_CONVERT_REQUIRES_UNLINK_MSG = '順番の指定を解除してから、タスクに変更してください。'
 
+const TASK_CONVERT_DELETES_CHILDREN_MSG = (count) => (
+  `この予定をタスクに変更すると、配下のタスク${count}件が削除されます。よろしいですか？`
+)
+
 const SCHEDULE_DELETE_REQUIRES_UNLINK_MSG = '関連する順番指定があるため、予定を削除できません。関連を解除してから削除してください。'
 
+const SCHEDULE_DELETE_HAS_CHILDREN_MSG = '配下のタスクがあるため、予定を削除できません。配下タスクを削除してから削除してください。'
+
 const COMPLETED_SCHEDULE_NOT_EDITABLE_MSG = '完了済みのため、編集できません。'
+
+const CHILD_COMPLETE_LOCKED_BY_PARENT_MSG = '親の予定が完了済みのため、配下タスクの完了状態は変更できません。'
 
 const MOVE_WITH_RELATION_CONFIRM_MSG = '関連付けがある予定を別の日へ移動します。移動先の日付（関連が同日の場合は時刻）が順番と矛盾する場合は、関連付けのみ自動で解除され、予定自体は移動されます。よろしいですか？'
 
 const MOVE_RELATION_STRIPPED_NOTICE = '移動先の日付・時刻と関連の順番が矛盾したため、関連付けを解除して移動しました。'
 
 const FUTURE_FOUR_WEEKS_COPY_DONE_MSG = (count) => `未来4週間に${count}件の予定をコピーしました。`
+
+const INVALID_TIME_RANGE_MSG = '開始時間と終了時間に矛盾があります。終了時間は開始時間より後に設定してください。'
+
+/** type=time の値（秒付き含む）を HH:mm に正規化 */
+const normalizeScheduleTimeInput = (value, fallback = '09:00') => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return fallback
+  const parts = raw.split(':')
+  const hours = Number(parts[0])
+  const minutes = Number(parts[1])
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return fallback
+  const h = Math.min(23, Math.max(0, Math.trunc(hours)))
+  const m = Math.min(59, Math.max(0, Math.trunc(minutes)))
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+const isValidTimeRange = (startTime, endTime) => {
+  const start = normalizeScheduleTimeInput(startTime, '')
+  const end = normalizeScheduleTimeInput(endTime, '')
+  if (!start || !end) return false
+  return parseTimeValue(start) < parseTimeValue(end)
+}
 
 const getMonthCalendarDays = (monthDate) => {
   const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1)
@@ -1129,6 +1160,7 @@ function App() {
   }
 
   const selectedItems = useMemo(() => sortDayScheduleItems(scheduleMap[selectedKey] || []), [scheduleMap, selectedKey])
+  const selectedTopLevelItems = useMemo(() => filterTopLevelDayItems(selectedItems), [selectedItems])
 
   const selectedHolidayName = holidayMap[selectedKey] || ''
 
@@ -1778,22 +1810,54 @@ function App() {
 
     try {
       if (mode === 'copy') {
+        const sourceLatest = getLatestScheduleItem(item) || item
+        const childTasks = !isScheduleTask(sourceLatest) ? findChildTasksForParent(scheduleMap, sourceLatest) : []
         const newItemId = `s-${Date.now()}`
         const newItem = {
-          ...item,
+          ...sourceLatest,
           id: newItemId,
           user_id: session.uid,
           date: targetDateKey,
           completed: false,
           relatedPrev: null,
           relatedNext: null,
+          parentId: null,
+          parentDate: null,
+          isTask: isScheduleTask(sourceLatest),
+          time: isScheduleTask(sourceLatest) ? null : sourceLatest.time,
+          endTime: isScheduleTask(sourceLatest) ? null : sourceLatest.endTime,
         }
 
-        await setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
+        const batch = writeBatch(db)
+        batch.set(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
+
+        const copiedChildren = childTasks.map((child, index) => {
+          const childId = `s-${Date.now()}-c${index}`
+          const newChild = {
+            id: childId,
+            user_id: session.uid,
+            title: child.title || 'タスク',
+            isTask: true,
+            time: null,
+            endTime: null,
+            details: child.details || '',
+            completed: false,
+            priority: child.priority || 'normal',
+            date: targetDateKey,
+            relatedPrev: null,
+            relatedNext: null,
+            parentId: newItemId,
+            parentDate: targetDateKey,
+          }
+          batch.set(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${childId}`), newChild)
+          return newChild
+        })
+
+        await batch.commit()
         setScheduleMap((current) => {
           const next = { ...current }
           const targetList = next[targetDateKey] || []
-          next[targetDateKey] = sortDayScheduleItems([...targetList, newItem])
+          next[targetDateKey] = sortDayScheduleItems([...targetList, newItem, ...copiedChildren])
           return next
         })
         invalidateScheduleWeeks([item.date, targetDateKey])
@@ -1801,12 +1865,16 @@ function App() {
         setSelectedDate(new Date(`${targetDateKey}T00:00:00`))
         closeMoveCopyDialog()
         await fetchWeekSchedule()
-        const copiedNote = hasScheduleRelation(item) ? '（関連付けはコピーされていません）' : ''
+        const notes = []
+        if (hasScheduleRelation(sourceLatest)) notes.push('関連付けはコピーされていません')
+        if (childTasks.length > 0) notes.push(`配下タスク${childTasks.length}件も複製しました`)
+        const copiedNote = notes.length > 0 ? `（${notes.join('／')}）` : ''
         alert(`${targetDateKey} に予定を複製しました${copiedNote}`)
         return
       }
 
       const { latest, priorItem, nextItem } = await loadScheduleRelationNeighbors(item)
+      const childTasks = findChildTasksForParent(scheduleMap, latest)
       const relationsValid = scheduleItemRelationsValidAt(latest, targetDateKey, { priorItem, nextItem })
       const relationStripped = hasScheduleRelation(latest) && !relationsValid
       const relatedPrev = relationStripped ? null : (latest.relatedPrev || null)
@@ -1821,11 +1889,30 @@ function App() {
         completed: latest.completed === true,
         relatedPrev,
         relatedNext,
+        parentId: null,
+        parentDate: null,
       }
 
       const batch = writeBatch(db)
       batch.set(destRef, movedItem)
       batch.delete(sourceRef)
+
+      const movedChildren = childTasks.map((child) => {
+        const sourceChildRef = doc(db, 'schedule_items', `${session.uid}_${child.date}_${child.id}`)
+        const destChildRef = doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${child.id}`)
+        const movedChild = {
+          ...child,
+          user_id: session.uid,
+          date: targetDateKey,
+          parentId: latest.id,
+          parentDate: targetDateKey,
+          relatedPrev: null,
+          relatedNext: null,
+        }
+        batch.set(destChildRef, movedChild)
+        batch.delete(sourceChildRef)
+        return movedChild
+      })
 
       if (relationStripped) {
         await queueDetachScheduleItemRelations(batch, latest, session.uid)
@@ -1837,10 +1924,12 @@ function App() {
       setScheduleMap((current) => {
         const next = { ...current }
         if (next[item.date]) {
-          next[item.date] = next[item.date].filter((entry) => entry.id !== item.id)
+          const removeIds = new Set([item.id, ...childTasks.map((child) => child.id)])
+          next[item.date] = next[item.date].filter((entry) => !removeIds.has(entry.id))
         }
         const targetList = next[targetDateKey] || []
-        next[targetDateKey] = sortDayScheduleItems([...targetList.filter((entry) => entry.id !== item.id), movedItem])
+        const withoutMoved = targetList.filter((entry) => entry.id !== item.id && !movedChildren.some((child) => child.id === entry.id))
+        next[targetDateKey] = sortDayScheduleItems([...withoutMoved, movedItem, ...movedChildren])
         return next
       })
       invalidateScheduleWeeks([item.date, targetDateKey])
@@ -1851,7 +1940,8 @@ function App() {
       if (relationStripped) {
         notifyScheduleAction(MOVE_RELATION_STRIPPED_NOTICE)
       } else {
-        alert(`${item.date} から ${targetDateKey} に予定を移動しました`)
+        const childNote = childTasks.length > 0 ? `（配下タスク${childTasks.length}件も移動）` : ''
+        alert(`${item.date} から ${targetDateKey} に予定を移動しました${childNote}`)
       }
     } catch (error) {
       console.error('予定の複製/移動エラー:', error)
@@ -1869,6 +1959,13 @@ function App() {
       notifyScheduleAction(COMPLETED_SCHEDULE_NOT_EDITABLE_MSG)
       return
     }
+    if (isScheduleChildTask(latest)) {
+      const parent = findParentScheduleItem(scheduleMap, latest)
+      if (parent?.completed === true) {
+        notifyScheduleAction(COMPLETED_SCHEDULE_NOT_EDITABLE_MSG)
+        return
+      }
+    }
     setSaveAsCommonTitle(false)
     setCommonTitlesExpanded(false)
     setDetailDraft({
@@ -1883,6 +1980,34 @@ function App() {
       date: latest.date || selectedKey,
       relatedPrev: latest.relatedPrev || null,
       relatedNext: latest.relatedNext || null,
+      parentId: latest.parentId || null,
+      parentDate: latest.parentDate || null,
+    })
+  }
+
+  const openAddChildTask = (parentItem) => {
+    const parent = getLatestScheduleItem(parentItem) || parentItem
+    if (!parent || isScheduleTask(parent)) return
+    if (parent.completed === true) {
+      notifyScheduleAction(COMPLETED_SCHEDULE_NOT_EDITABLE_MSG)
+      return
+    }
+    setSaveAsCommonTitle(false)
+    setCommonTitlesExpanded(false)
+    setDetailDraft({
+      id: `s-${Date.now()}`,
+      title: '',
+      isTask: true,
+      time: '09:00',
+      endTime: '10:00',
+      details: '',
+      completed: false,
+      priority: 'normal',
+      date: parent.date || selectedKey,
+      relatedPrev: null,
+      relatedNext: null,
+      parentId: parent.id,
+      parentDate: parent.date || selectedKey,
     })
   }
 
@@ -1994,6 +2119,7 @@ function App() {
       message,
       title: options.title || '確認',
       confirmLabel: options.confirmLabel || 'OK',
+      hideCancel: options.hideCancel === true,
     })
   })
 
@@ -2268,31 +2394,7 @@ function App() {
   }
 
   const toggleRelatedItemCompleted = async (item) => {
-    if (!session) return
-
-    const latestItem = getLatestScheduleItem(item)
-
-    if (!latestItem.completed) {
-      const allowed = await ensurePriorScheduleCompleteBeforeComplete(latestItem, relatedChainModal.items)
-      if (!allowed) return
-    }
-
-    const confirmMessage = latestItem.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
-    if (!window.confirm(confirmMessage)) return
-
-    try {
-      const nextItem = { ...latestItem, completed: !latestItem.completed, user_id: session.uid }
-      await setDoc(doc(db, 'schedule_items', `${session.uid}_${latestItem.date}_${latestItem.id}`), nextItem)
-      upsertScheduleItemLocal(nextItem)
-      setRelatedChainModal((prev) => ({
-        ...prev,
-        items: prev.items.map((entry) => (entry.id === latestItem.id && entry.date === latestItem.date ? nextItem : entry)),
-      }))
-      fetchWeekSchedule()
-    } catch (error) {
-      console.error('完了状態更新エラー:', error)
-      alert(`完了状態の更新に失敗しました:\n${error.message}`)
-    }
+    await toggleCompleted(item)
   }
 
   const openSchedulePreview = (item) => {
@@ -2355,21 +2457,53 @@ function App() {
     }
 
     const isTask = detailDraft.isTask === true
-    const startTime = detailDraft.time || '09:00'
-    const endTime = detailDraft.endTime || '10:00'
+    const isChildTask = Boolean(detailDraft.parentId)
+    const startTime = normalizeScheduleTimeInput(detailDraft.time, '09:00')
+    const endTime = normalizeScheduleTimeInput(detailDraft.endTime, '10:00')
+    const isTimedSchedule = !isTask && !isChildTask
 
-    if (!isTask && !isValidTimeRange(startTime, endTime)) {
-      alert('開始時刻は終了時刻より前に設定してください')
+    if (isTimedSchedule && !isValidTimeRange(detailDraft.time, detailDraft.endTime)) {
+      await askScheduleAppConfirm(INVALID_TIME_RANGE_MSG, {
+        title: '時刻の矛盾',
+        confirmLabel: 'OK',
+        hideCancel: true,
+      })
       return
     }
 
-    const itemId = detailDraft.id || `s-${Date.now()}`
+    const itemId = detailDraft.id?.startsWith('new-') ? `s-${Date.now()}` : (detailDraft.id || `s-${Date.now()}`)
     const dateKey = detailDraft.date || selectedKey
+    const parentId = isChildTask ? detailDraft.parentId : null
+    const parentDate = isChildTask ? (detailDraft.parentDate || dateKey) : null
 
-    if (isTask && (await resolveOrderRelationForItem({ ...detailDraft, id: itemId, date: dateKey }))) {
+    if (isChildTask) {
+      const parent = findParentScheduleItem(scheduleMap, {
+        isTask: true,
+        parentId,
+        parentDate,
+        date: dateKey,
+      }) || (scheduleMap[parentDate] || []).find((entry) => entry.id === parentId)
+      if (parent?.completed === true) {
+        notifyScheduleAction(COMPLETED_SCHEDULE_NOT_EDITABLE_MSG)
+        return
+      }
+    }
+
+    if (isTask && !isChildTask && (await resolveOrderRelationForItem({ ...detailDraft, id: itemId, date: dateKey }))) {
       notifyScheduleAction(TASK_CONVERT_REQUIRES_UNLINK_MSG)
       return
     }
+
+    const existingLatest = getLatestScheduleItem({ id: itemId, date: dateKey }) || null
+    const convertingScheduleToTask = Boolean(
+      isTask
+      && !isChildTask
+      && existingLatest
+      && !isScheduleTask(existingLatest),
+    )
+    const childTasksToDelete = convertingScheduleToTask
+      ? findChildTasksForParent(scheduleMap, existingLatest)
+      : []
 
     if (!isTask) {
       const confirmed = await confirmScheduleRelationTimeChangeIfNeeded(
@@ -2393,18 +2527,21 @@ function App() {
         completed: detailDraft.completed === true,
         priority: detailDraft.priority || 'normal',
         date: dateKey,
-        isTask,
+        isTask: isTask || isChildTask,
       }
 
       const batch = writeBatch(db)
 
-      if (isTask) {
+      if (isTask || isChildTask) {
         batch.set(itemRef, {
           ...baseFields,
+          isTask: true,
           time: deleteField(),
           endTime: deleteField(),
           relatedPrev: deleteField(),
           relatedNext: deleteField(),
+          parentId: parentId || deleteField(),
+          parentDate: parentDate || deleteField(),
         }, { merge: true })
       } else {
         batch.set(itemRef, {
@@ -2413,12 +2550,18 @@ function App() {
           endTime: endTime,
           relatedPrev: detailDraft.relatedPrev || null,
           relatedNext: detailDraft.relatedNext || null,
+          parentId: deleteField(),
+          parentDate: deleteField(),
         }, { merge: true })
       }
 
+      childTasksToDelete.forEach((child) => {
+        batch.delete(doc(db, 'schedule_items', `${session.uid}_${child.date}_${child.id}`))
+      })
+
       await batch.commit()
 
-      const localItem = isTask
+      const localItem = (isTask || isChildTask)
         ? normalizeScheduleItem({
           ...baseFields,
           isTask: true,
@@ -2426,6 +2569,8 @@ function App() {
           endTime: null,
           relatedPrev: null,
           relatedNext: null,
+          parentId,
+          parentDate,
         })
         : {
           ...baseFields,
@@ -2433,9 +2578,14 @@ function App() {
           endTime: endTime,
           relatedPrev: detailDraft.relatedPrev || null,
           relatedNext: detailDraft.relatedNext || null,
+          parentId: null,
+          parentDate: null,
         }
 
       upsertScheduleItemLocal(localItem)
+      childTasksToDelete.forEach((child) => {
+        removeScheduleItemLocal(child.date, child.id)
+      })
       if (saveAsCommonTitle) {
         await addCommonTitle(localItem.title)
       }
@@ -2454,6 +2604,15 @@ function App() {
     if (!session) return
 
     const latest = getLatestScheduleItem(item) || item
+
+    if (!isScheduleTask(latest)) {
+      const childTasks = findChildTasksForParent(scheduleMap, latest)
+      if (childTasks.length > 0) {
+        notifyScheduleAction(SCHEDULE_DELETE_HAS_CHILDREN_MSG)
+        return
+      }
+    }
+
     if (scheduleItemHasOrderRelation(scheduleMap, latest)) {
       notifyScheduleAction(SCHEDULE_DELETE_REQUIRES_UNLINK_MSG)
       return
@@ -2470,6 +2629,11 @@ function App() {
       }
 
       const persisted = normalizeScheduleItem(selectedSnap.data(), selectedSnap.id)
+      if (!isScheduleTask(persisted) && findChildTasksForParent(scheduleMap, persisted).length > 0) {
+        notifyScheduleAction(SCHEDULE_DELETE_HAS_CHILDREN_MSG)
+        fetchWeekSchedule()
+        return
+      }
       if (scheduleItemHasOrderRelation(scheduleMap, persisted)) {
         notifyScheduleAction(SCHEDULE_DELETE_REQUIRES_UNLINK_MSG)
         fetchWeekSchedule()
@@ -2481,7 +2645,7 @@ function App() {
       return
     }
 
-    const itemKind = isScheduleTask(latest) ? 'タスク' : '予定'
+    const itemKind = isScheduleChildTask(latest) ? '配下タスク' : (isScheduleTask(latest) ? 'タスク' : '予定')
     const displayTitle = latest.title || itemKind
     if (!(await askScheduleAppConfirm(
       `「${displayTitle}」の${itemKind}を削除しますか？`,
@@ -2542,6 +2706,8 @@ function App() {
       date: selectedKey,
       relatedPrev: null,
       relatedNext: null,
+      parentId: null,
+      parentDate: null,
     })
   }
 
@@ -2551,17 +2717,70 @@ function App() {
     try {
       const latestItem = getLatestScheduleItem(item) || item
 
+      if (isScheduleChildTask(latestItem)) {
+        const parent = findParentScheduleItem(scheduleMap, latestItem)
+        if (parent?.completed === true) {
+          notifyScheduleAction(CHILD_COMPLETE_LOCKED_BY_PARENT_MSG)
+          return
+        }
+      }
+
       if (!latestItem.completed) {
         const allowed = await ensurePriorScheduleCompleteBeforeComplete(latestItem)
         if (!allowed) return
       }
 
-      const confirmMessage = latestItem.completed ? '完了を取り消しますか？' : 'この予定を完了にしますか？'
-      if (!(await askScheduleAppConfirm(confirmMessage))) return
+      const childTasks = !isScheduleTask(latestItem)
+        ? findChildTasksForParent(scheduleMap, latestItem)
+        : []
 
-      const nextItem = { ...latestItem, completed: !latestItem.completed, user_id: session.uid }
-      await setDoc(doc(db, 'schedule_items', `${session.uid}_${latestItem.date}_${latestItem.id}`), nextItem)
+      if (latestItem.completed) {
+        const confirmMessage = childTasks.length > 0
+          ? `この予定の完了を取り消すと、配下のタスク${childTasks.length}件も未完了に戻ります。よろしいですか？`
+          : '完了を取り消しますか？'
+        if (!(await askScheduleAppConfirm(confirmMessage, {
+          title: childTasks.length > 0 ? '完了取り消しの確認' : '確認',
+          confirmLabel: '取り消す',
+        }))) return
+      } else {
+        const confirmMessage = childTasks.length > 0
+          ? `この予定を完了にすると、配下のタスク${childTasks.length}件も完了になります。よろしいですか？`
+          : 'この予定を完了にしますか？'
+        if (!(await askScheduleAppConfirm(confirmMessage, {
+          title: childTasks.length > 0 ? '完了の確認' : '確認',
+          confirmLabel: '完了する',
+        }))) return
+      }
+
+      const nextCompleted = !latestItem.completed
+      const batch = writeBatch(db)
+      const nextItem = { ...latestItem, completed: nextCompleted, user_id: session.uid }
+      batch.set(doc(db, 'schedule_items', `${session.uid}_${latestItem.date}_${latestItem.id}`), nextItem)
+
+      childTasks.forEach((child) => {
+        const nextChild = { ...child, completed: nextCompleted, user_id: session.uid }
+        batch.set(doc(db, 'schedule_items', `${session.uid}_${child.date}_${child.id}`), nextChild)
+      })
+
+      await batch.commit()
       upsertScheduleItemLocal(nextItem)
+      childTasks.forEach((child) => {
+        upsertScheduleItemLocal({ ...child, completed: nextCompleted, user_id: session.uid })
+      })
+      setRelatedChainModal((prev) => {
+        if (!prev.open) return prev
+        const updatedByKey = new Map([
+          [`${nextItem.date}_${nextItem.id}`, nextItem],
+          ...childTasks.map((child) => [
+            `${child.date}_${child.id}`,
+            { ...child, completed: nextCompleted, user_id: session.uid },
+          ]),
+        ])
+        return {
+          ...prev,
+          items: prev.items.map((entry) => updatedByKey.get(`${entry.date}_${entry.id}`) || entry),
+        }
+      })
       fetchWeekSchedule()
     } catch (error) {
       console.error('完了状態更新エラー:', error)
@@ -2701,18 +2920,26 @@ function App() {
     if (!session) return
 
     const latest = getLatestScheduleItem(item) || item
+    if (isScheduleChildTask(latest)) return
+
     const sourceDate = new Date(`${latest.date}T00:00:00`)
     const targetDates = Array.from({ length: 4 }, (_, index) => formatDateKey(addDays(sourceDate, (index + 1) * 7)))
     const displayTitle = latest.title || (isScheduleTask(latest) ? 'タスク' : '予定')
+    const childTasks = !isScheduleTask(latest) ? findChildTasksForParent(scheduleMap, latest) : []
+    const childNote = childTasks.length > 0
+      ? `\n配下タスク${childTasks.length}件も各週にコピーされます（関連付けはコピーされません）。`
+      : '\n複製先には関連付けはコピーされません。'
 
     if (!(await askScheduleAppConfirm(
-      `未来4週間（${targetDates.length}件）に「${displayTitle}」をコピーしますか？\n\n複製先には関連付けはコピーされません。`,
+      `未来4週間（${targetDates.length}件）に「${displayTitle}」をコピーしますか？${childNote}`,
       { title: '未来4週間コピーの確認', confirmLabel: 'コピーする' },
     ))) return
 
     try {
-      await Promise.all(targetDates.map((targetDateKey, index) => {
-        const newItemId = `s-${Date.now()}-${index}-${targetDateKey}`
+      const batch = writeBatch(db)
+      let createdCount = 0
+      targetDates.forEach((targetDateKey, weekIndex) => {
+        const newItemId = `s-${Date.now()}-${weekIndex}-${targetDateKey}`
         const newItem = {
           id: newItemId,
           user_id: session.uid,
@@ -2726,12 +2953,36 @@ function App() {
           date: targetDateKey,
           relatedPrev: null,
           relatedNext: null,
+          parentId: null,
+          parentDate: null,
         }
+        batch.set(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
+        createdCount += 1
 
-        return setDoc(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${newItemId}`), newItem)
-      }))
+        childTasks.forEach((child, childIndex) => {
+          const childId = `s-${Date.now()}-${weekIndex}-c${childIndex}-${targetDateKey}`
+          batch.set(doc(db, 'schedule_items', `${session.uid}_${targetDateKey}_${childId}`), {
+            id: childId,
+            user_id: session.uid,
+            title: child.title || 'タスク',
+            isTask: true,
+            time: null,
+            endTime: null,
+            details: child.details || '',
+            completed: false,
+            priority: child.priority || 'normal',
+            date: targetDateKey,
+            relatedPrev: null,
+            relatedNext: null,
+            parentId: newItemId,
+            parentDate: targetDateKey,
+          })
+          createdCount += 1
+        })
+      })
+      await batch.commit()
       fetchWeekSchedule()
-      notifyScheduleAction(FUTURE_FOUR_WEEKS_COPY_DONE_MSG(targetDates.length))
+      notifyScheduleAction(FUTURE_FOUR_WEEKS_COPY_DONE_MSG(createdCount))
     } catch (error) {
       console.error('未来4週間コピーエラー:', error)
       alert(`未来4週間コピーに失敗しました:\n${error.message}`)
@@ -2915,25 +3166,41 @@ function App() {
     const q = query(collection(db, 'schedule_items'), where('user_id', '==', session.uid))
     const snapshot = await getDocs(q)
 
-    const items = []
+    const allItems = []
     snapshot.forEach((docSnap) => {
       const item = docSnap.data()
-      if (item.completed === true) return
       const dateKey = item.date
-      const dayDate = new Date(`${dateKey}T00:00:00`)
-      items.push({
-        ...normalizeScheduleItem({ ...item, date: dateKey }, docSnap.id),
-        dateKey,
-        dayName: dayNames[dayDate.getDay()],
-        isPast: dateKey < todayKey,
-      })
+      allItems.push(normalizeScheduleItem({ ...item, date: dateKey }, docSnap.id))
     })
+
+    const parentLookup = new Map(
+      allItems
+        .filter((entry) => !isScheduleTask(entry))
+        .map((entry) => [`${entry.date}_${entry.id}`, entry]),
+    )
+
+    const items = allItems
+      .filter((item) => item.completed !== true)
+      .map((item) => {
+        const dayDate = new Date(`${item.date}T00:00:00`)
+        const parent = isScheduleChildTask(item)
+          ? parentLookup.get(`${item.parentDate || item.date}_${item.parentId}`)
+          : null
+        return {
+          ...item,
+          dateKey: item.date,
+          dayName: dayNames[dayDate.getDay()],
+          isPast: item.date < todayKey,
+          parentLabel: parent ? formatChildTaskParentLabel(parent) : '',
+        }
+      })
 
     items.sort((a, b) => {
       if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
       const aTask = isScheduleTask(a)
       const bTask = isScheduleTask(b)
       if (aTask !== bTask) return aTask ? 1 : -1
+      if (isScheduleChildTask(a) !== isScheduleChildTask(b)) return isScheduleChildTask(a) ? 1 : -1
       if (aTask && bTask) return String(a.id).localeCompare(String(b.id))
       return parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00')
     })
@@ -3431,15 +3698,27 @@ function App() {
     if (reportWindow.closed) return
 
     const rows = reportItems.length
-      ? reportItems.map((item) => `
+      ? reportItems.map((item) => {
+        const parentLabel = item.parentLabel
+          || (isScheduleChildTask(item) ? formatChildTaskParentLabel(findParentScheduleItem(scheduleMap, item)) : '')
+        const timeLabel = isScheduleChildTask(item)
+          ? '配下'
+          : isScheduleTask(item)
+            ? '—'
+            : `${item.time} - ${item.endTime}`
+        const titleHtml = parentLabel
+          ? `${escapeHtml(item.title)}<div style="margin-top:4px;font-size:11px;color:#64748b;">${escapeHtml(parentLabel)}</div>`
+          : escapeHtml(item.title)
+        return `
           <tr class="${item.isPast ? 'past-schedule' : ''}">
             <td>${escapeHtml(item.dateKey)} (${item.dayName})</td>
-            <td>${escapeHtml(isScheduleTask(item) ? '—' : `${item.time} - ${item.endTime}`)}</td>
-            <td>${escapeHtml(item.title)}</td>
+            <td>${escapeHtml(timeLabel)}</td>
+            <td>${titleHtml}</td>
             <td>${escapeHtml(item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常')}</td>
             <td>${escapeHtml(item.details || '')}</td>
             <td>${item.completed ? '完了' : '未完了'}</td>
-          </tr>`).join('')
+          </tr>`
+      }).join('')
       : '<tr><td colspan="6" class="empty">該当する予定はありません</td></tr>'
 
     const html = `<!doctype html>
@@ -3515,7 +3794,8 @@ function App() {
             heading: '1. 予定を登録する',
             body: '画面の「追加」ボタンから、時刻ありのスケジュールまたは「タスク」チェックをオンにした時刻なしの ToDo を登録できます。定例タイトルで繰り返し入力も速くなります。',
             points: [
-              '「タスク」は時刻・通知・先に終わらせる予定の指定がありません。一覧では時刻あり予定の下に並びます。',
+              '「タスク」は時刻・通知・先に終わらせる予定の指定がありません。一覧では時刻あり予定の下に並びます（一般タスク）。',
+              '時刻あり予定のメニューから「タスクを追加」すると、その予定だけの配下タスクを作れます。配下タスクは親カードの中にだけ表示され、一般タスクとは別物です。',
               '定例タイトルを使うと、よく使う予定名をすぐに選べます。',
               '重要度を「重要」にすると、視認性が高くなります。',
               '詳細メモには、会議内容や持ち物などを残せます。',
@@ -3527,8 +3807,11 @@ function App() {
             points: [
               '先に終わらせる予定が未完了の間、その予定は完了にできません。',
               '同日の直前候補はおすすめボタンでワンタップ設定できます。別日は「別の日を選ぶ」から選べます。',
-              '順番を先に終わらせたい準備は、時刻付きスケジュールにすると指定しやすいです（タスクには関連付けがありません）。',
-              '「複製 / 移動」で別日へ移せます。複製先には関連付けは付きません。関連がある予定の移動は、矛盾がある場合のみ関連が自動解除されます。',
+              '順番を先に終わらせたい準備は、時刻付きスケジュールにすると指定しやすいです（一般タスク・配下タスクには関連付けがありません）。',
+              '配下タスクは完了・編集・削除のみです。親予定を完了／完了取り消しすると、配下もまとめて同じ状態になります（確認あり）。親が完了済みの間は配下の追加・編集・完了変更はできません。',
+              '配下タスクがある予定は、配下を削除するまで親を削除できません。親を一般タスクへ変更する場合は、配下が削除される旨の確認があります。',
+              '「複製 / 移動」や「未来4週間にコピー」では、配下タスクも一緒にコピー／移動されます。複製先に関連付けは付きません。関連がある予定の移動は、矛盾がある場合のみ関連が自動解除されます。',
+              '検索・未完了一覧・スケジュール一覧では配下タスクも表示され、親予定への紐づけが分かります。カレンダーの件数にも含まれます。',
             ],
           },
           {
@@ -3629,9 +3912,10 @@ function App() {
             heading: '1. Create a schedule',
             body: 'Tap Add to create a timed schedule or turn on “Task” for a to-do without times. Saved common titles speed up recurring entries.',
             points: [
-              'Tasks have no times, notifications, or “finish this first” links. They appear below timed items for that day.',
+              'Standalone tasks have no times, notifications, or “finish this first” links. They appear below timed items for that day.',
+              'From a timed schedule’s menu, choose “Add task” to create child tasks under that schedule only. Child tasks appear inside the parent card and are separate from standalone tasks.',
               'Common titles let you reuse familiar task names in seconds.',
-              'Setting a task to High priority makes it stand out more clearly.',
+              'Setting priority to High makes an item stand out more clearly.',
               'Notes are useful for keeping meeting details, packing lists, or reminders.',
             ],
           },
@@ -3641,8 +3925,11 @@ function App() {
             points: [
               'You cannot complete a schedule until its linked prior item is complete.',
               'Use the recommended same-day button for the item right before yours, or open “Pick another day” for earlier dates.',
-              'If order matters, make prep a timed schedule and link it—tasks cannot be linked.',
-              'Copy/move works across dates; clear order links before moving a linked schedule.',
+              'If order matters, make prep a timed schedule and link it—standalone tasks and child tasks cannot be linked.',
+              'Child tasks support complete, edit, and delete only. Completing or uncompleting the parent applies the same status to all child tasks (with confirmation). While the parent is complete, you cannot add, edit, or change child completion.',
+              'You cannot delete a parent while it still has child tasks. Converting a parent into a standalone task asks for confirmation because child tasks will be deleted.',
+              'Copy/move and “Copy to next 4 weeks” also copy or move child tasks. Copies do not keep order links. Moving a linked schedule keeps the link when possible; if the new date conflicts, the link is cleared automatically.',
+              'Search, incomplete lists, and schedule lists include child tasks with a parent link. Calendar day counts include them too.',
             ],
           },
           {
@@ -4661,7 +4948,14 @@ function App() {
                       }}
                     >
                       <span style={styles.scheduleSearchResultTitle}>{item.title || '予定'}</span>
-                      <span style={styles.scheduleSearchResultMeta}>{item.date}　{isScheduleTask(item) ? 'タスク' : formatScheduleTimeRange(item)}</span>
+                      <span style={styles.scheduleSearchResultMeta}>
+                        {item.date}　
+                        {isScheduleChildTask(item)
+                          ? `配下タスク／${formatChildTaskParentLabel(findParentScheduleItem(scheduleMap, item)) || '親予定'}`
+                          : isScheduleTask(item)
+                            ? 'タスク'
+                            : formatScheduleTimeRange(item)}
+                      </span>
                     </button>
                   ))}
                   {scheduleSearchResults.length === 0 && (
@@ -4998,9 +5292,9 @@ function App() {
                 </div>
               )}
 
-              {loading && selectedItems.length === 0 ? (
+              {loading && selectedTopLevelItems.length === 0 ? (
                 <div style={styles.loadingState}>読み込み中...</div>
-              ) : selectedItems.length === 0 ? (
+              ) : selectedTopLevelItems.length === 0 ? (
                 <div style={styles.emptyState}>この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
               ) : (
                 <div
@@ -5008,9 +5302,10 @@ function App() {
                   style={styles.scheduleList}
                   onPointerDownCapture={handleScheduleListPointerDownCapture}
                 >
-                  {selectedItems.map((item, index) => {
-                    const timedItems = filterTimedSchedules(selectedItems)
+                  {selectedTopLevelItems.map((item) => {
+                    const timedItems = filterTimedSchedules(selectedTopLevelItems)
                     const taskItem = isScheduleTask(item)
+                    const childTasks = !taskItem ? findChildTasksForParent(scheduleMap, item) : []
                     const timedIndex = resolveTimedScheduleIndex(item, timedItems)
                     const isFirst = taskItem || timedIndex === 0
                     const isLast = taskItem || (timedIndex >= 0 && timedIndex === timedItems.length - 1)
@@ -5107,6 +5402,17 @@ function App() {
                                 <MoreHorizontal size={20} />
                               </summary>
                               <div className="schedule-action-menu-list" style={styles.scheduleActionMenuList}>
+                                {!taskItem && (
+                                  <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                    event.stopPropagation()
+                                    closeScheduleActionMenu(event)
+                                    if (!item.completed) openAddChildTask(item)
+                                  }} disabled={item.completed}>
+                                    <Plus size={18} /> <span>タスクを追加</span>
+                                  </button>
+                                )}
+                                {!taskItem && (
+                                  <>
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                   event.stopPropagation()
                                   closeScheduleActionMenu(event)
@@ -5126,6 +5432,8 @@ function App() {
                                 }} disabled={item.completed || isLast}>
                                   <ChevronDown size={18} /> <span>下に移動</span>
                                 </button>
+                                  </>
+                                )}
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                   event.stopPropagation()
                                   closeScheduleActionMenu(event)
@@ -5140,13 +5448,15 @@ function App() {
                                 }} disabled={item.completed}>
                                   <Repeat2 size={18} /> <span>未来4週間にコピー</span>
                                 </button>
+                                {!taskItem && (
                                 <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                   event.stopPropagation()
                                   closeScheduleActionMenu(event)
-                                  if (!item.completed && !taskItem) openRelationDialog(item)
-                                }} disabled={item.completed || taskItem}>
+                                  if (!item.completed) openRelationDialog(item)
+                                }} disabled={item.completed}>
                                   <Link2 size={18} /> <span>先に終わらせる予定を選ぶ</span>
                                 </button>
+                                )}
                                 <button type="button" className="schedule-action-menu-item schedule-action-delete-item" style={{ ...styles.scheduleActionMenuItem, ...styles.scheduleActionDelete }} onClick={(event) => {
                                   event.stopPropagation()
                                   closeScheduleActionMenu(event)
@@ -5186,6 +5496,85 @@ function App() {
                                 このあと完了待ち: {formatScheduleRelationLine(item.relatedNext)}
                               </div>
                             )}
+                          </div>
+                        )}
+                        {childTasks.length > 0 && (
+                          <div style={styles.childTaskList} aria-label="配下タスク">
+                            {childTasks.map((child) => {
+                              const childLocked = item.completed === true
+                              return (
+                                <div
+                                  key={child.id}
+                                  style={{
+                                    ...styles.childTaskRow,
+                                    ...(child.completed ? styles.childTaskRowCompleted : {}),
+                                  }}
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    handleScheduleCardTap(child)
+                                  }}
+                                >
+                                  <span style={{ ...styles.childTaskTitle, ...(child.completed ? styles.completedText : {}) }}>
+                                    {child.title || 'タスク'}
+                                  </span>
+                                  <div className="schedule-actions-mobile" style={{ display: 'flex', gap: '4px', alignItems: 'center' }} onClick={stopScheduleCardActionBubble}>
+                                    <button
+                                      type="button"
+                                      className="schedule-complete-btn"
+                                      style={{
+                                        ...styles.completeButton,
+                                        ...(child.completed ? styles.completedButton : {}),
+                                        ...(childLocked ? { opacity: 0.45 } : {}),
+                                      }}
+                                      aria-label={child.completed ? '完了を取り消す' : 'タスクを完了にする'}
+                                      disabled={childLocked}
+                                      onClick={(event) => {
+                                        stopScheduleCardActionBubble(event)
+                                        if (childLocked) {
+                                          notifyScheduleAction(CHILD_COMPLETE_LOCKED_BY_PARENT_MSG)
+                                          return
+                                        }
+                                        void toggleCompleted(getLatestScheduleItem(child))
+                                      }}
+                                      title={childLocked ? '親が完了済みのため変更できません' : (child.completed ? '完了を取り消す' : '完了にする')}
+                                    >
+                                      <Check size={14} />
+                                    </button>
+                                    <details
+                                      className="schedule-action-menu"
+                                      style={styles.scheduleActionMenu}
+                                      onClick={stopScheduleCardActionBubble}
+                                      onToggle={handleScheduleActionMenuToggle}
+                                    >
+                                      <summary
+                                        className="schedule-action-menu-summary"
+                                        style={{ ...styles.scheduleActionMenuButton, width: '28px', height: '28px' }}
+                                        aria-label="配下タスクの操作"
+                                        title="配下タスクの操作"
+                                      >
+                                        <MoreHorizontal size={16} />
+                                      </summary>
+                                      <div className="schedule-action-menu-list" style={styles.scheduleActionMenuList}>
+                                        <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
+                                          event.stopPropagation()
+                                          closeScheduleActionMenu(event)
+                                          openDetail(child)
+                                        }} disabled={child.completed || childLocked}>
+                                          <PencilLine size={18} /> <span>編集</span>
+                                        </button>
+                                        <button type="button" className="schedule-action-menu-item schedule-action-delete-item" style={{ ...styles.scheduleActionMenuItem, ...styles.scheduleActionDelete }} onClick={(event) => {
+                                          event.stopPropagation()
+                                          closeScheduleActionMenu(event)
+                                          deleteScheduleItem(child)
+                                        }}>
+                                          <Trash2 size={18} /> <span>タスクを削除</span>
+                                        </button>
+                                      </div>
+                                    </details>
+                                  </div>
+                                </div>
+                              )
+                            })}
                           </div>
                         )}
                       </div>
@@ -5376,8 +5765,21 @@ function App() {
                         {scheduleListItems.map((item) => (
                           <tr key={`${item.dateKey}_${item.id}`} style={item.isPast ? styles.listRowPast : undefined}>
                             <td style={styles.listTd}>{item.dateKey} ({item.dayName})</td>
-                            <td style={styles.listTd}>{isScheduleTask(item) ? '—' : `${item.time} - ${item.endTime}`}</td>
-                            <td style={styles.listTd}>{item.title}</td>
+                            <td style={styles.listTd}>
+                              {isScheduleChildTask(item)
+                                ? '配下'
+                                : isScheduleTask(item)
+                                  ? '—'
+                                  : `${item.time} - ${item.endTime}`}
+                            </td>
+                            <td style={styles.listTd}>
+                              <div>{item.title}</div>
+                              {isScheduleChildTask(item) ? (
+                                <div style={styles.listParentLink}>
+                                  {formatChildTaskParentLabel(findParentScheduleItem(scheduleMap, item))}
+                                </div>
+                              ) : null}
+                            </td>
                             <td style={styles.listTd}>{item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常'}</td>
                             <td style={styles.listTd}>{item.completed ? '完了' : '未完了'}</td>
                           </tr>
@@ -5413,8 +5815,19 @@ function App() {
                         {incompleteItems.map((item) => (
                           <tr key={`${item.dateKey}_${item.id}`} style={item.isPast ? styles.listRowPast : undefined}>
                             <td style={styles.listTd}>{item.dateKey} ({item.dayName})</td>
-                            <td style={styles.listTd}>{isScheduleTask(item) ? '—' : `${item.time} - ${item.endTime}`}</td>
-                            <td style={styles.listTd}>{item.title}</td>
+                            <td style={styles.listTd}>
+                              {isScheduleChildTask(item)
+                                ? '配下'
+                                : isScheduleTask(item)
+                                  ? '—'
+                                  : `${item.time} - ${item.endTime}`}
+                            </td>
+                            <td style={styles.listTd}>
+                              <div>{item.title}</div>
+                              {item.parentLabel ? (
+                                <div style={styles.listParentLink}>{item.parentLabel}</div>
+                              ) : null}
+                            </td>
                             <td style={styles.listTd}>{item.priority === 'high' ? '重要' : item.priority === 'low' ? '低' : '通常'}</td>
                           </tr>
                         ))}
@@ -5734,8 +6147,20 @@ function App() {
                   </div>
                   <button type="button" style={styles.closeButton} onClick={closeSchedulePreview}>閉じる</button>
                 </div>
-                <div style={styles.previewMeta}>{formatDisplayDate(new Date(`${schedulePreview.date}T00:00:00`))}　{schedulePreview.time || '09:00'} - {schedulePreview.endTime || '10:00'}</div>
+                <div style={styles.previewMeta}>
+                  {formatDisplayDate(new Date(`${schedulePreview.date}T00:00:00`))}
+                  {isScheduleChildTask(schedulePreview)
+                    ? '　配下タスク'
+                    : isScheduleTask(schedulePreview)
+                      ? '　タスク'
+                      : `　${schedulePreview.time || '09:00'} - ${schedulePreview.endTime || '10:00'}`}
+                </div>
                 <h2 style={styles.previewTitle}>{schedulePreview.title || '予定'}</h2>
+                {isScheduleChildTask(schedulePreview) && (
+                  <div style={styles.childTaskParentLabel}>
+                    {formatChildTaskParentLabel(findParentScheduleItem(scheduleMap, schedulePreview))}
+                  </div>
+                )}
                 <div style={styles.previewDetails}>{schedulePreview.details || '詳細メモはありません。'}</div>
                 {!isScheduleTask(schedulePreview) && (schedulePreview.relatedPrev || schedulePreview.relatedNext) && (
                   <div style={styles.relationInfoGroup} aria-label="順番指定">
@@ -5759,7 +6184,10 @@ function App() {
                 )}
                 <div style={styles.modalActionRow}>
                   <button type="button" style={styles.secondaryButton} onClick={closeSchedulePreview}>閉じる</button>
-                  {!schedulePreview.completed && (
+                  {!schedulePreview.completed && !(
+                    isScheduleChildTask(schedulePreview)
+                    && findParentScheduleItem(scheduleMap, schedulePreview)?.completed === true
+                  ) && (
                     <button type="button" style={styles.primaryButton} onClick={editScheduleFromPreview}>
                       <PencilLine size={17} /> 編集
                     </button>
@@ -5951,10 +6379,22 @@ function App() {
                 <div style={styles.modalHeader}>
                   <div style={styles.modalTitleWrap}>
                     <PencilLine size={18} color="#2563eb" />
-                    <h3 style={styles.modalTitle}>予定の詳細</h3>
+                    <h3 style={styles.modalTitle}>
+                      {detailDraft.parentId ? '配下タスクの詳細' : '予定の詳細'}
+                    </h3>
                   </div>
                   <button type="button" style={styles.closeButton} onClick={closeDetail}>閉じる</button>
                 </div>
+
+                {detailDraft.parentId && (
+                  <div style={styles.childTaskParentLabel}>
+                    {formatChildTaskParentLabel(
+                      (scheduleMap[detailDraft.parentDate || detailDraft.date] || [])
+                        .find((entry) => entry.id === detailDraft.parentId && !isScheduleTask(entry))
+                      || null,
+                    )}
+                  </div>
+                )}
 
                 <label style={styles.fieldLabel}>タイトル（必須）</label>
                 {commonTitles.length > 0 && (
@@ -6043,6 +6483,7 @@ function App() {
                   <option value="high">重要</option>
                 </select>
 
+                {!detailDraft.parentId && (
                 <label style={styles.commonTitleCheckboxRow}>
                   <input
                     type="checkbox"
@@ -6051,42 +6492,63 @@ function App() {
                       !detailDraft.isTask
                       && scheduleItemHasOrderRelation(scheduleMap, getLatestScheduleItem(detailDraft) || detailDraft)
                     }
-                    onChange={(e) => {
+                    onChange={async (e) => {
                       const nextIsTask = e.target.checked
-                      setDetailDraft((prev) => {
-                        if (!prev) return null
-                        if (nextIsTask) {
-                          const base = getLatestScheduleItem(prev) || prev
-                          if (scheduleItemHasOrderRelation(scheduleMap, base)) {
-                            notifyScheduleAction(TASK_CONVERT_REQUIRES_UNLINK_MSG)
-                            return prev
+                      if (nextIsTask) {
+                        const base = getLatestScheduleItem(detailDraft) || detailDraft
+                        if (scheduleItemHasOrderRelation(scheduleMap, base)) {
+                          notifyScheduleAction(TASK_CONVERT_REQUIRES_UNLINK_MSG)
+                          return
+                        }
+                        if (!isScheduleTask(base)) {
+                          const childTasks = findChildTasksForParent(scheduleMap, base)
+                          if (childTasks.length > 0) {
+                            const confirmed = await askScheduleAppConfirm(
+                              TASK_CONVERT_DELETES_CHILDREN_MSG(childTasks.length),
+                              { title: 'タスクへの変更確認', confirmLabel: '変更する' },
+                            )
+                            if (!confirmed) return
                           }
-                          return { ...prev, isTask: true }
                         }
-                        return {
+                        setDetailDraft((prev) => (prev ? {
                           ...prev,
-                          isTask: false,
-                          time: prev.time || '09:00',
-                          endTime: prev.endTime || '10:00',
-                        }
-                      })
+                          isTask: true,
+                          parentId: null,
+                          parentDate: null,
+                        } : null))
+                        return
+                      }
+                      setDetailDraft((prev) => (prev ? {
+                        ...prev,
+                        isTask: false,
+                        time: prev.time || '09:00',
+                        endTime: prev.endTime || '10:00',
+                        parentId: null,
+                        parentDate: null,
+                      } : null))
                     }}
                   />
                   タスク（時刻なし・通知なし・関連付けなし）
                 </label>
-                {!detailDraft.isTask && scheduleItemHasOrderRelation(scheduleMap, getLatestScheduleItem(detailDraft) || detailDraft) && (
+                )}
+                {detailDraft.parentId && (
+                  <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#64748b', lineHeight: 1.5 }}>
+                    スケジュール配下のタスクです。完了・削除・編集のみ行えます。
+                  </p>
+                )}
+                {!detailDraft.parentId && !detailDraft.isTask && scheduleItemHasOrderRelation(scheduleMap, getLatestScheduleItem(detailDraft) || detailDraft) && (
                   <p style={{ margin: '0 0 12px', fontSize: '12px', color: '#b45309', lineHeight: 1.5 }}>
                     順番の指定があるため、タスクに変更できません。カードのメニューから順番の指定を解除してください。
                   </p>
                 )}
 
-                {!detailDraft.isTask && (
+                {!detailDraft.isTask && !detailDraft.parentId && (
                   <>
                 <label style={styles.fieldLabel}>開始時間</label>
                 <div style={styles.timeFieldRow}>
                   <input
                     type="time"
-                    value={detailDraft.time}
+                    value={detailDraft.time || ''}
                     onChange={(e) => setDetailDraft({ ...detailDraft, time: e.target.value })}
                     style={{ ...styles.modalInput, ...styles.timeFieldInput }}
                   />
@@ -6103,7 +6565,7 @@ function App() {
                 <div style={styles.timeFieldRow}>
                   <input
                     type="time"
-                    value={detailDraft.endTime}
+                    value={detailDraft.endTime || ''}
                     onChange={(e) => setDetailDraft({ ...detailDraft, endTime: e.target.value })}
                     style={{ ...styles.modalInput, ...styles.timeFieldInput }}
                   />
@@ -6115,6 +6577,11 @@ function App() {
                     現在時刻設定
                   </button>
                 </div>
+                {detailDraft.time && detailDraft.endTime && !isValidTimeRange(detailDraft.time, detailDraft.endTime) && (
+                  <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#b91c1c', lineHeight: 1.5 }}>
+                    {INVALID_TIME_RANGE_MSG}
+                  </p>
+                )}
                   </>
                 )}
 
@@ -6280,7 +6747,9 @@ function App() {
                   {scheduleAppConfirm.message}
                 </p>
                 <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end', gap: '10px' }}>
-                  <button type="button" style={styles.secondaryButton} onClick={() => finishScheduleAppConfirm(false)}>キャンセル</button>
+                  {!scheduleAppConfirm.hideCancel && (
+                    <button type="button" style={styles.secondaryButton} onClick={() => finishScheduleAppConfirm(false)}>キャンセル</button>
+                  )}
                   <button type="button" style={styles.primaryButton} onClick={() => finishScheduleAppConfirm(true)}>{scheduleAppConfirm.confirmLabel}</button>
                 </div>
               </div>
@@ -7878,6 +8347,51 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: '4px',
+  },
+  childTaskList: {
+    marginTop: '8px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    paddingTop: '8px',
+    borderTop: '1px dashed #cbd5e1',
+  },
+  childTaskRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    padding: '6px 8px',
+    borderRadius: '8px',
+    background: '#f8fafc',
+    border: '1px solid #e2e8f0',
+  },
+  childTaskRowCompleted: {
+    background: '#f1f5f9',
+    opacity: 0.9,
+  },
+  childTaskTitle: {
+    flex: 1,
+    fontSize: '13px',
+    fontWeight: 600,
+    color: '#334155',
+    wordBreak: 'break-word',
+  },
+  childTaskParentLabel: {
+    margin: '0 0 10px',
+    fontSize: '12px',
+    color: '#1d4ed8',
+    background: '#eff6ff',
+    border: '1px solid #bfdbfe',
+    borderRadius: '8px',
+    padding: '6px 8px',
+    lineHeight: 1.45,
+  },
+  listParentLink: {
+    marginTop: '4px',
+    fontSize: '11px',
+    color: '#64748b',
+    lineHeight: 1.4,
   },
   relationInfoText: {
     marginTop: '6px',

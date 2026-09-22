@@ -51,6 +51,7 @@ export const findRelatedScheduleItem = (scheduleMap, relation) => {
  */
 export const normalizeScheduleItem = (item, fallbackId) => {
   const isTask = item.isTask === true
+  const parentId = isTask && item.parentId ? String(item.parentId) : null
   return {
     id: resolveScheduleItemIdFromDoc(item, fallbackId),
     title: item.title || '予定',
@@ -63,17 +64,65 @@ export const normalizeScheduleItem = (item, fallbackId) => {
     date: item.date,
     relatedPrev: isTask ? null : item.relatedPrev || null,
     relatedNext: isTask ? null : item.relatedNext || null,
+    parentId,
+    parentDate: parentId ? (item.parentDate || item.date || null) : null,
   }
 }
 
-/** その日: 上 = 時刻順スケジュール、下 = タスク（ID順） */
+/** スケジュール配下のタスク（一般タスクとは別） */
+export const isScheduleChildTask = (item) => isScheduleTask(item) && Boolean(item?.parentId)
+
+/** 日リストのトップレベル（時刻あり予定 + 一般タスク）。配下タスクは除く */
+export const isTopLevelScheduleItem = (item) => !isScheduleChildTask(item)
+
+export const filterTopLevelDayItems = (items) => (items || []).filter((entry) => isTopLevelScheduleItem(entry))
+
+/** 親スケジュール配下のタスク（同一日付・parentId 一致） */
+export const findChildTasksForParent = (scheduleMap, parent) => {
+  if (!parent?.id || !parent?.date || isScheduleTask(parent)) return []
+  const list = scheduleMap[parent.date] || []
+  return list
+    .filter((entry) => (
+      isScheduleChildTask(entry)
+      && entry.parentId === parent.id
+      && (entry.parentDate || entry.date) === parent.date
+    ))
+    .sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')))
+}
+
+export const findParentScheduleItem = (scheduleMap, child) => {
+  if (!isScheduleChildTask(child)) return null
+  const dateKey = child.parentDate || child.date
+  if (!dateKey || !child.parentId) return null
+  return (scheduleMap[dateKey] || []).find((entry) => (
+    entry.id === child.parentId && !isScheduleTask(entry)
+  )) || null
+}
+
+export const formatChildTaskParentLabel = (parent) => {
+  if (!parent) return ''
+  const timePart = parent.time && parent.endTime
+    ? `${parent.time}-${parent.endTime}`
+    : ''
+  return timePart
+    ? `親: ${parent.title || '予定'}（${parent.date || ''} ${timePart}）`
+    : `親: ${parent.title || '予定'}${parent.date ? `（${parent.date}）` : ''}`
+}
+
+/** その日: 上 = 時刻順スケジュール、下 = 一般タスク（ID順）。配下タスクは末尾に保持（マップ整合用） */
 export const sortDayScheduleItems = (items) => {
   const list = items || []
   const schedules = list.filter((entry) => !isScheduleTask(entry))
-  const tasks = list.filter((entry) => isScheduleTask(entry))
+  const generalTasks = list.filter((entry) => isScheduleTask(entry) && !isScheduleChildTask(entry))
+  const childTasks = list.filter((entry) => isScheduleChildTask(entry))
   schedules.sort((a, b) => parseTimeValue(a.time || '09:00') - parseTimeValue(b.time || '09:00'))
-  tasks.sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')))
-  return [...schedules, ...tasks]
+  generalTasks.sort((a, b) => String(a.id || '').localeCompare(String(b.id || '')))
+  childTasks.sort((a, b) => {
+    const parentCompare = String(a.parentId || '').localeCompare(String(b.parentId || ''))
+    if (parentCompare !== 0) return parentCompare
+    return String(a.id || '').localeCompare(String(b.id || ''))
+  })
+  return [...schedules, ...generalTasks, ...childTasks]
 }
 
 /** 疲れ・集計・通知など時刻あり予定のみ */
