@@ -5499,12 +5499,13 @@ function App() {
                           </div>
                         )}
                         {childTasks.length > 0 && (
-                          <div style={styles.childTaskList} aria-label="配下タスク">
+                          <div className="schedule-child-task-list" style={styles.childTaskList} aria-label="配下タスク">
                             {childTasks.map((child) => {
                               const childLocked = item.completed === true
                               return (
                                 <div
                                   key={child.id}
+                                  className="schedule-child-task-row"
                                   style={{
                                     ...styles.childTaskRow,
                                     ...(child.completed ? styles.childTaskRowCompleted : {}),
@@ -5517,14 +5518,18 @@ function App() {
                                   <span style={{ ...styles.childTaskTitle, ...(child.completed ? styles.completedText : {}) }}>
                                     {child.title || 'タスク'}
                                   </span>
-                                  <div className="schedule-actions-mobile" style={{ display: 'flex', gap: '4px', alignItems: 'center' }} onClick={stopScheduleCardActionBubble}>
+                                  <div
+                                    className="schedule-actions-mobile schedule-child-task-actions"
+                                    style={{ ...styles.childTaskActions, display: 'flex', gap: '4px', alignItems: 'center' }}
+                                    onClick={stopScheduleCardActionBubble}
+                                  >
                                     <button
                                       type="button"
                                       className="schedule-complete-btn"
                                       style={{
                                         ...styles.completeButton,
                                         ...(child.completed ? styles.completedButton : {}),
-                                        ...(childLocked ? { opacity: 0.45 } : {}),
+                                        ...(childLocked ? styles.childTaskCompleteLocked : {}),
                                       }}
                                       aria-label={child.completed ? '完了を取り消す' : 'タスクを完了にする'}
                                       disabled={childLocked}
@@ -5541,20 +5546,20 @@ function App() {
                                       <Check size={14} />
                                     </button>
                                     <details
-                                      className="schedule-action-menu"
+                                      className="schedule-action-menu schedule-child-action-menu"
                                       style={styles.scheduleActionMenu}
                                       onClick={stopScheduleCardActionBubble}
                                       onToggle={handleScheduleActionMenuToggle}
                                     >
                                       <summary
                                         className="schedule-action-menu-summary"
-                                        style={{ ...styles.scheduleActionMenuButton, width: '28px', height: '28px' }}
+                                        style={{ ...styles.scheduleActionMenuButton, ...styles.childTaskActionMenuButton }}
                                         aria-label="配下タスクの操作"
                                         title="配下タスクの操作"
                                       >
                                         <MoreHorizontal size={16} />
                                       </summary>
-                                      <div className="schedule-action-menu-list" style={styles.scheduleActionMenuList}>
+                                      <div className="schedule-action-menu-list" style={{ ...styles.scheduleActionMenuList, ...styles.childTaskActionMenuList }}>
                                         <button type="button" className="schedule-action-menu-item" style={styles.scheduleActionMenuItem} onClick={(event) => {
                                           event.stopPropagation()
                                           closeScheduleActionMenu(event)
@@ -8358,8 +8363,7 @@ const styles = {
     gap: '6px',
     paddingTop: '8px',
     borderTop: '1px dashed #cbd5e1',
-    position: 'relative',
-    zIndex: 0,
+    overflow: 'visible',
   },
   childTaskRow: {
     display: 'flex',
@@ -8371,12 +8375,35 @@ const styles = {
     background: '#f8fafc',
     border: '1px solid #e2e8f0',
     position: 'relative',
-    zIndex: 0,
+    overflow: 'visible',
   },
   childTaskRowCompleted: {
     background: '#eef2f7',
     borderColor: '#d8dee8',
     color: '#64748b',
+  },
+  childTaskActions: {
+    position: 'relative',
+    zIndex: 1,
+    flexShrink: 0,
+  },
+  childTaskActionMenuButton: {
+    width: '28px',
+    height: '28px',
+    minWidth: '28px',
+  },
+  childTaskActionMenuList: {
+    top: 'auto',
+    bottom: 'calc(100% + 4px)',
+    zIndex: 320,
+    minWidth: '180px',
+    width: '200px',
+  },
+  childTaskCompleteLocked: {
+    background: '#e2e8f0',
+    color: '#94a3b8',
+    borderColor: '#cbd5e1',
+    cursor: 'not-allowed',
   },
   childTaskTitle: {
     flex: 1,

@@ -133,6 +133,30 @@ img {
   z-index: 250;
 }
 
+.schedule-child-task-list {
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+}
+
+.schedule-child-task-row {
+  position: relative;
+  z-index: 0;
+  overflow: visible;
+}
+
+.schedule-child-task-row:has(.schedule-action-menu[open]) {
+  z-index: 280;
+}
+
+.schedule-child-task-row .schedule-action-menu[open] {
+  z-index: 290;
+}
+
+.schedule-child-task-row .schedule-action-menu-list {
+  z-index: 300;
+}
+
 .schedule-action-menu-item {
   transition: background-color 0.15s ease, color 0.15s ease;
 }
@@ -540,6 +564,17 @@ img {
     height: 30px !important;
     min-width: 30px !important;
     padding: 0 !important;
+  }
+
+  .schedule-child-task-row .schedule-action-menu-summary {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+  }
+
+  .schedule-child-task-list,
+  .schedule-child-task-row {
+    overflow: visible !important;
   }
 
   .schedule-action-menu-list {
