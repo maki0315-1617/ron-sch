@@ -107,33 +107,36 @@ const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
 const HEALTH_LIFE_COUNT_ENABLED_KEY = 'ron-sch-health-life-count-enabled'
-const DEMO_MODE_STORAGE_KEY = 'ron-sch-demo-mode'
 const DEMO_NOTICE_SEEN_KEY = 'ron-sch-demo-notice-seen'
 const DEMO_MAX_PER_DAY = 5
 const DEMO_MAX_TOTAL = 20
+const SUBSCRIPTION_ACTIVE_STATUS = 'active'
 
 const isSleepShortcutLaunch = () => {
   if (typeof window === 'undefined') return false
   return new URLSearchParams(window.location.search).get('sleep') === '1'
 }
 
-/** ?demo=1 でデモモード開始。セッション中は維持。?demo=0 で解除 */
-const resolveDemoModeFromLocation = () => {
-  if (typeof window === 'undefined') return false
+const demoNoticeStorageKey = (uid) => `${DEMO_NOTICE_SEEN_KEY}:${uid || 'anon'}`
+
+/**
+ * 本番: subscriptions に email 一致かつ status === "active" が1件以上
+ * デモ: 該当なし
+ * クエリ失敗: 本番扱い（安全側）
+ * @returns {Promise<boolean>} true = 本番購読者
+ */
+const resolveIsProductionSubscriber = async (user) => {
+  if (!user?.email || !db) return true
   try {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get('demo') === '1') {
-      window.sessionStorage.setItem(DEMO_MODE_STORAGE_KEY, '1')
-      return true
-    }
-    if (params.get('demo') === '0') {
-      window.sessionStorage.removeItem(DEMO_MODE_STORAGE_KEY)
-      window.sessionStorage.removeItem(DEMO_NOTICE_SEEN_KEY)
-      return false
-    }
-    return window.sessionStorage.getItem(DEMO_MODE_STORAGE_KEY) === '1'
-  } catch {
-    return new URLSearchParams(window.location.search).get('demo') === '1'
+    const snapshot = await getDocs(query(
+      collection(db, 'subscriptions'),
+      where('email', '==', user.email),
+      where('status', '==', SUBSCRIPTION_ACTIVE_STATUS),
+    ))
+    return !snapshot.empty
+  } catch (error) {
+    console.warn('subscriptions 照会に失敗したため本番扱いとします:', error)
+    return true
   }
 }
 
@@ -546,7 +549,8 @@ function App() {
   const scheduleSectionRef = useRef(null)
   const selectedKey = formatDateKey(selectedDate)
   const sleepOnlyMode = isSleepShortcutLaunch()
-  const [demoMode, setDemoMode] = useState(() => resolveDemoModeFromLocation())
+  // 判定前・失敗時は本番扱い（デモ制限をかけない）
+  const [demoMode, setDemoMode] = useState(false)
   const [demoWelcomeOpen, setDemoWelcomeOpen] = useState(false)
 
   const scrollToTop = () => {
@@ -599,29 +603,47 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const active = resolveDemoModeFromLocation()
-    setDemoMode(active)
-  }, [])
-
-  useEffect(() => {
-    if (!demoMode || !session) {
+    let cancelled = false
+    if (!session) {
+      setDemoMode(false)
       setDemoWelcomeOpen(false)
-      return
+      return undefined
     }
-    try {
-      if (window.sessionStorage.getItem(DEMO_NOTICE_SEEN_KEY) === '1') {
+
+    // 切り替え直後は一旦本番扱いし、結果がデモのときだけ制限を適用
+    setDemoMode(false)
+    setDemoWelcomeOpen(false)
+
+    ;(async () => {
+      const isProduction = await resolveIsProductionSubscriber(session)
+      if (cancelled) return
+      const nextDemoMode = !isProduction
+      setDemoMode(nextDemoMode)
+      if (!nextDemoMode) {
         setDemoWelcomeOpen(false)
         return
       }
-    } catch {
-      // ignore
+      try {
+        if (window.sessionStorage.getItem(demoNoticeStorageKey(session.uid)) === '1') {
+          setDemoWelcomeOpen(false)
+          return
+        }
+      } catch {
+        // ignore
+      }
+      setDemoWelcomeOpen(true)
+    })()
+
+    return () => {
+      cancelled = true
     }
-    setDemoWelcomeOpen(true)
-  }, [demoMode, session?.uid])
+  }, [session?.uid, session?.email])
 
   const dismissDemoWelcome = () => {
     try {
-      window.sessionStorage.setItem(DEMO_NOTICE_SEEN_KEY, '1')
+      if (session?.uid) {
+        window.sessionStorage.setItem(demoNoticeStorageKey(session.uid), '1')
+      }
     } catch {
       // ignore
     }

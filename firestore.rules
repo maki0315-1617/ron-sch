@@ -44,5 +44,13 @@ service cloud.firestore {
     match /notification_logs/{logId} {
       allow read, write: if false;
     }
+
+    // 自分のメールの購読情報のみ参照可（書き込みは Stripe 等の管理側）
+    match /subscriptions/{subscriptionId} {
+      allow read: if isSignedIn()
+        && resource.data.email is string
+        && resource.data.email == request.auth.token.email;
+      allow create, update, delete: if false;
+    }
   }
 }
