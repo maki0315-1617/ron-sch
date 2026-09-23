@@ -25,7 +25,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import { computeFatigueScore, fatigueBandColors } from './fatigueScore'
 import { buildFatigueGuideHtml } from './fatigueGuideDocument'
@@ -60,10 +60,19 @@ import {
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
 const HELP_SITE_URL = 'https://ron-home-app.vercel.app/'
+const CONTACT_FORM_URL = 'https://ron-home-app.vercel.app/contact'
+const SUBSCRIPTION_CANCEL_CONTACT_TYPE = 'subscription_cancel'
 const HELP_MAIL_ADDRESS = 'ronron201907@gmail.com'
 const SLEEP_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/829d308f0a34444fbf032d3d0b5f467c'
 const APP_DISPLAY_NAME = 'ロンスケ＋ジュール'
 const APP_DISPLAY_NAME_EN = 'Ron Sche+dule'
+
+const buildSubscriptionCancelContactUrl = (email) => {
+  const url = new URL(CONTACT_FORM_URL)
+  url.searchParams.set('type', SUBSCRIPTION_CANCEL_CONTACT_TYPE)
+  if (email) url.searchParams.set('email', email)
+  return url.toString()
+}
 
 const helpContent = {
   ja: {
@@ -494,6 +503,7 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
   const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false)
+  const [subscriptionCancelModalOpen, setSubscriptionCancelModalOpen] = useState(false)
   const [deletePassword, setDeletePassword] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [deleteAccountError, setDeleteAccountError] = useState('')
@@ -1720,6 +1730,21 @@ function App() {
     } catch (e) {
       console.error('notification_state delete error:', e)
     }
+  }
+
+  const openSubscriptionCancelModal = () => {
+    setMenuOpen(false)
+    setSubscriptionCancelModalOpen(true)
+  }
+
+  const proceedSubscriptionCancelContact = () => {
+    if (!session?.email) {
+      setSubscriptionCancelModalOpen(false)
+      return
+    }
+    const contactUrl = buildSubscriptionCancelContactUrl(session.email)
+    setSubscriptionCancelModalOpen(false)
+    window.open(contactUrl, '_blank', 'noopener,noreferrer')
   }
 
   const handleSendResetEmailInDeleteModal = async () => {
@@ -4961,6 +4986,15 @@ function App() {
                         <button
                           type="button"
                           role="menuitem"
+                          style={styles.menuItem}
+                          onClick={openSubscriptionCancelModal}
+                        >
+                          <Mail size={18} /> サブスク解約の申請
+                        </button>
+                        <div style={styles.menuDivider} />
+                        <button
+                          type="button"
+                          role="menuitem"
                           style={{ ...styles.menuItem, ...styles.menuItemDanger }}
                           onClick={() => {
                             setMenuOpen(false)
@@ -6872,6 +6906,100 @@ function App() {
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {subscriptionCancelModalOpen && (
+            <div
+              style={styles.modalOverlayFront}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="subscription-cancel-title"
+              onClick={() => setSubscriptionCancelModalOpen(false)}
+            >
+              <div
+                className="schedule-modal"
+                style={{ ...styles.modal, maxWidth: '460px' }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div style={styles.modalHeader}>
+                  <div style={styles.modalTitleWrap}>
+                    <Mail size={18} color="#2563eb" />
+                    <h3 id="subscription-cancel-title" style={styles.modalTitle}>サブスク解約の申請</h3>
+                  </div>
+                  <button
+                    type="button"
+                    style={styles.closeButton}
+                    onClick={() => setSubscriptionCancelModalOpen(false)}
+                  >
+                    閉じる
+                  </button>
+                </div>
+
+                <div
+                  style={{
+                    background: '#eff6ff',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '10px',
+                    padding: '12px',
+                    color: '#1e3a8a',
+                    fontSize: '13px',
+                    marginTop: '12px',
+                    marginBottom: '12px',
+                    lineHeight: 1.55,
+                  }}
+                >
+                  <strong>この操作について</strong>
+                  <p style={{ margin: '6px 0 0' }}>
+                    解約はアプリ内では完了しません。お問い合わせフォームから「サブスク削除申請」を送信いただき、受付後に運用で手続きします。
+                  </p>
+                </div>
+
+                <div
+                  style={{
+                    background: '#fffbeb',
+                    border: '1px solid #fcd34d',
+                    borderRadius: '10px',
+                    padding: '12px',
+                    color: '#78350f',
+                    fontSize: '13px',
+                    marginBottom: '12px',
+                    lineHeight: 1.55,
+                  }}
+                >
+                  <strong>ご注意ください</strong>
+                  <ul style={{ margin: '8px 0 0', paddingLeft: '1.2em' }}>
+                    <li>すぐに解約・課金停止になるわけではありません。反映までお時間をいただく場合があります。</li>
+                    <li>手続き完了までは、いままでどおりご利用いただけます。</li>
+                    <li>アカウント削除とは別の手続きです。データ消去をご希望の場合は「アカウント削除」をご利用ください。</li>
+                    <li>次の画面では、ログイン中のメールアドレスが初期表示されます。内容を確認のうえ送信してください。</li>
+                  </ul>
+                </div>
+
+                {session?.email && (
+                  <p style={{ margin: '0 0 16px', fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                    申請に使うメール: <strong style={{ color: '#0f172a' }}>{session.email}</strong>
+                  </p>
+                )}
+
+                <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end', gap: '10px' }}>
+                  <button
+                    type="button"
+                    style={styles.secondaryButton}
+                    onClick={() => setSubscriptionCancelModalOpen(false)}
+                  >
+                    もどる
+                  </button>
+                  <button
+                    type="button"
+                    style={styles.primaryButton}
+                    onClick={proceedSubscriptionCancelContact}
+                    disabled={!session?.email}
+                  >
+                    問い合わせフォームを開く
+                  </button>
+                </div>
               </div>
             </div>
           )}
