@@ -70,7 +70,7 @@ const helpContent = {
     langLabel: '日本語',
     title: 'ヘルプ',
     appInfo: `${APP_DISPLAY_NAME}　Ver1.00`,
-    siteLabel: '黒猫ロン君のAI検証ハブサイト',
+    siteLabel: 'ロンAIシステムズ',
     mailLabel: 'お問い合わせメール',
     note: 'なお、誹謗中傷のメールはご遠慮願います。',
     close: '閉じる',
