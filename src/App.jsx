@@ -60,7 +60,8 @@ import {
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
 const HELP_SITE_URL = 'https://ron-home-app.vercel.app/'
-const CONTACT_FORM_URL = 'https://ron-home-app.vercel.app/contact'
+/** お問い合わせはトップページ内セクション（id=contact）。/contact ルートは無い */
+const CONTACT_FORM_URL = 'https://ron-home-app.vercel.app/'
 const SUBSCRIPTION_CANCEL_CONTACT_TYPE = 'subscription_cancel'
 const HELP_MAIL_ADDRESS = 'ronron201907@gmail.com'
 const SLEEP_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/829d308f0a34444fbf032d3d0b5f467c'
@@ -71,6 +72,7 @@ const buildSubscriptionCancelContactUrl = (email) => {
   const url = new URL(CONTACT_FORM_URL)
   url.searchParams.set('type', SUBSCRIPTION_CANCEL_CONTACT_TYPE)
   if (email) url.searchParams.set('email', email)
+  url.hash = 'contact'
   return url.toString()
 }
 
