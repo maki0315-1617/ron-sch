@@ -2,6 +2,11 @@
  * PWA / ブラウザ向け: 端末のヘルスケア／歩数アプリを開いて確認するだけの導線。
  * 歩数の取得・保存・連携済みフラグは一切行わない。
  * Capacitor ネイティブ API は使わない。
+ *
+ * Android 注意:
+ * - intent に S.browser_fallback_url で自サイトを指定すると、未インストール時に
+ *   PWA が再読み込み（再起動に見える）され、確認ダイアログに到達できない。
+ * - window.location への intent 代入もメイン文書を壊しやすいので使わない。
  */
 
 const IOS_HEALTH_URL = 'x-apple-health://'
@@ -42,19 +47,15 @@ const openByAnchor = (url) => {
   document.body.removeChild(anchor)
 }
 
-/**
- * Play ストアへ自動遷移させないよう、失敗時は同一ページへ戻す fallback を付ける。
- */
-const androidAppIntent = (packageName) => {
-  const stayHere = `${window.location.origin}${window.location.pathname}${window.location.search}#steps-app-fallback`
-  const fallback = encodeURIComponent(stayHere)
-  return `intent://#Intent;scheme=android-app;package=${packageName};S.browser_fallback_url=${fallback};end`
-}
+/** Play ストア自動遷移・自サイト再読込を避けるため fallback URL は付けない */
+const androidAppIntent = (packageName) => (
+  `intent://#Intent;scheme=android-app;package=${packageName};end`
+)
 
 /**
  * 優先: Google Fit → Health Connect。
  * ページが背面に回った（visible→hidden）＝起動成功とみなす。
- * どちらも起動できなければ確認ダイアログ。キャンセルなら中止。
+ * どちらも起動できなければ確認ダイアログ（キャンセル＝中止）。
  */
 const openAndroidStepsAppWithFallback = () => {
   const candidates = [
@@ -64,19 +65,10 @@ const openAndroidStepsAppWithFallback = () => {
   let index = 0
   let settled = false
   let timerId = 0
-  let activeFrame = null
 
   const cleanup = () => {
     document.removeEventListener('visibilitychange', onVisibilityChange)
     if (timerId) window.clearTimeout(timerId)
-    if (activeFrame && activeFrame.parentNode) {
-      try {
-        activeFrame.parentNode.removeChild(activeFrame)
-      } catch {
-        // ignore
-      }
-    }
-    activeFrame = null
   }
 
   const markOpened = () => {
@@ -90,6 +82,8 @@ const openAndroidStepsAppWithFallback = () => {
   }
 
   const showInstallGuide = () => {
+    if (settled) return
+    settled = true
     cleanup()
     const openFitStore = window.confirm(
       '歩数を確認するには、Google Fit または Health Connect のインストールが必要です。\n\n'
@@ -104,15 +98,14 @@ const openAndroidStepsAppWithFallback = () => {
   }
 
   const tryOpenPackage = (packageName) => {
-    const url = androidAppIntent(packageName)
-    // メインページを Play ストアへ飛ばさないよう iframe で試行
-    const iframe = document.createElement('iframe')
-    iframe.setAttribute('aria-hidden', 'true')
-    iframe.tabIndex = -1
-    iframe.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none;border:0;left:-9999px;top:0'
-    iframe.src = url
-    document.body.appendChild(iframe)
-    activeFrame = iframe
+    // メイン文書を遷移させない（再起動防止）
+    const anchor = document.createElement('a')
+    anchor.href = androidAppIntent(packageName)
+    anchor.rel = 'noopener noreferrer'
+    anchor.style.display = 'none'
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
   }
 
   const tryNext = () => {
@@ -137,14 +130,6 @@ const openAndroidStepsAppWithFallback = () => {
         markOpened()
         return
       }
-      if (activeFrame && activeFrame.parentNode) {
-        try {
-          activeFrame.parentNode.removeChild(activeFrame)
-        } catch {
-          // ignore
-        }
-      }
-      activeFrame = null
       tryNext()
     }, ANDROID_OPEN_TIMEOUT_MS)
   }
