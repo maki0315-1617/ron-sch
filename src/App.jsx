@@ -33,6 +33,7 @@ import { buildHealthLifeCountPresentation } from './dayFooterPresentation'
 import { getStepsDisplayState, STEPS_LINKED_STORAGE_KEY } from './stepsDisplay'
 import { formatJstIsoTimestamp, getStepsForDisplay, getStepsForScoring } from './stepsCsv'
 import { clearStepsCsvWebOnly, importStepsCsvText, loadStepsByDate, upsertStepsCsvRow } from './stepsCsvStore'
+import { openDeviceStepsAppForCheck } from './openDeviceStepsApp'
 import {
   buildScheduleRelationTimeChangeConfirm,
   filterTimedSchedules,
@@ -5937,6 +5938,17 @@ function App() {
                       >
                         記録
                       </button>
+                      {selectedIsToday && (
+                        <button
+                          type="button"
+                          style={styles.footerStepsCheckButton}
+                          onClick={openDeviceStepsAppForCheck}
+                          disabled={stepsCsvBusy}
+                          title="ヘルスケア等で今日の歩数を確認します。数値の保存は「記録」で行います。"
+                        >
+                          歩数を確認する
+                        </button>
+                      )}
                       <button
                         type="button"
                         style={styles.footerStepsImportButton}
@@ -7601,6 +7613,16 @@ const styles = {
     border: 'none',
     background: '#0f766e',
     color: '#fff',
+    fontSize: '12px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+  footerStepsCheckButton: {
+    padding: '6px 10px',
+    borderRadius: '8px',
+    border: '1px solid #0f766e',
+    background: '#ecfdf5',
+    color: '#0f766e',
     fontSize: '12px',
     fontWeight: 700,
     cursor: 'pointer',
