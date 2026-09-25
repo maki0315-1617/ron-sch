@@ -552,6 +552,7 @@ function App() {
   const lastCardTapRef = useRef({ id: null, time: 0 })
   const scheduleDragRef = useRef(null)
   const scheduleDragMovedRef = useRef(false)
+  const scheduleScrollLockRef = useRef(null)
   const [scheduleDrag, setScheduleDrag] = useState(null)
   const notificationRegistrationRef = useRef(null)
   const notificationToggleLockRef = useRef(false)
@@ -608,6 +609,22 @@ function App() {
     // 予定の緊急度（15分前/5分前）表示を更新するための定期チェック
     const interval = setInterval(() => setNowTick(Date.now()), 15000)
     return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => () => {
+    // アンマウント時にスクロールロックが残らないようにする
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+    const lock = scheduleScrollLockRef.current
+    if (!lock || typeof document === 'undefined') return
+    document.documentElement.classList.remove('schedule-card-reorder-active')
+    document.body.style.overflow = lock.bodyOverflow
+    document.documentElement.style.overflow = lock.htmlOverflow
+    document.removeEventListener('touchmove', lock.preventTouchMove)
+    scheduleScrollLockRef.current = null
+    scheduleDragRef.current = null
   }, [])
 
   useEffect(() => {
@@ -2881,6 +2898,59 @@ function App() {
   const SCHEDULE_LONG_PRESS_MOVE_PX = 14
   const DOUBLE_TAP_THRESHOLD_MS = 350
 
+  const lockScrollForScheduleDrag = () => {
+    if (typeof document === 'undefined' || scheduleScrollLockRef.current) return
+    const mainEl = mainRef.current
+    const sectionEl = scheduleSectionRef.current
+    const preventTouchMove = (event) => {
+      if (!scheduleDragRef.current) return
+      event.preventDefault()
+    }
+    scheduleScrollLockRef.current = {
+      bodyOverflow: document.body.style.overflow,
+      htmlOverflow: document.documentElement.style.overflow,
+      mainOverflowY: mainEl ? mainEl.style.overflowY : '',
+      sectionOverflowY: sectionEl ? sectionEl.style.overflowY : '',
+      sectionTouchAction: sectionEl ? sectionEl.style.touchAction : '',
+      windowScrollY: window.scrollY || window.pageYOffset || 0,
+      mainScrollTop: mainEl ? mainEl.scrollTop : 0,
+      sectionScrollTop: sectionEl ? sectionEl.scrollTop : 0,
+      preventTouchMove,
+    }
+    document.documentElement.classList.add('schedule-card-reorder-active')
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+    if (mainEl) mainEl.style.overflowY = 'hidden'
+    if (sectionEl) {
+      sectionEl.style.overflowY = 'hidden'
+      sectionEl.style.touchAction = 'none'
+    }
+    document.addEventListener('touchmove', preventTouchMove, { passive: false })
+  }
+
+  const unlockScrollForScheduleDrag = () => {
+    if (typeof document === 'undefined') return
+    const lock = scheduleScrollLockRef.current
+    if (!lock) return
+    document.documentElement.classList.remove('schedule-card-reorder-active')
+    document.body.style.overflow = lock.bodyOverflow
+    document.documentElement.style.overflow = lock.htmlOverflow
+    const mainEl = mainRef.current
+    const sectionEl = scheduleSectionRef.current
+    if (mainEl) {
+      mainEl.style.overflowY = lock.mainOverflowY
+      mainEl.scrollTop = lock.mainScrollTop
+    }
+    if (sectionEl) {
+      sectionEl.style.overflowY = lock.sectionOverflowY
+      sectionEl.style.touchAction = lock.sectionTouchAction
+      sectionEl.scrollTop = lock.sectionScrollTop
+    }
+    window.scrollTo(0, lock.windowScrollY)
+    document.removeEventListener('touchmove', lock.preventTouchMove)
+    scheduleScrollLockRef.current = null
+  }
+
   const clearScheduleDrag = () => {
     clearLongPress()
     const drag = scheduleDragRef.current
@@ -2895,6 +2965,7 @@ function App() {
     }
     scheduleDragRef.current = null
     setScheduleDrag(null)
+    unlockScrollForScheduleDrag()
   }
 
   const resolveDropPlaceFromPoint = (clientX, clientY, draggedItemId) => {
@@ -2927,6 +2998,7 @@ function App() {
     }
     scheduleDragRef.current = next
     setScheduleDrag(next)
+    lockScrollForScheduleDrag()
     try {
       captureEl?.setPointerCapture?.(event.pointerId)
     } catch {
@@ -5601,7 +5673,11 @@ function App() {
             <section
               ref={scheduleSectionRef}
               className="schedule-section"
-              style={{ ...styles.scheduleSection, ...(weekCalendarEnabled && weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
+              style={{
+                ...styles.scheduleSection,
+                ...(weekCalendarEnabled && weekCalendarFixed ? styles.scrollableScheduleSection : {}),
+                touchAction: scheduleDrag ? 'none' : 'pan-y',
+              }}
               onTouchStart={(event) => {
                 dayTouchRef.current = null
                 if (scheduleDragRef.current) return

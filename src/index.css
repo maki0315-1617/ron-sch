@@ -117,6 +117,19 @@ img {
   z-index: 90;
 }
 
+/* 長押しドラッグ中はページ／一覧のスクロールを止める */
+html.schedule-card-reorder-active,
+html.schedule-card-reorder-active body {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+
+html.schedule-card-reorder-active main,
+html.schedule-card-reorder-active .schedule-section {
+  overscroll-behavior: none;
+  touch-action: none !important;
+}
+
 .schedule-card-mobile:has(.schedule-action-menu[open]) {
   position: relative;
   z-index: 120;
