@@ -5944,7 +5944,7 @@ function App() {
                           style={styles.footerStepsCheckButton}
                           onClick={openDeviceStepsAppForCheck}
                           disabled={stepsCsvBusy}
-                          title="ヘルスケア等で今日の歩数を確認します。数値の保存は「記録」で行います。"
+                          title="歩数アプリの確認手順を表示します。数値の保存は「記録」で行います。"
                         >
                           歩数を確認する
                         </button>
