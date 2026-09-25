@@ -113,6 +113,10 @@ img {
   position: relative;
 }
 
+.schedule-card-dragging {
+  z-index: 90;
+}
+
 .schedule-card-mobile:has(.schedule-action-menu[open]) {
   position: relative;
   z-index: 120;

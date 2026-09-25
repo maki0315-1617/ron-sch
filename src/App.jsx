@@ -550,6 +550,9 @@ function App() {
   const menuRef = useRef(null)
   const holdTimerRef = useRef(null)
   const lastCardTapRef = useRef({ id: null, time: 0 })
+  const scheduleDragRef = useRef(null)
+  const scheduleDragMovedRef = useRef(false)
+  const [scheduleDrag, setScheduleDrag] = useState(null)
   const notificationRegistrationRef = useRef(null)
   const notificationToggleLockRef = useRef(false)
   const lastForegroundPushRef = useRef({ tag: '', at: 0 })
@@ -2874,9 +2877,170 @@ function App() {
     }
   }
 
-  // タップ間隔を自前で判定し、ダブルタップ時のみプレビューを開く（一回の軽いタッチでは開かない）
+  const SCHEDULE_LONG_PRESS_MS = 420
+  const SCHEDULE_LONG_PRESS_MOVE_PX = 14
   const DOUBLE_TAP_THRESHOLD_MS = 350
+
+  const clearScheduleDrag = () => {
+    clearLongPress()
+    const drag = scheduleDragRef.current
+    if (drag?.pointerId != null && drag?.captureEl) {
+      try {
+        if (drag.captureEl.hasPointerCapture?.(drag.pointerId)) {
+          drag.captureEl.releasePointerCapture(drag.pointerId)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    scheduleDragRef.current = null
+    setScheduleDrag(null)
+  }
+
+  const resolveDropPlaceFromPoint = (clientX, clientY, draggedItemId) => {
+    const el = document.elementFromPoint(clientX, clientY)
+    if (!(el instanceof Element)) return { overItemId: null, place: null }
+    const card = el.closest('[data-schedule-card-id]')
+    if (!card) return { overItemId: null, place: null }
+    const overItemId = card.getAttribute('data-schedule-card-id')
+    if (!overItemId || overItemId === draggedItemId) return { overItemId: null, place: null }
+    if (card.getAttribute('data-schedule-draggable') !== '1') return { overItemId: null, place: null }
+    const rect = card.getBoundingClientRect()
+    const place = clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    return { overItemId, place }
+  }
+
+  const beginScheduleCardDrag = (item, event, captureEl) => {
+    if (!item || item.completed || isScheduleTask(item)) return
+    closeAllScheduleActionMenus()
+    clearLongPress()
+    lastCardTapRef.current = { id: null, time: 0 }
+    scheduleDragMovedRef.current = true
+    const next = {
+      itemId: item.id,
+      pointerId: event.pointerId,
+      originY: event.clientY,
+      deltaY: 0,
+      overItemId: null,
+      place: null,
+      captureEl,
+    }
+    scheduleDragRef.current = next
+    setScheduleDrag(next)
+    try {
+      captureEl?.setPointerCapture?.(event.pointerId)
+    } catch {
+      // ignore
+    }
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      try {
+        navigator.vibrate(12)
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const updateScheduleCardDrag = (event) => {
+    const drag = scheduleDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const drop = resolveDropPlaceFromPoint(event.clientX, event.clientY, drag.itemId)
+    const next = {
+      ...drag,
+      deltaY: event.clientY - drag.originY,
+      overItemId: drop.overItemId,
+      place: drop.place,
+    }
+    scheduleDragRef.current = next
+    setScheduleDrag(next)
+  }
+
+  const finishScheduleCardDrag = async (event) => {
+    const drag = scheduleDragRef.current
+    if (!drag || (event && drag.pointerId !== event.pointerId)) {
+      clearScheduleDrag()
+      return
+    }
+
+    const drop = event
+      ? resolveDropPlaceFromPoint(event.clientX, event.clientY, drag.itemId)
+      : { overItemId: drag.overItemId, place: drag.place }
+
+    const item = (scheduleMap[selectedKey] || []).find((entry) => entry.id === drag.itemId)
+      || selectedItems.find((entry) => entry.id === drag.itemId)
+
+    clearScheduleDrag()
+
+    if (!item || !drop.overItemId || !drop.place) return
+    const target = (scheduleMap[selectedKey] || []).find((entry) => entry.id === drop.overItemId)
+      || selectedItems.find((entry) => entry.id === drop.overItemId)
+    if (!target || isScheduleTask(target) || target.completed) return
+
+    if (drop.place === 'before') {
+      await placeTimedScheduleBefore(item, target)
+    } else {
+      await placeTimedScheduleAfter(item, target)
+    }
+  }
+
+  const handleScheduleCardPointerDown = (item, event) => {
+    if (event.button != null && event.button !== 0) return
+    if (!(event.target instanceof Element)) return
+    if (event.target.closest('.schedule-actions-mobile, .schedule-action-menu, .schedule-complete-btn, .schedule-child-task-list, a, button, input, select, textarea, summary, label')) {
+      return
+    }
+    if (item.completed || isScheduleTask(item)) return
+    if (scheduleDragRef.current) return
+
+    clearLongPress()
+    scheduleDragMovedRef.current = false
+    const startX = event.clientX
+    const startY = event.clientY
+    const captureEl = event.currentTarget
+    const pointerId = event.pointerId
+
+    holdTimerRef.current = window.setTimeout(() => {
+      holdTimerRef.current = null
+      beginScheduleCardDrag(item, { pointerId, clientY: startY }, captureEl)
+    }, SCHEDULE_LONG_PRESS_MS)
+
+    const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId) return
+      if (scheduleDragRef.current?.itemId === item.id) {
+        updateScheduleCardDrag(moveEvent)
+        moveEvent.preventDefault()
+        return
+      }
+      const dx = moveEvent.clientX - startX
+      const dy = moveEvent.clientY - startY
+      if (Math.hypot(dx, dy) > SCHEDULE_LONG_PRESS_MOVE_PX) {
+        clearLongPress()
+      }
+    }
+
+    const onUp = (upEvent) => {
+      if (upEvent.pointerId !== pointerId) return
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      if (scheduleDragRef.current?.itemId === item.id) {
+        void finishScheduleCardDrag(upEvent)
+        return
+      }
+      clearLongPress()
+    }
+
+    window.addEventListener('pointermove', onMove, { passive: false })
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
+
+  // タップ間隔を自前で判定し、ダブルタップ時のみプレビューを開く（一回の軽いタッチでは開かない）
   const handleScheduleCardTap = (item) => {
+    if (scheduleDragMovedRef.current) {
+      scheduleDragMovedRef.current = false
+      return
+    }
     closeAllScheduleActionMenus()
     const now = Date.now()
     const last = lastCardTapRef.current
@@ -3021,86 +3185,69 @@ function App() {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
   }
 
-  const moveScheduleItem = async (item, direction) => {
-    if (!session || item.completed || isScheduleTask(item)) return
+  const getTimedScheduleDurationMins = (item) => (
+    Math.max(30, timeToMinutes(item.endTime || '10:00') - timeToMinutes(item.time || '09:00'))
+  )
 
-    const items = filterTimedSchedules(selectedItems)
-    const index = items.findIndex((entry) => entry.id === item.id)
-    if (index < 0) return
-
+  /** 指定予定の直前に置く時刻（既存「上に移動」と同系統） */
+  const buildTimesToPlaceBefore = (item, targetItem, itemImmediatelyBeforeTarget) => {
     let newStartTime = ''
     let newEndTime = ''
-
-    if (direction === 'up') {
-      if (index === 0) return
-      const targetItem = items[index - 1]
-      if (index >= 2) {
-        const prevPrevItem = items[index - 2]
-        newStartTime = prevPrevItem.endTime || '09:00'
-        newEndTime = targetItem.time || addOneHourWithCap(newStartTime)
-        if (parseTimeValue(newEndTime) <= parseTimeValue(newStartTime)) {
-          newEndTime = addOneHourWithCap(newStartTime)
-        }
-      } else {
-        const targetStartMins = timeToMinutes(targetItem.time || '09:00')
-        const startMins = Math.max(0, targetStartMins - 60)
-        newStartTime = minutesToTime(startMins)
-        newEndTime = targetItem.time || minutesToTime(startMins + 60)
-        if (parseTimeValue(newEndTime) <= parseTimeValue(newStartTime)) {
-          newEndTime = addOneHourWithCap(newStartTime)
-        }
+    if (itemImmediatelyBeforeTarget) {
+      newStartTime = itemImmediatelyBeforeTarget.endTime || '09:00'
+      newEndTime = targetItem.time || addOneHourWithCap(newStartTime)
+      if (parseTimeValue(newEndTime) <= parseTimeValue(newStartTime)) {
+        newEndTime = addOneHourWithCap(newStartTime)
       }
-
-      const isNoChange = newStartTime === (item.time || '09:00') && newEndTime === (item.endTime || '10:00')
-      const isNotMovingUp = parseTimeValue(newStartTime) >= parseTimeValue(targetItem.time || '09:00')
-
-      if (isNoChange || isNotMovingUp) {
-        const confirmResult = window.confirm(
-          '移動先の予定と時間が重複するため、開始時間を調整して移動します。よろしいですか？'
-        )
-        if (!confirmResult) return
-
-        const targetStartMins = timeToMinutes(targetItem.time || '09:00')
-        const adjustedStartMins = Math.max(0, targetStartMins - 1)
-        newStartTime = minutesToTime(adjustedStartMins)
-
-        const itemDurationMins = Math.max(30, timeToMinutes(item.endTime || '10:00') - timeToMinutes(item.time || '09:00'))
-        const adjustedEndMins = Math.min(23 * 60 + 59, adjustedStartMins + itemDurationMins)
-        newEndTime = minutesToTime(adjustedEndMins)
-      }
-    } else if (direction === 'down') {
-      if (index === items.length - 1) return
-      const targetItem = items[index + 1]
-      newStartTime = targetItem.endTime || '10:00'
-      newEndTime = addOneHourWithCap(newStartTime)
-
-      const isNoChange = newStartTime === (item.time || '09:00') && newEndTime === (item.endTime || '10:00')
-      const isNotMovingDown = parseTimeValue(newStartTime) <= parseTimeValue(targetItem.time || '09:00')
-
-      if (isNoChange || isNotMovingDown) {
-        const confirmResult = window.confirm(
-          '移動先の予定と時間が重複するため、開始時間を調整して移動します。よろしいですか？'
-        )
-        if (!confirmResult) return
-
-        const targetStartMins = timeToMinutes(targetItem.time || '09:00')
-        const adjustedStartMins = Math.min(23 * 60 + 59, targetStartMins + 1)
-        newStartTime = minutesToTime(adjustedStartMins)
-
-        const itemDurationMins = Math.max(30, timeToMinutes(item.endTime || '10:00') - timeToMinutes(item.time || '09:00'))
-        const adjustedEndMins = Math.min(23 * 60 + 59, adjustedStartMins + itemDurationMins)
-        newEndTime = minutesToTime(adjustedEndMins)
+    } else {
+      const targetStartMins = timeToMinutes(targetItem.time || '09:00')
+      const startMins = Math.max(0, targetStartMins - 60)
+      newStartTime = minutesToTime(startMins)
+      newEndTime = targetItem.time || minutesToTime(startMins + 60)
+      if (parseTimeValue(newEndTime) <= parseTimeValue(newStartTime)) {
+        newEndTime = addOneHourWithCap(newStartTime)
       }
     }
 
-    if (!newStartTime) return
+    const isNoChange = newStartTime === (item.time || '09:00') && newEndTime === (item.endTime || '10:00')
+    const isNotMovingUp = parseTimeValue(newStartTime) >= parseTimeValue(targetItem.time || '09:00')
+    return { newStartTime, newEndTime, needsOverlapConfirm: isNoChange || isNotMovingUp }
+  }
+
+  const adjustTimesForOverlapBefore = (item, targetItem) => {
+    const targetStartMins = timeToMinutes(targetItem.time || '09:00')
+    const adjustedStartMins = Math.max(0, targetStartMins - 1)
+    const newStartTime = minutesToTime(adjustedStartMins)
+    const adjustedEndMins = Math.min(23 * 60 + 59, adjustedStartMins + getTimedScheduleDurationMins(item))
+    return { newStartTime, newEndTime: minutesToTime(adjustedEndMins) }
+  }
+
+  /** 指定予定の直後に置く時刻（既存「下に移動」と同系統） */
+  const buildTimesToPlaceAfter = (item, targetItem) => {
+    const newStartTime = targetItem.endTime || '10:00'
+    let newEndTime = addOneHourWithCap(newStartTime)
+    const isNoChange = newStartTime === (item.time || '09:00') && newEndTime === (item.endTime || '10:00')
+    const isNotMovingDown = parseTimeValue(newStartTime) <= parseTimeValue(targetItem.time || '09:00')
+    return { newStartTime, newEndTime, needsOverlapConfirm: isNoChange || isNotMovingDown }
+  }
+
+  const adjustTimesForOverlapAfter = (item, targetItem) => {
+    const targetStartMins = timeToMinutes(targetItem.time || '09:00')
+    const adjustedStartMins = Math.min(23 * 60 + 59, targetStartMins + 1)
+    const newStartTime = minutesToTime(adjustedStartMins)
+    const adjustedEndMins = Math.min(23 * 60 + 59, adjustedStartMins + getTimedScheduleDurationMins(item))
+    return { newStartTime, newEndTime: minutesToTime(adjustedEndMins) }
+  }
+
+  const commitTimedScheduleTimeMove = async (item, newStartTime, newEndTime) => {
+    if (!session || !newStartTime || !newEndTime) return false
 
     const relationTimeConfirmed = await confirmScheduleRelationTimeChangeIfNeeded(
       item,
       newStartTime,
       newEndTime,
     )
-    if (!relationTimeConfirmed) return
+    if (!relationTimeConfirmed) return false
 
     const updatedItem = {
       ...item,
@@ -3114,10 +3261,77 @@ function App() {
     try {
       await setDoc(doc(db, 'schedule_items', `${session.uid}_${item.date}_${item.id}`), updatedItem)
       fetchWeekSchedule()
+      return true
     } catch (error) {
       console.error('予定の移動エラー:', error)
       alert(`予定の移動に失敗しました:\n${error.message}`)
       fetchWeekSchedule()
+      return false
+    }
+  }
+
+  const placeTimedScheduleBefore = async (item, targetItem) => {
+    if (!session || !item || !targetItem || item.completed || isScheduleTask(item) || isScheduleTask(targetItem)) return
+    if (item.id === targetItem.id) return
+
+    const items = filterTimedSchedules(selectedItems)
+    const without = items.filter((entry) => entry.id !== item.id)
+    const targetIndex = without.findIndex((entry) => entry.id === targetItem.id)
+    if (targetIndex < 0) return
+
+    const fullIndex = items.findIndex((entry) => entry.id === item.id)
+    const fullTargetIndex = items.findIndex((entry) => entry.id === targetItem.id)
+    if (fullIndex >= 0 && fullTargetIndex === fullIndex + 1) return
+
+    const itemImmediatelyBeforeTarget = targetIndex > 0 ? without[targetIndex - 1] : null
+    let built = buildTimesToPlaceBefore(item, targetItem, itemImmediatelyBeforeTarget)
+    if (built.needsOverlapConfirm) {
+      const confirmResult = window.confirm(
+        '移動先の予定と時間が重複するため、開始時間を調整して移動します。よろしいですか？',
+      )
+      if (!confirmResult) return
+      built = adjustTimesForOverlapBefore(item, targetItem)
+    }
+    await commitTimedScheduleTimeMove(item, built.newStartTime, built.newEndTime)
+  }
+
+  const placeTimedScheduleAfter = async (item, targetItem) => {
+    if (!session || !item || !targetItem || item.completed || isScheduleTask(item) || isScheduleTask(targetItem)) return
+    if (item.id === targetItem.id) return
+
+    const items = filterTimedSchedules(selectedItems)
+    const fullIndex = items.findIndex((entry) => entry.id === item.id)
+    const fullTargetIndex = items.findIndex((entry) => entry.id === targetItem.id)
+    if (fullIndex >= 0 && fullTargetIndex === fullIndex - 1) return
+    if (fullTargetIndex < 0) return
+
+    let built = buildTimesToPlaceAfter(item, targetItem)
+    if (built.needsOverlapConfirm) {
+      const confirmResult = window.confirm(
+        '移動先の予定と時間が重複するため、開始時間を調整して移動します。よろしいですか？',
+      )
+      if (!confirmResult) return
+      built = adjustTimesForOverlapAfter(item, targetItem)
+    }
+    await commitTimedScheduleTimeMove(item, built.newStartTime, built.newEndTime)
+  }
+
+  const moveScheduleItem = async (item, direction) => {
+    if (!session || item.completed || isScheduleTask(item)) return
+
+    const items = filterTimedSchedules(selectedItems)
+    const index = items.findIndex((entry) => entry.id === item.id)
+    if (index < 0) return
+
+    if (direction === 'up') {
+      if (index === 0) return
+      await placeTimedScheduleBefore(item, items[index - 1])
+      return
+    }
+
+    if (direction === 'down') {
+      if (index === items.length - 1) return
+      await placeTimedScheduleAfter(item, items[index + 1])
     }
   }
 
@@ -5390,10 +5604,15 @@ function App() {
               style={{ ...styles.scheduleSection, ...(weekCalendarEnabled && weekCalendarFixed ? styles.scrollableScheduleSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
                 dayTouchRef.current = null
+                if (scheduleDragRef.current) return
                 if (isScheduleSectionSwipeTarget(event.target)) return
                 dayTouchRef.current = event.changedTouches[0].clientX
               }}
               onTouchEnd={(event) => {
+                if (scheduleDragRef.current) {
+                  dayTouchRef.current = null
+                  return
+                }
                 if (dayTouchRef.current === null) return
                 if (isScheduleSectionSwipeTarget(event.target)) {
                   dayTouchRef.current = null
@@ -5407,10 +5626,15 @@ function App() {
                 }
               }}
               onPointerDown={(event) => {
+                if (scheduleDragRef.current) return
                 if (event.pointerType === 'touch') return
                 daySwipeRef.current = event.clientX
               }}
               onPointerUp={(event) => {
+                if (scheduleDragRef.current) {
+                  daySwipeRef.current = null
+                  return
+                }
                 if (event.pointerType === 'touch') return
                 if (daySwipeRef.current === null) return
                 const distance = event.clientX - daySwipeRef.current
@@ -5569,15 +5793,37 @@ function App() {
                     }
 
                     const urgency = getScheduleUrgency(item, nowTick)
+                    const canDragReorder = !taskItem && !item.completed
+                    const isDraggingCard = scheduleDrag?.itemId === item.id
+                    const isDropBefore = Boolean(
+                      scheduleDrag
+                      && scheduleDrag.overItemId === item.id
+                      && scheduleDrag.place === 'before'
+                      && canDragReorder,
+                    )
+                    const isDropAfter = Boolean(
+                      scheduleDrag
+                      && scheduleDrag.overItemId === item.id
+                      && scheduleDrag.place === 'after'
+                      && canDragReorder,
+                    )
 
                     return (
                     <div
                       key={item.id}
-                      className="schedule-card-mobile"
+                      className={`schedule-card-mobile${isDraggingCard ? ' schedule-card-dragging' : ''}`}
+                      data-schedule-card-id={item.id}
+                      data-schedule-draggable={canDragReorder ? '1' : '0'}
                       onClick={() => handleScheduleCardTap(item)}
+                      onPointerDown={(event) => handleScheduleCardPointerDown(item, event)}
                       style={{
                         ...styles.scheduleCard,
                         ...(item.completed ? styles.completedScheduleCard : {}),
+                        ...(isDraggingCard ? styles.scheduleCardDragging : {}),
+                        ...(isDropBefore ? styles.scheduleCardDropBefore : {}),
+                        ...(isDropAfter ? styles.scheduleCardDropAfter : {}),
+                        ...(isDraggingCard ? { transform: `translateY(${scheduleDrag.deltaY}px)` } : {}),
+                        ...(canDragReorder ? { touchAction: isDraggingCard ? 'none' : 'pan-y' } : {}),
                       }}
                     >
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
@@ -8438,6 +8684,22 @@ const styles = {
     WebkitUserSelect: 'none',
     touchAction: 'manipulation',
     overflow: 'visible',
+  },
+  scheduleCardDragging: {
+    position: 'relative',
+    zIndex: 80,
+    opacity: 0.92,
+    boxShadow: '0 12px 28px rgba(37, 99, 235, 0.28)',
+    borderColor: '#93c5fd',
+    background: '#eff6ff',
+    cursor: 'grabbing',
+    pointerEvents: 'none',
+  },
+  scheduleCardDropBefore: {
+    boxShadow: 'inset 0 3px 0 #2563eb, 0 4px 10px rgba(15, 23, 42, 0.02)',
+  },
+  scheduleCardDropAfter: {
+    boxShadow: 'inset 0 -3px 0 #2563eb, 0 4px 10px rgba(15, 23, 42, 0.02)',
   },
   completedScheduleCard: {
     background: '#e5e7eb',
