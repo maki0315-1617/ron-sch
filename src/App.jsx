@@ -25,7 +25,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import {
   DEFAULT_MEDICATION_TIMES,
@@ -131,6 +131,7 @@ const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
 const MEDICATION_RECORD_ENABLED_KEY = 'ron-sch-medication-record-enabled'
 const HEALTH_LIFE_COUNT_ENABLED_KEY = 'ron-sch-health-life-count-enabled'
 const DEMO_NOTICE_SEEN_KEY = 'ron-sch-demo-notice-seen'
+const USAGE_TIPS_DISMISSED_KEY = 'ron-sch-usage-tips-dismissed'
 const DEMO_MAX_PER_DAY = 5
 const DEMO_MAX_TOTAL = 20
 const SUBSCRIPTION_ACTIVE_STATUS = 'active'
@@ -141,6 +142,96 @@ const isSleepShortcutLaunch = () => {
 }
 
 const demoNoticeStorageKey = (uid) => `${DEMO_NOTICE_SEEN_KEY}:${uid || 'anon'}`
+const usageTipsDismissedStorageKey = (uid) => `${USAGE_TIPS_DISMISSED_KEY}:${uid || 'anon'}`
+const USAGE_TIP_AUTO_MS = 4500
+
+const USAGE_TIP_SLIDES = [
+  {
+    id: 'edit',
+    icon: PencilLine,
+    text: '予定の変更・編集はダブルタップでできます',
+    target: '[data-usage-tip="schedule-cards"]',
+    fallback: '.schedule-section',
+  },
+  {
+    id: 'drag',
+    icon: GripVertical,
+    text: '予定の移動は長押しドラッグでできます',
+    target: '[data-usage-tip="schedule-cards"]',
+    fallback: '.schedule-section',
+  },
+  {
+    id: 'add',
+    icon: Plus,
+    text: '右上の追加ボタンから予定を登録できます',
+    target: '.schedule-add-button',
+    fallback: '.selected-header',
+  },
+  {
+    id: 'swipe',
+    icon: MoveHorizontal,
+    text: '翌日・前日は予定エリアの横スワイプで切り替えできます',
+    target: '[data-usage-tip="day-swipe"]',
+    fallback: '.schedule-section',
+  },
+]
+
+const resolveUsageTipAnchor = (slide) => {
+  if (typeof document === 'undefined') return null
+  return document.querySelector(slide.target) || document.querySelector(slide.fallback)
+}
+
+const computeUsageTipLayout = (slide) => {
+  if (typeof window === 'undefined') return null
+  const width = Math.min(300, window.innerWidth - 24)
+  const estimatedHeight = 118
+  const anchor = resolveUsageTipAnchor(slide)
+  if (!anchor) {
+    return {
+      top: 88,
+      left: Math.max(12, (window.innerWidth - width) / 2),
+      width,
+      placement: 'bottom',
+      arrowLeft: width / 2,
+    }
+  }
+  const rect = anchor.getBoundingClientRect()
+  const spaceBelow = window.innerHeight - rect.bottom
+  const placement = spaceBelow < estimatedHeight + 20 && rect.top > estimatedHeight + 20 ? 'top' : 'bottom'
+  let top = placement === 'bottom' ? rect.bottom + 12 : rect.top - estimatedHeight - 12
+  let left = rect.left + rect.width / 2 - width / 2
+  left = Math.max(12, Math.min(left, window.innerWidth - width - 12))
+  top = Math.max(12, Math.min(top, window.innerHeight - estimatedHeight - 12))
+  const arrowLeft = Math.max(18, Math.min(rect.left + rect.width / 2 - left, width - 18))
+  return { top, left, width, placement, arrowLeft }
+}
+
+const isUsageTipsDismissed = (uid) => {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(usageTipsDismissedStorageKey(uid)) === '1'
+  } catch {
+    return false
+  }
+}
+
+const setUsageTipsDismissed = (uid) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(usageTipsDismissedStorageKey(uid), '1')
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+const clearUsageTipsDismissed = (uid) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(usageTipsDismissedStorageKey(uid))
+  } catch {
+    // ignore
+  }
+}
 
 /**
  * 本番: subscriptions に email 一致かつ status === "active" が1件以上
@@ -493,11 +584,11 @@ function App() {
   const [savingDraft, setSavingDraft] = useState(false)
   const [commonTitles, setCommonTitles] = useState([])
   const [commonTitlesExpanded, setCommonTitlesExpanded] = useState(false)
-  const [showDoubleTapHint, setShowDoubleTapHint] = useState(false)
-  const [doubleTapHintFading, setDoubleTapHintFading] = useState(false)
-  const [hintMessageIndex, setHintMessageIndex] = useState(0)
+  const [showUsageTipsModal, setShowUsageTipsModal] = useState(false)
+  const [usageTipIndex, setUsageTipIndex] = useState(0)
+  const [usageTipLayout, setUsageTipLayout] = useState(null)
   const [initialScheduleReady, setInitialScheduleReady] = useState(false)
-  const doubleTapHintShownRef = useRef(false)
+  const usageTipsShownRef = useRef(false)
   const [saveAsCommonTitle, setSaveAsCommonTitle] = useState(false)
   const [relationDialog, setRelationDialog] = useState(null)
   const [scheduleActionNotice, setScheduleActionNotice] = useState(null)
@@ -792,12 +883,27 @@ function App() {
   }, [])
 
   useEffect(() => {
-    // アクセス時の最初の一回だけ、当日の予定件数が確定してからヒントバナーを表示する
-    if (!session || !initialScheduleReady || doubleTapHintShownRef.current) return
-    doubleTapHintShownRef.current = true
-    setHintMessageIndex(0)
-    setShowDoubleTapHint(true)
-  }, [session, initialScheduleReady])
+    // アカウント切り替え時はヒント表示判定をやり直す
+    usageTipsShownRef.current = false
+    setShowUsageTipsModal(false)
+    setUsageTipIndex(0)
+    setUsageTipLayout(null)
+    setInitialScheduleReady(false)
+  }, [session?.uid])
+
+  useEffect(() => {
+    // 予定取得後・デモ案内が閉じたあとに、利用方法吹き出しを1回表示する
+    if (!session || !initialScheduleReady) return
+    if (sleepOnlyMode || demoWelcomeOpen) return
+    if (usageTipsShownRef.current) return
+    if (isUsageTipsDismissed(session.uid)) {
+      usageTipsShownRef.current = true
+      return
+    }
+    usageTipsShownRef.current = true
+    setUsageTipIndex(0)
+    setShowUsageTipsModal(true)
+  }, [session?.uid, initialScheduleReady, sleepOnlyMode, demoWelcomeOpen])
 
   useEffect(() => {
     // アカウント切り替え時は週キャッシュを破棄して再取得させる
@@ -1624,35 +1730,92 @@ function App() {
     }
   }
 
-  // 0件の日は追加方法のみ、1件以上は編集→追加の順で順次表示する
-  const doubleTapHintMessages = useMemo(() => {
-    if (selectedItems.length === 0) {
-      return [{ icon: Plus, text: '右上の追加ボタンから予定を登録できます' }]
+  // 起動時利用方法（吹き出しスライド）
+  const usageTipMessages = USAGE_TIP_SLIDES
+  const currentUsageTip = usageTipMessages[Math.min(usageTipIndex, usageTipMessages.length - 1)]
+  const isLastUsageTip = usageTipIndex >= usageTipMessages.length - 1
+
+  const closeUsageTipsModal = (dismissForever = false) => {
+    if (dismissForever && session?.uid) {
+      setUsageTipsDismissed(session.uid)
     }
-    return [
-      { icon: PencilLine, text: '予定カードはダブルタップで編集できます' },
-      { icon: Plus, text: '右上の追加ボタンから予定を登録できます' },
-    ]
-  }, [selectedItems.length])
+    setShowUsageTipsModal(false)
+    setUsageTipIndex(0)
+    setUsageTipLayout(null)
+  }
+
+  const openUsageTipsModal = () => {
+    if (sleepOnlyMode) return
+    // メニューから開いたときは「今後表示しない」を解除し、次回起動の自動表示を戻す
+    if (session?.uid) {
+      clearUsageTipsDismissed(session.uid)
+    }
+    // 今開いているので、このセッション中の自動再表示はしない
+    usageTipsShownRef.current = true
+    setMenuOpen(false)
+    setView('home')
+    setUsageTipIndex(0)
+    setShowUsageTipsModal(true)
+  }
+
+  const advanceUsageTip = () => {
+    setUsageTipIndex((current) => {
+      if (current >= usageTipMessages.length - 1) {
+        setShowUsageTipsModal(false)
+        setUsageTipLayout(null)
+        return 0
+      }
+      return current + 1
+    })
+  }
 
   useEffect(() => {
-    if (!showDoubleTapHint) return
-    setDoubleTapHintFading(false)
-    const fadeTimer = setTimeout(() => setDoubleTapHintFading(true), 3000)
-    const advanceTimer = setTimeout(() => {
-      setHintMessageIndex((current) => {
-        if (current + 1 >= doubleTapHintMessages.length) {
-          setShowDoubleTapHint(false)
-          return current
-        }
-        return current + 1
-      })
-    }, 3600)
-    return () => {
-      clearTimeout(fadeTimer)
-      clearTimeout(advanceTimer)
+    if (!showUsageTipsModal || !currentUsageTip) {
+      setUsageTipLayout(null)
+      return undefined
     }
-  }, [showDoubleTapHint, hintMessageIndex, doubleTapHintMessages])
+
+    let cancelled = false
+    const updateLayout = () => {
+      if (cancelled) return
+      const anchor = resolveUsageTipAnchor(currentUsageTip)
+      if (anchor && typeof anchor.scrollIntoView === 'function') {
+        anchor.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      }
+      setUsageTipLayout(computeUsageTipLayout(currentUsageTip))
+    }
+
+    updateLayout()
+    const rafId = window.requestAnimationFrame(updateLayout)
+    const timerId = window.setTimeout(updateLayout, 320)
+    window.addEventListener('resize', updateLayout)
+    window.addEventListener('scroll', updateLayout, true)
+
+    document.querySelectorAll('.usage-tip-target-highlight').forEach((el) => {
+      el.classList.remove('usage-tip-target-highlight')
+    })
+    const highlight = resolveUsageTipAnchor(currentUsageTip)
+    if (highlight) highlight.classList.add('usage-tip-target-highlight')
+
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(rafId)
+      window.clearTimeout(timerId)
+      window.removeEventListener('resize', updateLayout)
+      window.removeEventListener('scroll', updateLayout, true)
+      document.querySelectorAll('.usage-tip-target-highlight').forEach((el) => {
+        el.classList.remove('usage-tip-target-highlight')
+      })
+    }
+  }, [showUsageTipsModal, usageTipIndex, currentUsageTip])
+
+  useEffect(() => {
+    if (!showUsageTipsModal) return undefined
+    const timerId = window.setTimeout(() => {
+      advanceUsageTip()
+    }, USAGE_TIP_AUTO_MS)
+    return () => window.clearTimeout(timerId)
+  }, [showUsageTipsModal, usageTipIndex])
 
   const scheduleListItems = useMemo(() => {
     const todayKey = formatDateKey(new Date())
@@ -5491,6 +5654,16 @@ function App() {
                     >
                       <HelpCircle size={18} /> ヘルプ
                     </button>
+                    {!sleepOnlyMode && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        style={styles.menuItem}
+                        onClick={openUsageTipsModal}
+                      >
+                        <HelpCircle size={18} /> 利用方法
+                      </button>
+                    )}
                     {!sleepOnlyMode && !demoMode && (
                       <>
                         <div style={styles.menuDivider} />
@@ -5895,6 +6068,7 @@ function App() {
             <section
               ref={scheduleSectionRef}
               className="schedule-section"
+              data-usage-tip="day-swipe"
               style={{
                 ...styles.scheduleSection,
                 ...(weekCalendarEnabled && weekCalendarFixed ? styles.scrollableScheduleSection : {}),
@@ -5965,30 +6139,14 @@ function App() {
                 </div>
               </div>
 
-              {showDoubleTapHint && doubleTapHintMessages[Math.min(hintMessageIndex, doubleTapHintMessages.length - 1)] && (
-                <div
-                  style={{ ...styles.doubleTapHintBanner, ...(doubleTapHintFading ? styles.doubleTapHintBannerFading : {}) }}
-                  role="status"
-                >
-                  {(() => {
-                    const currentHint = doubleTapHintMessages[Math.min(hintMessageIndex, doubleTapHintMessages.length - 1)]
-                    const HintIcon = currentHint.icon
-                    return (
-                      <>
-                        <HintIcon size={16} /> <span>{currentHint.text}</span>
-                      </>
-                    )
-                  })()}
-                </div>
-              )}
-
               {loading && selectedTopLevelItems.length === 0 ? (
-                <div style={styles.loadingState}>読み込み中...</div>
+                <div style={styles.loadingState} data-usage-tip="schedule-cards">読み込み中...</div>
               ) : selectedTopLevelItems.length === 0 ? (
-                <div style={styles.emptyState}>この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
+                <div style={styles.emptyState} data-usage-tip="schedule-cards">この日の予定はまだありません。追加ボタンから予定を登録できます。</div>
               ) : (
                 <div
                   className="schedule-list"
+                  data-usage-tip="schedule-cards"
                   style={styles.scheduleList}
                   onPointerDownCapture={handleScheduleListPointerDownCapture}
                 >
@@ -7765,6 +7923,62 @@ function App() {
                     {deletingAccount ? '削除中…' : 'アカウントを削除する'}
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {showUsageTipsModal && currentUsageTip && usageTipLayout && (
+            <div className="usage-tip-layer" style={styles.usageTipLayer} aria-live="polite">
+              <div
+                className={`usage-tip-bubble usage-tip-bubble-${usageTipLayout.placement}`}
+                role="dialog"
+                aria-label="利用方法"
+                style={{
+                  ...styles.usageTipBubble,
+                  top: usageTipLayout.top,
+                  left: usageTipLayout.left,
+                  width: usageTipLayout.width,
+                }}
+              >
+                <span
+                  className="usage-tip-arrow"
+                  style={{
+                    ...styles.usageTipArrow,
+                    left: usageTipLayout.arrowLeft,
+                    ...(usageTipLayout.placement === 'top' ? styles.usageTipArrowBottom : styles.usageTipArrowTop),
+                  }}
+                  aria-hidden="true"
+                />
+                <div style={styles.usageTipHeader}>
+                  <div style={styles.usageTipTitleWrap}>
+                    {(() => {
+                      const TipIcon = currentUsageTip.icon
+                      return <TipIcon size={16} color="#1d4ed8" aria-hidden="true" />
+                    })()}
+                    <strong style={styles.usageTipStep}>
+                      利用方法 {usageTipIndex + 1}/{usageTipMessages.length}
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    style={styles.usageTipCloseButton}
+                    onClick={advanceUsageTip}
+                    aria-label={isLastUsageTip ? '閉じる' : '次へ'}
+                    title={isLastUsageTip ? '閉じる' : '次へ'}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+                <p style={styles.usageTipText}>{currentUsageTip.text}</p>
+                {isLastUsageTip && (
+                  <button
+                    type="button"
+                    style={styles.usageTipDismissButton}
+                    onClick={() => closeUsageTipsModal(true)}
+                  >
+                    今後表示しない
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -10008,23 +10222,91 @@ const styles = {
     borderRadius: '8px',
     padding: '8px 10px',
   },
-  doubleTapHintBanner: {
+  usageTipLayer: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 1100,
+    pointerEvents: 'none',
+  },
+  usageTipBubble: {
+    position: 'fixed',
+    pointerEvents: 'auto',
+    boxSizing: 'border-box',
+    background: '#ffffff',
+    border: '1px solid #93c5fd',
+    borderRadius: '14px',
+    boxShadow: '0 12px 28px rgba(15, 23, 42, 0.18)',
+    padding: '12px 12px 10px',
+    color: '#1e3a8a',
+  },
+  usageTipArrow: {
+    position: 'absolute',
+    width: '14px',
+    height: '14px',
+    background: '#ffffff',
+    borderLeft: '1px solid #93c5fd',
+    borderTop: '1px solid #93c5fd',
+    transform: 'translateX(-50%) rotate(45deg)',
+  },
+  usageTipArrowTop: {
+    top: '-7px',
+  },
+  usageTipArrowBottom: {
+    bottom: '-7px',
+    borderLeft: '0',
+    borderTop: '0',
+    borderRight: '1px solid #93c5fd',
+    borderBottom: '1px solid #93c5fd',
+  },
+  usageTipHeader: {
     display: 'flex',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: '8px',
-    marginBottom: '10px',
-    padding: '8px 12px',
-    borderRadius: '10px',
-    background: '#eff6ff',
-    border: '1px solid #bfdbfe',
-    color: '#1d4ed8',
-    fontSize: '13px',
-    fontWeight: 600,
-    transition: 'opacity 0.6s ease',
-    opacity: 1,
+    marginBottom: '6px',
   },
-  doubleTapHintBannerFading: {
-    opacity: 0,
+  usageTipTitleWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    minWidth: 0,
+  },
+  usageTipStep: {
+    fontSize: '12px',
+    fontWeight: 700,
+    color: '#1d4ed8',
+  },
+  usageTipCloseButton: {
+    width: '28px',
+    height: '28px',
+    border: '0',
+    borderRadius: '999px',
+    background: '#eff6ff',
+    color: '#1d4ed8',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  usageTipText: {
+    margin: 0,
+    fontSize: '14px',
+    fontWeight: 600,
+    lineHeight: 1.45,
+    color: '#1e3a8a',
+  },
+  usageTipDismissButton: {
+    marginTop: '10px',
+    width: '100%',
+    border: '1px solid #bfdbfe',
+    borderRadius: '8px',
+    background: '#eff6ff',
+    color: '#1d4ed8',
+    fontSize: '12px',
+    fontWeight: 700,
+    padding: '8px 10px',
+    cursor: 'pointer',
   },
 }
 
