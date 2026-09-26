@@ -75,6 +75,8 @@ const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 const HELP_SITE_URL = 'https://ron-home-app.vercel.app/'
 /** お問い合わせはトップページ内セクション（id=contact）。/contact ルートは無い */
 const CONTACT_FORM_URL = 'https://ron-home-app.vercel.app/'
+/** 紹介サイトの料金プラン（id=pricing） */
+const HELP_PRICING_URL = 'https://ron-home-app.vercel.app/#pricing'
 const SUBSCRIPTION_CANCEL_CONTACT_TYPE = 'subscription_cancel'
 const HELP_MAIL_ADDRESS = 'ronron201907@gmail.com'
 const SLEEP_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/829d308f0a34444fbf032d3d0b5f467c'
@@ -102,6 +104,7 @@ const helpContent = {
     fatigueGuideButton: '「疲れ」判定の説明PDFを開く',
     fatigueDisclaimer: '「疲れ」のスコアとメッセージは、睡眠記録と予定から算出した生活・予定管理の目安です。医療上の診断・治療・服薬判断の代わりにはなりません。',
     prButton: 'アプリ紹介・PRスライドPDFをダウンロード',
+    pricingButton: '有料版の購入はこちら（料金プラン）',
     shortcutButton: 'iPhone用「睡眠記録」ショートカットを取得',
     about: `『${APP_DISPLAY_NAME}』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。`,
     summary: '予定の登録から通知、進捗確認まで、日々の生活に沿った使い方をサポートします。',
@@ -118,6 +121,7 @@ const helpContent = {
     fatigueGuideButton: 'Open fatigue score guide (PDF)',
     fatigueDisclaimer: 'The fatigue score is a planning guide from sleep and schedule data. It is not medical diagnosis, treatment, or medication advice.',
     prButton: 'Download App Introduction / PR Slides',
+    pricingButton: 'Paid plans — view pricing',
     shortcutButton: 'Get the “Sleep Records” Shortcut for iPhone',
     about: `${APP_DISPLAY_NAME_EN} is a simple planning app designed to make daily scheduling easier and help you stay consistent over time.`,
     summary: 'From adding tasks to checking progress and managing reminders, it supports a smoother daily routine.',
@@ -7611,6 +7615,23 @@ function App() {
                   >
                     {helpContent[helpLang].prButton}
                   </button>
+                  <a
+                    href={HELP_PRICING_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      ...styles.primaryButton,
+                      width: '100%',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textDecoration: 'none',
+                      boxSizing: 'border-box',
+                      background: 'linear-gradient(135deg, #b45309 0%, #c2410c 100%)',
+                    }}
+                  >
+                    {helpContent[helpLang].pricingButton}
+                  </a>
                   <a
                     href={SLEEP_SHORTCUT_URL}
                     target="_blank"
