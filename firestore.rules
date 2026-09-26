@@ -28,6 +28,17 @@ service cloud.firestore {
       allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
     }
 
+    // 服薬時刻・通知設定（ドキュメントID = uid）
+    match /medication_settings/{userId} {
+      allow create, read, update, delete: if isOwner(userId);
+    }
+
+    // 日次服薬記録（user_id 必須）
+    match /medication_records/{recordId} {
+      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
+      allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
+    }
+
     match /fcm_tokens/{tokenId} {
       allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
       allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;

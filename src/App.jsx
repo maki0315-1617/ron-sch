@@ -27,6 +27,15 @@ import {
 } from 'firebase/firestore'
 import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
+import {
+  DEFAULT_MEDICATION_TIMES,
+  MEDICATION_SLOT_KEYS,
+  MEDICATION_SLOT_LABELS,
+  createEmptyMedicationSlots,
+  getMedicationSlotAlert,
+  normalizeMedicationRecordSlots,
+  normalizeMedicationSettings,
+} from './medicationUtils'
 import { computeFatigueScore, fatigueBandColors } from './fatigueScore'
 import { buildFatigueGuideHtml } from './fatigueGuideDocument'
 import { buildHealthLifeCountPresentation } from './dayFooterPresentation'
@@ -118,6 +127,7 @@ const WEEK_START_DAY_KEY = 'ron-sch-week-start-day'
 const MONTH_CALENDAR_ENABLED_KEY = 'ron-sch-month-calendar-enabled'
 const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
+const MEDICATION_RECORD_ENABLED_KEY = 'ron-sch-medication-record-enabled'
 const HEALTH_LIFE_COUNT_ENABLED_KEY = 'ron-sch-health-life-count-enabled'
 const DEMO_NOTICE_SEEN_KEY = 'ron-sch-demo-notice-seen'
 const DEMO_MAX_PER_DAY = 5
@@ -530,6 +540,19 @@ function App() {
     return isSleepShortcutLaunch() || typeof window === 'undefined' || window.localStorage.getItem(SLEEP_RECORD_ENABLED_KEY) !== 'false'
   })
   const [sleepRecordCollapsed, setSleepRecordCollapsed] = useState(false)
+  const [medicationRecordEnabled, setMedicationRecordEnabled] = useState(() => {
+    return typeof window === 'undefined' || window.localStorage.getItem(MEDICATION_RECORD_ENABLED_KEY) !== 'false'
+  })
+  const [medicationRecordCollapsed, setMedicationRecordCollapsed] = useState(false)
+  const [medicationSettings, setMedicationSettings] = useState(() => normalizeMedicationSettings())
+  const [medicationSettingsDraft, setMedicationSettingsDraft] = useState(() => normalizeMedicationSettings())
+  const [medicationRecord, setMedicationRecord] = useState(() => ({
+    slots: createEmptyMedicationSlots(),
+    exists: false,
+  }))
+  const [medicationRecordMap, setMedicationRecordMap] = useState({})
+  const [medicationSaving, setMedicationSaving] = useState(false)
+  const [medicationSaveMessage, setMedicationSaveMessage] = useState('')
   const [healthLifeCountEnabled, setHealthLifeCountEnabled] = useState(() => {
     return typeof window !== 'undefined' && window.localStorage.getItem(HEALTH_LIFE_COUNT_ENABLED_KEY) === 'true'
   })
@@ -783,6 +806,11 @@ function App() {
     setPreviousSleepRecord(null)
     setSleepRecordMap({})
     setSleepSaveMessage('')
+    setMedicationSettings(normalizeMedicationSettings())
+    setMedicationSettingsDraft(normalizeMedicationSettings())
+    setMedicationRecord({ slots: createEmptyMedicationSlots(), exists: false })
+    setMedicationRecordMap({})
+    setMedicationSaveMessage('')
   }, [session?.uid])
 
   useEffect(() => {
@@ -841,6 +869,77 @@ function App() {
     }
 
     loadSleepRecord()
+    return () => {
+      cancelled = true
+    }
+  }, [session?.uid, selectedKey])
+
+  useEffect(() => {
+    if (!session) return
+
+    let cancelled = false
+    const loadMedicationSettings = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'medication_settings', session.uid))
+        if (cancelled) return
+        const next = normalizeMedicationSettings(snap.exists() ? snap.data() : {})
+        setMedicationSettings(next)
+        setMedicationSettingsDraft(next)
+      } catch (error) {
+        console.error('服薬設定取得エラー:', error)
+      }
+    }
+
+    const loadMedicationRecords = async () => {
+      try {
+        const snapshot = await getDocs(query(collection(db, 'medication_records'), where('user_id', '==', session.uid)))
+        if (cancelled) return
+        const nextMap = {}
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data()
+          if (data.date) {
+            nextMap[data.date] = {
+              ...data,
+              slots: normalizeMedicationRecordSlots(data.slots),
+            }
+          }
+        })
+        setMedicationRecordMap(nextMap)
+      } catch (error) {
+        console.error('服薬記録一覧取得エラー:', error)
+      }
+    }
+
+    loadMedicationSettings()
+    loadMedicationRecords()
+    return () => {
+      cancelled = true
+    }
+  }, [session?.uid])
+
+  useEffect(() => {
+    if (!session) return
+
+    let cancelled = false
+    setMedicationSaveMessage('')
+    const loadMedicationRecord = async () => {
+      try {
+        const snapshot = await getDoc(doc(db, 'medication_records', `${session.uid}_${selectedKey}`))
+        if (cancelled) return
+        const data = snapshot.exists() ? snapshot.data() : {}
+        setMedicationRecord({
+          slots: normalizeMedicationRecordSlots(data.slots),
+          exists: snapshot.exists(),
+        })
+      } catch (error) {
+        console.error('服薬記録取得エラー:', error)
+        if (!cancelled) {
+          setMedicationRecord({ slots: createEmptyMedicationSlots(), exists: false })
+        }
+      }
+    }
+
+    loadMedicationRecord()
     return () => {
       cancelled = true
     }
@@ -943,6 +1042,11 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(SLEEP_RECORD_ENABLED_KEY, String(sleepRecordEnabled))
   }, [sleepRecordEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(MEDICATION_RECORD_ENABLED_KEY, String(medicationRecordEnabled))
+  }, [medicationRecordEnabled])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -1435,6 +1539,89 @@ function App() {
     }
   }
 
+  const saveMedicationSettings = async () => {
+    if (!session || medicationSaving) return
+    const next = normalizeMedicationSettings(medicationSettingsDraft)
+    setMedicationSaving(true)
+    try {
+      await setDoc(doc(db, 'medication_settings', session.uid), {
+        ...next,
+        updatedAt: serverTimestamp(),
+      }, { merge: true })
+      setMedicationSettings(next)
+      setMedicationSettingsDraft(next)
+      setMedicationSaveMessage('服薬時刻・通知設定を保存しました。')
+    } catch (error) {
+      console.error('服薬設定保存エラー:', error)
+      alert(`服薬設定の保存に失敗しました:\n${error.message}`)
+    } finally {
+      setMedicationSaving(false)
+    }
+  }
+
+  const toggleMedicationNotifyEnabled = async () => {
+    if (!session || medicationSaving) return
+    const nextEnabled = !(medicationSettingsDraft.notifyEnabled !== false)
+    const next = normalizeMedicationSettings({ ...medicationSettingsDraft, notifyEnabled: nextEnabled })
+    setMedicationSettingsDraft(next)
+    setMedicationSaving(true)
+    try {
+      await setDoc(doc(db, 'medication_settings', session.uid), {
+        ...next,
+        updatedAt: serverTimestamp(),
+      }, { merge: true })
+      setMedicationSettings(next)
+      setMedicationSaveMessage(nextEnabled ? '服薬通知をオンにしました。' : '服薬通知をオフにしました。')
+    } catch (error) {
+      console.error('服薬通知設定エラー:', error)
+      alert(`服薬通知の切り替えに失敗しました:\n${error.message}`)
+      setMedicationSettingsDraft(medicationSettings)
+    } finally {
+      setMedicationSaving(false)
+    }
+  }
+
+  const toggleMedicationSlot = async (slotKey) => {
+    if (!session || medicationSaving) return
+    const currentSlots = normalizeMedicationRecordSlots(medicationRecord?.slots)
+    const current = currentSlots[slotKey] || { completed: false, takenAt: null }
+    const nextCompleted = !current.completed
+    const nextSlots = {
+      ...currentSlots,
+      [slotKey]: {
+        completed: nextCompleted,
+        takenAt: nextCompleted ? formatCurrentTime() : null,
+      },
+    }
+    const nextRecord = {
+      user_id: session.uid,
+      date: selectedKey,
+      slots: nextSlots,
+      updatedAt: serverTimestamp(),
+    }
+
+    setMedicationSaving(true)
+    try {
+      await setDoc(doc(db, 'medication_records', `${session.uid}_${selectedKey}`), nextRecord, { merge: true })
+      const localRecord = { slots: nextSlots, exists: true }
+      setMedicationRecord(localRecord)
+      setMedicationRecordMap((prev) => ({
+        ...prev,
+        [selectedKey]: { user_id: session.uid, date: selectedKey, slots: nextSlots },
+      }))
+      setMedicationSaveMessage(
+        nextCompleted
+          ? `${MEDICATION_SLOT_LABELS[slotKey]}の服薬を記録しました。`
+          : `${MEDICATION_SLOT_LABELS[slotKey]}の服薬記録を取り消しました。`
+      )
+    } catch (error) {
+      console.error('服薬記録保存エラー:', error)
+      alert(`服薬記録の保存に失敗しました:\n${error.message}`)
+    } finally {
+      setMedicationSaving(false)
+    }
+  }
+
   // 0件の日は追加方法のみ、1件以上は編集→追加の順で順次表示する
   const doubleTapHintMessages = useMemo(() => {
     if (selectedItems.length === 0) {
@@ -1720,7 +1907,7 @@ function App() {
   }
 
   const deleteUserData = async (uid) => {
-    const collectionsToDelete = ['schedule_items', 'sleep_records', 'fcm_tokens']
+    const collectionsToDelete = ['schedule_items', 'sleep_records', 'medication_records', 'fcm_tokens']
     for (const colName of collectionsToDelete) {
       let hasMore = true
       while (hasMore) {
@@ -1747,6 +1934,11 @@ function App() {
       await deleteDoc(doc(db, 'common_titles', uid))
     } catch (e) {
       console.error('common_titles delete error:', e)
+    }
+    try {
+      await deleteDoc(doc(db, 'medication_settings', uid))
+    } catch (e) {
+      console.error('medication_settings delete error:', e)
     }
     try {
       await deleteDoc(doc(db, 'notification_state', uid))
@@ -4059,12 +4251,18 @@ function App() {
     const averageSleepMinutes = recordedSleepMinutes.length
       ? Math.round(recordedSleepMinutes.reduce((sum, minutes) => sum + minutes, 0) / recordedSleepMinutes.length)
       : null
+    const formatMedSlot = (dateKey, slotKey) => {
+      const record = medicationRecordMap[dateKey]
+      const slot = record?.slots?.[slotKey]
+      if (!slot?.completed) return '未'
+      return slot.takenAt ? `済 ${slot.takenAt}` : '済'
+    }
     const rows = reportRows.map((row, index) => {
       const fatigue = fatigueByDay[index]
       const stepsCell = fatigue.stepCount === null ? '—' : String(fatigue.stepCount)
       const stepPtsCell = fatigue.stepPoints === null ? '—' : (fatigue.stepPoints > 0 ? `+${fatigue.stepPoints}` : '0')
       return `
-      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${stepsCell}</td><td>${stepPtsCell}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td></tr>`
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${stepsCell}</td><td>${stepPtsCell}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td><td>${formatMedSlot(row.dateKey, 'morning')}</td><td>${formatMedSlot(row.dateKey, 'noon')}</td><td>${formatMedSlot(row.dateKey, 'evening')}</td><td>${formatMedSlot(row.dateKey, 'bedtime')}</td></tr>`
     }).join('')
     const chartWidth = 760
     const chartHeight = 330
@@ -4148,9 +4346,9 @@ function App() {
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
       <h1>健康生活PDF</h1><div class="period">対象期間: ${year}年${month + 1}月（選択中の月）</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
-      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th><th>服薬・朝</th><th>服薬・昼</th><th>服薬・夜</th><th>服薬・寝る前</th></tr></thead><tbody>${rows}</tbody></table>
       <h2>日別の健康生活（睡眠・疲れ・完了件数）</h2><div class="chart-box">${combinedChart}</div>
-      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
+      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。服薬列は記録の表示のみで疲れ加点には使いません。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
@@ -4335,17 +4533,28 @@ function App() {
           },
           {
             heading: '5. 睡眠記録を便利に使う',
-            body: '睡眠記録では、選択日の起床時刻と当日の就寝時刻を保存できます。「現在時刻」を押すと、その時点の時刻をワンタッチで保存できます。前日の就寝時刻は自動的に参照表示されます。',
+            body: '睡眠記録では、選択日の起床時刻と当日の就寝時刻を保存できます。「現在時刻」を押すと、その時点の時刻をワンタッチで保存できます。前日の就寝時刻は自動的に参照表示されます。睡眠記録は健康生活カウントの直上に表示されます。',
             points: [
               '時刻を手動で変更した場合は「保存」を押して記録します。',
               '睡眠記録の見出しを押すと、入力欄と詳細を折りたためます。初期状態は開いた状態です。',
               '設定メニューの「睡眠記録表示」で、睡眠記録欄の表示・非表示を切り替えられます。非表示にしても保存済みデータは削除されません。',
-              'メニューの「健康生活PDF」から、選択中の月の睡眠一覧と、睡眠・疲れ・完了件数を1枚にまとめた日別グラフを出力できます。',
+              'メニューの「健康生活PDF」から、選択中の月の睡眠一覧・服薬記録と、睡眠・疲れ・完了件数を1枚にまとめた日別グラフを出力できます。',
+            ],
+          },
+          {
+            heading: '5b. 服薬記録を使う',
+            body: '朝・昼・夜・寝る前の4枠で服薬を記録できます。各枠の時刻は画面内で変更でき、指定時刻の前後30分から未完了の枠がゆっくり点滅します。過去の日も後から記録・取消できます。',
+            points: [
+              '「完了」で服薬済み、「済」をもう一度押すと取消します。',
+              '「通知不要」は服薬の5分前通知だけをオフにします（予定の通知とは別です）。',
+              '設定メニューの「服薬記録表示」で表示・非表示を切り替えられます。',
+              '睡眠専用ショートカット（?sleep=1）では服薬欄は表示されません。',
+              '健康生活PDFの服薬列は表示のみで、疲れスコアには加点しません。',
             ],
           },
           {
             heading: '6. 通知を使う',
-            body: '右上の通知ボタンから、時刻ありスケジュールの開始時刻を通知で受け取れます。タスクには通知しません。ブラウザの通知許可が必要です。',
+            body: '右上の通知ボタンから、時刻ありスケジュールの開始時刻を通知で受け取れます。タスクには通知しません。服薬の5分前通知は服薬記録欄の「通知不要」で別に切り替えられます。ブラウザの通知許可が必要です。',
             points: [
               '通知がオンの場合、予定開始時刻に音や表示で知らせます。',
               'iPhone / Safari はホーム画面に追加後に設定してください。',
@@ -5182,6 +5391,15 @@ function App() {
                           type="button"
                           role="menuitem"
                           style={styles.menuItem}
+                          onClick={() => setMedicationRecordEnabled((current) => !current)}
+                        >
+                          <Check size={18} color={medicationRecordEnabled ? '#2563eb' : 'transparent'} />
+                          服薬記録表示
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
                           onClick={() => setHealthLifeCountEnabled((current) => !current)}
                         >
                           <Check size={18} color={healthLifeCountEnabled ? '#2563eb' : 'transparent'} />
@@ -5743,72 +5961,6 @@ function App() {
                 </div>
               </div>
 
-              {sleepRecordEnabled && <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
-                <div style={styles.sleepRecordTitleRow}>
-                  <button
-                    type="button"
-                    style={styles.sleepRecordCollapseButton}
-                    onClick={() => setSleepRecordCollapsed((current) => !current)}
-                    aria-expanded={!sleepRecordCollapsed}
-                  >
-                    {sleepRecordCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-                    <strong style={styles.sleepRecordTitle}>睡眠記録</strong>
-                  </button>
-                  <span style={styles.sleepRecordStatus}>{sleepRecord?.exists ? '保存済み' : '未記録'}</span>
-                </div>
-                  {sleepOnlyMode && <div style={styles.sleepOnlyDate}>{formatWeekTitle(selectedDate)}</div>}
-                {!sleepRecordCollapsed && <>
-                <div style={styles.sleepRecordFields}>
-                  <label style={styles.sleepRecordField}>
-                    <span>起床</span>
-                    <input
-                      type="time"
-                      value={sleepRecord?.wakeTime || formatCurrentTime()}
-                      onChange={(event) => {
-                        setSleepSaveMessage('')
-                        setSleepRecord((current) => ({ ...(current || {}), wakeTime: event.target.value }))
-                      }}
-                      style={styles.sleepRecordInput}
-                    />
-                    <span style={styles.sleepRecordActions}>
-                      <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('wakeTime', sleepRecord?.wakeTime)} disabled={sleepSaving}>
-                        保存
-                      </button>
-                      <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('wakeTime')} disabled={sleepSaving}>
-                        現在時刻
-                      </button>
-                    </span>
-                  </label>
-                  <label style={styles.sleepRecordField}>
-                    <span>就寝</span>
-                    <input
-                      type="time"
-                      value={sleepRecord?.bedtime || formatCurrentTime()}
-                      onChange={(event) => {
-                        setSleepSaveMessage('')
-                        setSleepRecord((current) => ({ ...(current || {}), bedtime: event.target.value }))
-                      }}
-                      style={styles.sleepRecordInput}
-                    />
-                    <span style={styles.sleepRecordActions}>
-                      <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('bedtime', sleepRecord?.bedtime)} disabled={sleepSaving}>
-                        保存
-                      </button>
-                      <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('bedtime')} disabled={sleepSaving}>
-                        現在時刻
-                      </button>
-                    </span>
-                  </label>
-                </div>
-                {sleepSaveMessage && <div style={styles.sleepSaveMessage} role="status">{sleepSaveMessage}</div>}
-                <div style={styles.previousSleepRecord}>
-                  <span>前日の就寝</span>
-                  <strong>{previousSleepRecord?.bedtime || '未記録'}</strong>
-                  <span style={styles.previousSleepRecordNote}>前日の記録を表示</span>
-                </div>
-                </>}
-              </div>}
-
               {showDoubleTapHint && doubleTapHintMessages[Math.min(hintMessageIndex, doubleTapHintMessages.length - 1)] && (
                 <div
                   style={{ ...styles.doubleTapHintBanner, ...(doubleTapHintFading ? styles.doubleTapHintBannerFading : {}) }}
@@ -6156,6 +6308,187 @@ function App() {
                     <span style={styles.achievementIcon} aria-hidden="true">{achievementStats.weekBadge.icon}</span>
                     <span style={styles.achievementLabel}>今週: {achievementStats.weekBadge.label}</span>
                   </div>
+                )}
+              </section>
+            )}
+
+            {sleepRecordEnabled && (
+              <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
+                <div style={styles.sleepRecordTitleRow}>
+                  <button
+                    type="button"
+                    style={styles.sleepRecordCollapseButton}
+                    onClick={() => setSleepRecordCollapsed((current) => !current)}
+                    aria-expanded={!sleepRecordCollapsed}
+                  >
+                    {sleepRecordCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                    <strong style={styles.sleepRecordTitle}>睡眠記録</strong>
+                  </button>
+                  <span style={styles.sleepRecordStatus}>{sleepRecord?.exists ? '保存済み' : '未記録'}</span>
+                </div>
+                {sleepOnlyMode && <div style={styles.sleepOnlyDate}>{formatWeekTitle(selectedDate)}</div>}
+                {!sleepRecordCollapsed && (
+                  <>
+                    <div style={styles.sleepRecordFields}>
+                      <label style={styles.sleepRecordField}>
+                        <span>起床</span>
+                        <input
+                          type="time"
+                          value={sleepRecord?.wakeTime || formatCurrentTime()}
+                          onChange={(event) => {
+                            setSleepSaveMessage('')
+                            setSleepRecord((current) => ({ ...(current || {}), wakeTime: event.target.value }))
+                          }}
+                          style={styles.sleepRecordInput}
+                        />
+                        <span style={styles.sleepRecordActions}>
+                          <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('wakeTime', sleepRecord?.wakeTime)} disabled={sleepSaving}>
+                            保存
+                          </button>
+                          <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('wakeTime')} disabled={sleepSaving}>
+                            現在時刻
+                          </button>
+                        </span>
+                      </label>
+                      <label style={styles.sleepRecordField}>
+                        <span>就寝</span>
+                        <input
+                          type="time"
+                          value={sleepRecord?.bedtime || formatCurrentTime()}
+                          onChange={(event) => {
+                            setSleepSaveMessage('')
+                            setSleepRecord((current) => ({ ...(current || {}), bedtime: event.target.value }))
+                          }}
+                          style={styles.sleepRecordInput}
+                        />
+                        <span style={styles.sleepRecordActions}>
+                          <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('bedtime', sleepRecord?.bedtime)} disabled={sleepSaving}>
+                            保存
+                          </button>
+                          <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('bedtime')} disabled={sleepSaving}>
+                            現在時刻
+                          </button>
+                        </span>
+                      </label>
+                    </div>
+                    {sleepSaveMessage && <div style={styles.sleepSaveMessage} role="status">{sleepSaveMessage}</div>}
+                    <div style={styles.previousSleepRecord}>
+                      <span>前日の就寝</span>
+                      <strong>{previousSleepRecord?.bedtime || '未記録'}</strong>
+                      <span style={styles.previousSleepRecordNote}>前日の記録を表示</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {!sleepOnlyMode && medicationRecordEnabled && (
+              <section className="medication-record-panel" style={styles.medicationRecordPanel} aria-label="服薬記録">
+                <div style={styles.medicationTitleRow}>
+                  <button
+                    type="button"
+                    style={styles.sleepRecordCollapseButton}
+                    onClick={() => setMedicationRecordCollapsed((current) => !current)}
+                    aria-expanded={!medicationRecordCollapsed}
+                  >
+                    {medicationRecordCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                    <strong style={styles.sleepRecordTitle}>服薬記録</strong>
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.medicationNotifyButton,
+                      ...(medicationSettingsDraft.notifyEnabled === false ? styles.medicationNotifyButtonOff : {}),
+                    }}
+                    onClick={toggleMedicationNotifyEnabled}
+                    disabled={medicationSaving}
+                    title="服薬の5分前通知のみ切り替えます（予定通知とは別です）"
+                  >
+                    {medicationSettingsDraft.notifyEnabled === false ? '服薬通知オフ' : '通知不要'}
+                  </button>
+                </div>
+                {!medicationRecordCollapsed && (
+                  <>
+                    <div style={styles.medicationSlotList}>
+                      {MEDICATION_SLOT_KEYS.map((slotKey) => {
+                        const slot = medicationRecord?.slots?.[slotKey] || { completed: false, takenAt: null }
+                        const scheduledTime = medicationSettings[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]
+                        const alert = getMedicationSlotAlert({
+                          scheduledTime,
+                          completed: slot.completed,
+                          isSelectedToday: selectedIsToday,
+                          nowMs: nowTick,
+                        })
+                        return (
+                          <div
+                            key={slotKey}
+                            className={alert === 'due' ? 'medication-slot-due' : undefined}
+                            style={{
+                              ...styles.medicationSlotRow,
+                              ...(slot.completed ? styles.medicationSlotRowDone : {}),
+                              ...(alert === 'due' ? styles.medicationSlotRowDue : {}),
+                            }}
+                          >
+                            <div style={styles.medicationSlotMeta}>
+                              <strong>{MEDICATION_SLOT_LABELS[slotKey]}</strong>
+                              <span style={styles.medicationSlotTime}>{scheduledTime}</span>
+                              {slot.completed && slot.takenAt && (
+                                <span style={styles.medicationSlotTaken}>記録 {slot.takenAt}</span>
+                              )}
+                              {alert === 'due' && !slot.completed && (
+                                <span style={styles.medicationSlotWarn}>未服薬</span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              style={{
+                                ...styles.medicationSlotButton,
+                                ...(slot.completed ? styles.medicationSlotButtonDone : {}),
+                              }}
+                              onClick={() => toggleMedicationSlot(slotKey)}
+                              disabled={medicationSaving}
+                              aria-pressed={slot.completed}
+                            >
+                              {slot.completed ? '済' : '完了'}
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div style={styles.medicationSettingsBlock} aria-label="服薬時刻の設定">
+                      <div style={styles.medicationSettingsHeading}>服薬時刻</div>
+                      <div style={styles.medicationSettingsFields}>
+                        {MEDICATION_SLOT_KEYS.map((slotKey) => (
+                          <label key={slotKey} style={styles.medicationSettingsField}>
+                            <span>{MEDICATION_SLOT_LABELS[slotKey]}</span>
+                            <input
+                              type="time"
+                              value={medicationSettingsDraft[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]}
+                              onChange={(event) => {
+                                setMedicationSaveMessage('')
+                                setMedicationSettingsDraft((current) => ({
+                                  ...current,
+                                  [slotKey]: event.target.value,
+                                }))
+                              }}
+                              style={styles.sleepRecordInput}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        style={styles.medicationSettingsSaveButton}
+                        onClick={saveMedicationSettings}
+                        disabled={medicationSaving}
+                      >
+                        時刻を保存
+                      </button>
+                    </div>
+                    {medicationSaveMessage && (
+                      <div style={styles.sleepSaveMessage} role="status">{medicationSaveMessage}</div>
+                    )}
+                  </>
                 )}
               </section>
             )}
@@ -8543,6 +8876,127 @@ const styles = {
     borderBottom: '1px solid #e8eef7',
     padding: '10px 0',
     marginBottom: '10px',
+  },
+  medicationRecordPanel: {
+    display: 'block',
+    borderTop: '1px solid #fde68a',
+    borderBottom: '1px solid #fde68a',
+    padding: '10px 0',
+    marginBottom: '10px',
+    background: '#fffbeb',
+  },
+  medicationTitleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  medicationNotifyButton: {
+    border: '1px solid #f59e0b',
+    borderRadius: '8px',
+    background: '#fff7ed',
+    color: '#9a3412',
+    fontSize: '12px',
+    fontWeight: 700,
+    padding: '6px 10px',
+    cursor: 'pointer',
+  },
+  medicationNotifyButtonOff: {
+    borderColor: '#94a3b8',
+    background: '#f1f5f9',
+    color: '#475569',
+  },
+  medicationSlotList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  medicationSlotRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '10px',
+    padding: '10px 12px',
+    borderRadius: '10px',
+    border: '1px solid #fcd34d',
+    background: '#ffffff',
+  },
+  medicationSlotRowDone: {
+    borderColor: '#86efac',
+    background: '#f0fdf4',
+  },
+  medicationSlotRowDue: {
+    borderColor: '#fb923c',
+  },
+  medicationSlotMeta: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    gap: '8px',
+    color: '#334155',
+    fontSize: '13px',
+  },
+  medicationSlotTime: {
+    color: '#64748b',
+    fontWeight: 600,
+  },
+  medicationSlotTaken: {
+    color: '#15803d',
+    fontSize: '12px',
+  },
+  medicationSlotWarn: {
+    color: '#c2410c',
+    fontWeight: 700,
+    fontSize: '12px',
+  },
+  medicationSlotButton: {
+    minWidth: '56px',
+    border: '0',
+    borderRadius: '8px',
+    background: '#ea580c',
+    color: '#ffffff',
+    fontWeight: 700,
+    fontSize: '13px',
+    padding: '8px 12px',
+    cursor: 'pointer',
+  },
+  medicationSlotButtonDone: {
+    background: '#16a34a',
+  },
+  medicationSettingsBlock: {
+    marginTop: '12px',
+    paddingTop: '10px',
+    borderTop: '1px dashed #fcd34d',
+  },
+  medicationSettingsHeading: {
+    fontSize: '12px',
+    fontWeight: 700,
+    color: '#92400e',
+    marginBottom: '8px',
+  },
+  medicationSettingsFields: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: '8px',
+  },
+  medicationSettingsField: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+    fontSize: '12px',
+    color: '#475569',
+  },
+  medicationSettingsSaveButton: {
+    marginTop: '10px',
+    border: '0',
+    borderRadius: '8px',
+    background: '#b45309',
+    color: '#ffffff',
+    fontWeight: 700,
+    fontSize: '13px',
+    padding: '8px 14px',
+    cursor: 'pointer',
   },
   sleepRecordTitleRow: {
     display: 'flex',

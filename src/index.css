@@ -57,6 +57,23 @@
   font-weight: 700;
 }
 
+@keyframes medication-slot-blink {
+  0%, 100% {
+    background-color: #fff7ed;
+    border-color: #fb923c;
+    opacity: 1;
+  }
+  50% {
+    background-color: #ffedd5;
+    border-color: #ea580c;
+    opacity: 0.72;
+  }
+}
+
+.medication-slot-due {
+  animation: medication-slot-blink 2.4s ease-in-out infinite;
+}
+
 html {
   scroll-behavior: smooth;
 }
@@ -219,6 +236,10 @@ html.schedule-card-reorder-active .schedule-section {
 .sleep-only-mode .month-calendar-section,
 .sleep-only-mode .schedule-search-section,
 .sleep-only-mode .week-section,
+.sleep-only-mode .schedule-section,
+.sleep-only-mode .achievement-bar,
+.sleep-only-mode .medication-record-panel,
+.sleep-only-mode .health-life-count-section,
 .sleep-only-mode .selected-header,
 .sleep-only-mode .double-tap-hint-banner,
 .sleep-only-mode .schedule-list,
@@ -231,19 +252,6 @@ html.schedule-card-reorder-active .schedule-section {
 .sleep-only-mode .sleep-only-main {
   min-height: 100vh !important;
   padding: 12px 0 !important;
-}
-
-.sleep-only-mode .schedule-section {
-  min-height: auto !important;
-  overflow: visible !important;
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-  padding: 0 !important;
-}
-
-.sleep-only-mode .schedule-section > :not(.sleep-record-panel) {
-  display: none !important;
 }
 
 .sleep-only-mode .sleep-record-panel {

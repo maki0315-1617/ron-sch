@@ -372,3 +372,119 @@ exports.sendScheduleStartNotifications = onSchedule(
     });
   }
 );
+
+const MEDICATION_SLOT_KEYS = ['morning', 'noon', 'evening', 'bedtime'];
+const MEDICATION_SLOT_LABELS = {
+  morning: '朝',
+  noon: '昼',
+  evening: '夜',
+  bedtime: '寝る前',
+};
+const DEFAULT_MEDICATION_TIMES = {
+  morning: '08:00',
+  noon: '12:30',
+  evening: '18:00',
+  bedtime: '22:00',
+};
+
+/** 服薬時刻の5分前通知（medication_settings.notifyEnabled が false なら送らない） */
+exports.sendMedicationReminders = onSchedule(
+  {
+    schedule: 'every 1 minutes',
+    timeZone: TIME_ZONE,
+    region: 'asia-northeast1',
+    retryCount: 0,
+  },
+  async () => {
+    const now = new Date();
+    const { dateKey, timeKey } = toDateAndTimeKey(now);
+    const graceMinutes = 5;
+    const offsetMinutes = 5;
+
+    logger.info('服薬リマインダーバッチを実行します。', { dateKey, timeKey });
+
+    const settingsSnapshot = await db.collection('medication_settings').get();
+    if (settingsSnapshot.empty) {
+      logger.info('服薬設定がありません。', { dateKey, timeKey });
+      return;
+    }
+
+    const tokenCache = new Map();
+
+    for (const settingsDoc of settingsSnapshot.docs) {
+      const userId = settingsDoc.id;
+      const data = settingsDoc.data() || {};
+      if (data.notifyEnabled === false) continue;
+
+      for (const slotKey of MEDICATION_SLOT_KEYS) {
+        const scheduledTime = data[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey];
+        if (!isDueForReminder(scheduledTime, timeKey, offsetMinutes, graceMinutes)) {
+          continue;
+        }
+
+        // 当日すでに完了済みなら送らない
+        const recordSnap = await db.collection('medication_records').doc(`${userId}_${dateKey}`).get();
+        const slotData = recordSnap.exists ? (recordSnap.data().slots || {})[slotKey] : null;
+        if (slotData && slotData.completed === true) {
+          continue;
+        }
+
+        const logId = `med_${userId}_${dateKey}_${slotKey}_${scheduledTime}_reminder${offsetMinutes}`;
+        const logRef = db.collection('notification_logs').doc(logId);
+
+        try {
+          await logRef.create({
+            kind: 'medication_reminder',
+            medication_slot: slotKey,
+            user_id: userId,
+            date: dateKey,
+            time: scheduledTime,
+            scheduled_for: scheduledTime,
+            reminder_offset_minutes: offsetMinutes,
+            status: 'pending',
+            created_at: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch (error) {
+          if (isAlreadyExistsError(error)) {
+            continue;
+          }
+          throw error;
+        }
+
+        const tokenEntries = await resolveActiveTokens(userId, tokenCache);
+        if (tokenEntries.length === 0) {
+          await logRef.set(
+            {
+              status: 'skipped_no_token',
+              updated_at: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+          continue;
+        }
+
+        const slotLabel = MEDICATION_SLOT_LABELS[slotKey] || slotKey;
+        const title = '服薬リマインダー';
+        const body = `${slotLabel}の服薬 ${offsetMinutes}分前です（${scheduledTime}）`;
+        const message = buildWebPushDataMessage(tokenEntries, {
+          medicationSlot: slotKey,
+          date: dateKey,
+          time: scheduledTime,
+          title,
+          body,
+        });
+
+        const result = await messaging.sendEachForMulticast(message);
+        await finalizeMulticastSend(logRef, result, tokenEntries, {
+          userId,
+          medicationSlot: slotKey,
+          dateKey,
+          timeKey,
+          kind: 'medication_reminder5',
+        });
+      }
+    }
+
+    logger.info('服薬リマインダーバッチを完了しました。', { dateKey, timeKey });
+  }
+);
