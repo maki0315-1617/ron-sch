@@ -14,6 +14,8 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+// 確認メール等のテンプレートを日本語にする
+auth.languageCode = 'ja';
 
 let db;
 try {

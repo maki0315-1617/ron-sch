@@ -149,6 +149,7 @@ const USAGE_TIP_AUTO_MS = 4500
 const EMAIL_VERIFICATION_RESEND_COOLDOWN_MS = 60 * 1000
 
 /** 8文字以上・英字・数字・記号をすべて含む */
+/** 8文字以上・英字・数字・記号をすべて含む */
 const validatePasswordRules = (value) => {
   const password = String(value || '')
   if (password.length < 8) {
@@ -164,6 +165,28 @@ const validatePasswordRules = (value) => {
     return 'パスワードには記号を含めてください。'
   }
   return ''
+}
+
+/** 確認メール送信（continue URL 未指定が最も確実。unauthorized-continue-uri を避ける） */
+const sendAppEmailVerification = async (user) => {
+  if (!user) {
+    throw new Error('ログインユーザーがありません。')
+  }
+  await sendEmailVerification(user)
+}
+
+const describeEmailVerificationError = (error) => {
+  const code = error?.code || ''
+  if (code === 'auth/too-many-requests') {
+    return '送信回数の上限に達しました。しばらく待ってから再送してください。'
+  }
+  if (code === 'auth/unauthorized-continue-uri' || code === 'auth/invalid-continue-uri') {
+    return '確認メールの戻り先URLが許可されていません。Firebase の Authorized domains を確認してください。'
+  }
+  if (code === 'auth/user-token-expired' || code === 'auth/requires-recent-login') {
+    return 'セッションの有効期限が切れました。一度ログアウトしてから再度ログイン／登録してください。'
+  }
+  return `確認メールの送信に失敗しました: ${error?.message || '不明なエラー'}${code ? ` (${code})` : ''}`
 }
 
 const USAGE_TIP_SLIDES = [
@@ -2099,15 +2122,13 @@ function App() {
       if (authMode === 'signup') {
         const credential = await createUserWithEmailAndPassword(auth, trimmedEmail, password)
         try {
-          await sendEmailVerification(credential.user, {
-            url: `${window.location.origin}/`,
-            handleCodeInApp: false,
-          })
+          await sendAppEmailVerification(credential.user)
           setEmailVerificationResendAt(Date.now())
-          setEmailVerificationMessage(`${trimmedEmail} 宛に確認メールを送信しました。メール内のリンクを開いてからご利用ください。`)
+          setEmailVerificationMessage(`${trimmedEmail} 宛に確認メールを送信しました。届かない場合は迷惑メールフォルダも確認し、「確認メールを再送」を試してください。`)
         } catch (verifyError) {
           console.error('確認メール送信エラー:', verifyError)
-          setEmailVerificationMessage('アカウントは作成されましたが、確認メールの送信に失敗しました。画面の「確認メールを再送」から再送してください。')
+          setEmailVerificationResendAt(0)
+          setEmailVerificationMessage(describeEmailVerificationError(verifyError))
         }
         setPassword('')
         setPasswordConfirm('')
@@ -2133,7 +2154,13 @@ function App() {
   }
 
   const handleResendEmailVerification = async () => {
-    if (!auth?.currentUser || emailVerificationBusy) return
+    const user = auth?.currentUser
+    if (!user || emailVerificationBusy) return
+    if (user.emailVerified) {
+      setEmailVerificationMessage('このアカウントはすでに確認済みです。')
+      setSession(user)
+      return
+    }
     const remainMs = emailVerificationResendAt + EMAIL_VERIFICATION_RESEND_COOLDOWN_MS - Date.now()
     if (remainMs > 0) {
       setEmailVerificationMessage(`再送は${Math.ceil(remainMs / 1000)}秒後に再度お試しいただけます。`)
@@ -2142,15 +2169,13 @@ function App() {
     setEmailVerificationBusy(true)
     setEmailVerificationMessage('')
     try {
-      await sendEmailVerification(auth.currentUser, {
-        url: `${window.location.origin}/`,
-        handleCodeInApp: false,
-      })
+      await sendAppEmailVerification(user)
       setEmailVerificationResendAt(Date.now())
-      setEmailVerificationMessage(`${auth.currentUser.email || '登録メール'} 宛に確認メールを再送しました。`)
+      setEmailVerificationMessage(`${user.email || '登録メール'} 宛に確認メールを再送しました。届かない場合は迷惑メールフォルダもご確認ください。`)
     } catch (error) {
       console.error('確認メール再送エラー:', error)
-      setEmailVerificationMessage(`確認メールの再送に失敗しました: ${error.message}`)
+      setEmailVerificationResendAt(0)
+      setEmailVerificationMessage(describeEmailVerificationError(error))
     } finally {
       setEmailVerificationBusy(false)
     }
