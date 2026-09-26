@@ -26,13 +26,27 @@ export const createEmptyMedicationSlots = () => (
   }, {})
 )
 
-export const normalizeMedicationSettings = (data = {}) => ({
-  morning: data.morning || DEFAULT_MEDICATION_TIMES.morning,
-  noon: data.noon || DEFAULT_MEDICATION_TIMES.noon,
-  evening: data.evening || DEFAULT_MEDICATION_TIMES.evening,
-  bedtime: data.bedtime || DEFAULT_MEDICATION_TIMES.bedtime,
-  notifyEnabled: data.notifyEnabled !== false,
-})
+const slotEnabledKey = (slotKey) => `${slotKey}Enabled`
+
+export const isMedicationSlotEnabled = (settings, slotKey) => {
+  if (!settings) return true
+  return settings[slotEnabledKey(slotKey)] !== false
+}
+
+export const normalizeMedicationSettings = (data = {}) => {
+  const next = {
+    morning: data.morning || DEFAULT_MEDICATION_TIMES.morning,
+    noon: data.noon || DEFAULT_MEDICATION_TIMES.noon,
+    evening: data.evening || DEFAULT_MEDICATION_TIMES.evening,
+    bedtime: data.bedtime || DEFAULT_MEDICATION_TIMES.bedtime,
+    notifyEnabled: data.notifyEnabled !== false,
+  }
+  MEDICATION_SLOT_KEYS.forEach((key) => {
+    // 未設定は「服薬あり」。明示的に false のみなし扱い
+    next[slotEnabledKey(key)] = data[slotEnabledKey(key)] !== false
+  })
+  return next
+}
 
 export const normalizeMedicationRecordSlots = (slots = {}) => {
   const next = createEmptyMedicationSlots()
@@ -49,16 +63,18 @@ export const normalizeMedicationRecordSlots = (slots = {}) => {
 
 /**
  * 今日の選択日で、指定時刻を過ぎて未完了なら注意対象。
+ * 服薬なしスロットは対象外。
  * 点滅開始: scheduled - 30分以降（未完了）
  * @returns {'none' | 'due'}
  */
 export const getMedicationSlotAlert = ({
   scheduledTime,
   completed,
+  enabled = true,
   isSelectedToday,
   nowMs,
 }) => {
-  if (completed || !isSelectedToday || !scheduledTime) return 'none'
+  if (!enabled || completed || !isSelectedToday || !scheduledTime) return 'none'
   const now = new Date(nowMs)
   const nowMinutes = now.getHours() * 60 + now.getMinutes()
   const scheduledMinutes = parseTimeValue(scheduledTime)

@@ -417,6 +417,10 @@ exports.sendMedicationReminders = onSchedule(
       if (data.notifyEnabled === false) continue;
 
       for (const slotKey of MEDICATION_SLOT_KEYS) {
+        // 服薬なしスロットは通知しない
+        if (data[`${slotKey}Enabled`] === false) {
+          continue;
+        }
         const scheduledTime = data[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey];
         if (!isDueForReminder(scheduledTime, timeKey, offsetMinutes, graceMinutes)) {
           continue;

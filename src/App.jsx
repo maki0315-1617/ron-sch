@@ -33,6 +33,7 @@ import {
   MEDICATION_SLOT_LABELS,
   createEmptyMedicationSlots,
   getMedicationSlotAlert,
+  isMedicationSlotEnabled,
   normalizeMedicationRecordSlots,
   normalizeMedicationSettings,
 } from './medicationUtils'
@@ -1583,6 +1584,7 @@ function App() {
 
   const toggleMedicationSlot = async (slotKey) => {
     if (!session || medicationSaving) return
+    if (!isMedicationSlotEnabled(medicationSettings, slotKey)) return
     const currentSlots = normalizeMedicationRecordSlots(medicationRecord?.slots)
     const current = currentSlots[slotKey] || { completed: false, takenAt: null }
     const nextCompleted = !current.completed
@@ -4252,6 +4254,7 @@ function App() {
       ? Math.round(recordedSleepMinutes.reduce((sum, minutes) => sum + minutes, 0) / recordedSleepMinutes.length)
       : null
     const formatMedSlot = (dateKey, slotKey) => {
+      if (!isMedicationSlotEnabled(medicationSettings, slotKey)) return '無'
       const record = medicationRecordMap[dateKey]
       const slot = record?.slots?.[slotKey]
       if (!slot?.completed) return '未'
@@ -4348,7 +4351,7 @@ function App() {
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
       <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th><th>服薬・朝</th><th>服薬・昼</th><th>服薬・夜</th><th>服薬・寝る前</th></tr></thead><tbody>${rows}</tbody></table>
       <h2>日別の健康生活（睡眠・疲れ・完了件数）</h2><div class="chart-box">${combinedChart}</div>
-      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。服薬列は記録の表示のみで疲れ加点には使いません。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
+      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。服薬列は記録の表示のみで疲れ加点には使いません（服薬なしの枠は「無」）。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
@@ -4546,6 +4549,7 @@ function App() {
             body: '朝・昼・夜・寝る前の4枠で服薬を記録できます。各枠の時刻は画面内で変更でき、指定時刻の前後30分から未完了の枠がゆっくり点滅します。過去の日も後から記録・取消できます。',
             points: [
               '「完了」で服薬済み、「済」をもう一度押すと取消します。',
+              '各枠で「服薬なし」にすると、その枠は記録・点滅・通知の対象外になり、PDFでは「無」と表示されます。',
               '「通知不要」は服薬の5分前通知だけをオフにします（予定の通知とは別です）。',
               '設定メニューの「服薬記録表示」で表示・非表示を切り替えられます。',
               '睡眠専用ショートカット（?sleep=1）では服薬欄は表示されません。',
@@ -6411,11 +6415,13 @@ function App() {
                   <>
                     <div style={styles.medicationSlotList}>
                       {MEDICATION_SLOT_KEYS.map((slotKey) => {
+                        const slotEnabled = isMedicationSlotEnabled(medicationSettings, slotKey)
                         const slot = medicationRecord?.slots?.[slotKey] || { completed: false, takenAt: null }
                         const scheduledTime = medicationSettings[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]
                         const alert = getMedicationSlotAlert({
                           scheduledTime,
                           completed: slot.completed,
+                          enabled: slotEnabled,
                           isSelectedToday: selectedIsToday,
                           nowMs: nowTick,
                         })
@@ -6425,56 +6431,86 @@ function App() {
                             className={alert === 'due' ? 'medication-slot-due' : undefined}
                             style={{
                               ...styles.medicationSlotRow,
-                              ...(slot.completed ? styles.medicationSlotRowDone : {}),
+                              ...(slotEnabled && slot.completed ? styles.medicationSlotRowDone : {}),
                               ...(alert === 'due' ? styles.medicationSlotRowDue : {}),
+                              ...(!slotEnabled ? styles.medicationSlotRowDisabled : {}),
                             }}
                           >
                             <div style={styles.medicationSlotMeta}>
                               <strong>{MEDICATION_SLOT_LABELS[slotKey]}</strong>
-                              <span style={styles.medicationSlotTime}>{scheduledTime}</span>
-                              {slot.completed && slot.takenAt && (
-                                <span style={styles.medicationSlotTaken}>記録 {slot.takenAt}</span>
-                              )}
-                              {alert === 'due' && !slot.completed && (
-                                <span style={styles.medicationSlotWarn}>未服薬</span>
+                              {slotEnabled ? (
+                                <>
+                                  <span style={styles.medicationSlotTime}>{scheduledTime}</span>
+                                  {slot.completed && slot.takenAt && (
+                                    <span style={styles.medicationSlotTaken}>記録 {slot.takenAt}</span>
+                                  )}
+                                  {alert === 'due' && !slot.completed && (
+                                    <span style={styles.medicationSlotWarn}>未服薬</span>
+                                  )}
+                                </>
+                              ) : (
+                                <span style={styles.medicationSlotNone}>無</span>
                               )}
                             </div>
-                            <button
-                              type="button"
-                              style={{
-                                ...styles.medicationSlotButton,
-                                ...(slot.completed ? styles.medicationSlotButtonDone : {}),
-                              }}
-                              onClick={() => toggleMedicationSlot(slotKey)}
-                              disabled={medicationSaving}
-                              aria-pressed={slot.completed}
-                            >
-                              {slot.completed ? '済' : '完了'}
-                            </button>
+                            {slotEnabled ? (
+                              <button
+                                type="button"
+                                style={{
+                                  ...styles.medicationSlotButton,
+                                  ...(slot.completed ? styles.medicationSlotButtonDone : {}),
+                                }}
+                                onClick={() => toggleMedicationSlot(slotKey)}
+                                disabled={medicationSaving}
+                                aria-pressed={slot.completed}
+                              >
+                                {slot.completed ? '済' : '完了'}
+                              </button>
+                            ) : (
+                              <span style={styles.medicationSlotNoneBadge}>服薬なし</span>
+                            )}
                           </div>
                         )
                       })}
                     </div>
                     <div style={styles.medicationSettingsBlock} aria-label="服薬時刻の設定">
-                      <div style={styles.medicationSettingsHeading}>服薬時刻</div>
+                      <div style={styles.medicationSettingsHeading}>服薬時刻・有無</div>
                       <div style={styles.medicationSettingsFields}>
-                        {MEDICATION_SLOT_KEYS.map((slotKey) => (
-                          <label key={slotKey} style={styles.medicationSettingsField}>
-                            <span>{MEDICATION_SLOT_LABELS[slotKey]}</span>
-                            <input
-                              type="time"
-                              value={medicationSettingsDraft[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]}
-                              onChange={(event) => {
-                                setMedicationSaveMessage('')
-                                setMedicationSettingsDraft((current) => ({
-                                  ...current,
-                                  [slotKey]: event.target.value,
-                                }))
-                              }}
-                              style={styles.sleepRecordInput}
-                            />
-                          </label>
-                        ))}
+                        {MEDICATION_SLOT_KEYS.map((slotKey) => {
+                          const enabledKey = `${slotKey}Enabled`
+                          const slotEnabled = medicationSettingsDraft[enabledKey] !== false
+                          return (
+                            <div key={slotKey} style={styles.medicationSettingsField}>
+                              <span>{MEDICATION_SLOT_LABELS[slotKey]}</span>
+                              <label style={styles.medicationEnabledLabel}>
+                                <input
+                                  type="checkbox"
+                                  checked={slotEnabled}
+                                  onChange={(event) => {
+                                    setMedicationSaveMessage('')
+                                    setMedicationSettingsDraft((current) => ({
+                                      ...current,
+                                      [enabledKey]: event.target.checked,
+                                    }))
+                                  }}
+                                />
+                                服薬あり
+                              </label>
+                              <input
+                                type="time"
+                                value={medicationSettingsDraft[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]}
+                                onChange={(event) => {
+                                  setMedicationSaveMessage('')
+                                  setMedicationSettingsDraft((current) => ({
+                                    ...current,
+                                    [slotKey]: event.target.value,
+                                  }))
+                                }}
+                                style={styles.sleepRecordInput}
+                                disabled={!slotEnabled}
+                              />
+                            </div>
+                          )
+                        })}
                       </div>
                       <button
                         type="button"
@@ -6482,7 +6518,7 @@ function App() {
                         onClick={saveMedicationSettings}
                         disabled={medicationSaving}
                       >
-                        時刻を保存
+                        設定を保存
                       </button>
                     </div>
                     {medicationSaveMessage && (
@@ -8929,6 +8965,11 @@ const styles = {
   medicationSlotRowDue: {
     borderColor: '#fb923c',
   },
+  medicationSlotRowDisabled: {
+    borderColor: '#e2e8f0',
+    background: '#f8fafc',
+    opacity: 0.9,
+  },
   medicationSlotMeta: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -8940,6 +8981,16 @@ const styles = {
   medicationSlotTime: {
     color: '#64748b',
     fontWeight: 600,
+  },
+  medicationSlotNone: {
+    color: '#64748b',
+    fontWeight: 700,
+  },
+  medicationSlotNoneBadge: {
+    fontSize: '12px',
+    fontWeight: 700,
+    color: '#64748b',
+    padding: '6px 10px',
   },
   medicationSlotTaken: {
     color: '#15803d',
@@ -8986,6 +9037,14 @@ const styles = {
     gap: '4px',
     fontSize: '12px',
     color: '#475569',
+  },
+  medicationEnabledLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    fontSize: '12px',
+    color: '#334155',
+    fontWeight: 600,
   },
   medicationSettingsSaveButton: {
     marginTop: '10px',
