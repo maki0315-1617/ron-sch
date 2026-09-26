@@ -7,6 +7,8 @@ import {
   deleteUser,
   onAuthStateChanged,
   reauthenticateWithCredential,
+  reload,
+  sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
@@ -25,7 +27,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, Eye, EyeOff, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import {
   DEFAULT_MEDICATION_TIMES,
@@ -144,6 +146,25 @@ const isSleepShortcutLaunch = () => {
 const demoNoticeStorageKey = (uid) => `${DEMO_NOTICE_SEEN_KEY}:${uid || 'anon'}`
 const usageTipsDismissedStorageKey = (uid) => `${USAGE_TIPS_DISMISSED_KEY}:${uid || 'anon'}`
 const USAGE_TIP_AUTO_MS = 4500
+const EMAIL_VERIFICATION_RESEND_COOLDOWN_MS = 60 * 1000
+
+/** 8文字以上・英字・数字・記号をすべて含む */
+const validatePasswordRules = (value) => {
+  const password = String(value || '')
+  if (password.length < 8) {
+    return 'パスワードは8文字以上にしてください。'
+  }
+  if (!/[A-Za-z]/.test(password)) {
+    return 'パスワードには英字を含めてください。'
+  }
+  if (!/[0-9]/.test(password)) {
+    return 'パスワードには数字を含めてください。'
+  }
+  if (!/[^A-Za-z0-9]/.test(password)) {
+    return 'パスワードには記号を含めてください。'
+  }
+  return ''
+}
 
 const USAGE_TIP_SLIDES = [
   {
@@ -565,7 +586,14 @@ function App() {
   const [authMode, setAuthMode] = useState('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [passwordConfirm, setPasswordConfirm] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showPasswordConfirm, setShowPasswordConfirm] = useState(false)
   const [authError, setAuthError] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [emailVerificationBusy, setEmailVerificationBusy] = useState(false)
+  const [emailVerificationMessage, setEmailVerificationMessage] = useState('')
+  const [emailVerificationResendAt, setEmailVerificationResendAt] = useState(0)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [scheduleMap, setScheduleMap] = useState({})
   const [holidayMap, setHolidayMap] = useState({})
@@ -683,7 +711,10 @@ function App() {
   const sleepOnlyMode = isSleepShortcutLaunch()
   // 判定前・失敗時は本番扱い（デモ制限をかけない）
   const [demoMode, setDemoMode] = useState(false)
+  const [demoResolved, setDemoResolved] = useState(false)
   const [demoWelcomeOpen, setDemoWelcomeOpen] = useState(false)
+  // メール未確認はデモ／本番を問わず本編不可（subscriptions 判定より先にゲート）
+  const needsEmailVerification = Boolean(session && session.emailVerified !== true)
 
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -754,12 +785,15 @@ function App() {
     let cancelled = false
     if (!session) {
       setDemoMode(false)
+      setDemoResolved(false)
       setDemoWelcomeOpen(false)
+      setEmailVerificationMessage('')
       return undefined
     }
 
     // 切り替え直後は一旦本番扱いし、結果がデモのときだけ制限を適用
     setDemoMode(false)
+    setDemoResolved(false)
     setDemoWelcomeOpen(false)
 
     ;(async () => {
@@ -767,6 +801,7 @@ function App() {
       if (cancelled) return
       const nextDemoMode = !isProduction
       setDemoMode(nextDemoMode)
+      setDemoResolved(true)
       if (!nextDemoMode) {
         setDemoWelcomeOpen(false)
         return
@@ -891,10 +926,11 @@ function App() {
     setInitialScheduleReady(false)
   }, [session?.uid])
 
+  // 利用方法吹き出しは本編表示時のみ（メール未確認・デモ判定待ちでは出さない）
   useEffect(() => {
-    // 予定取得後・デモ案内が閉じたあとに、利用方法吹き出しを1回表示する
     if (!session || !initialScheduleReady) return
     if (sleepOnlyMode || demoWelcomeOpen) return
+    if (needsEmailVerification || !demoResolved) return
     if (usageTipsShownRef.current) return
     if (isUsageTipsDismissed(session.uid)) {
       usageTipsShownRef.current = true
@@ -903,7 +939,7 @@ function App() {
     usageTipsShownRef.current = true
     setUsageTipIndex(0)
     setShowUsageTipsModal(true)
-  }, [session?.uid, initialScheduleReady, sleepOnlyMode, demoWelcomeOpen])
+  }, [session?.uid, initialScheduleReady, sleepOnlyMode, demoWelcomeOpen, demoResolved, needsEmailVerification])
 
   useEffect(() => {
     // アカウント切り替え時は週キャッシュを破棄して再取得させる
@@ -2038,15 +2074,106 @@ function App() {
   const handleAuth = async (e) => {
     e.preventDefault()
     setAuthError('')
+    setEmailVerificationMessage('')
 
+    const trimmedEmail = email.trim()
+    if (!trimmedEmail) {
+      setAuthError('メールアドレスを入力してください。')
+      return
+    }
+
+    if (authMode === 'signup') {
+      const passwordError = validatePasswordRules(password)
+      if (passwordError) {
+        setAuthError(passwordError)
+        return
+      }
+      if (password !== passwordConfirm) {
+        setAuthError('パスワード（確認）が一致しません。')
+        return
+      }
+    }
+
+    setAuthBusy(true)
     try {
       if (authMode === 'signup') {
-        await createUserWithEmailAndPassword(auth, email, password)
+        const credential = await createUserWithEmailAndPassword(auth, trimmedEmail, password)
+        try {
+          await sendEmailVerification(credential.user, {
+            url: `${window.location.origin}/`,
+            handleCodeInApp: false,
+          })
+          setEmailVerificationResendAt(Date.now())
+          setEmailVerificationMessage(`${trimmedEmail} 宛に確認メールを送信しました。メール内のリンクを開いてからご利用ください。`)
+        } catch (verifyError) {
+          console.error('確認メール送信エラー:', verifyError)
+          setEmailVerificationMessage('アカウントは作成されましたが、確認メールの送信に失敗しました。画面の「確認メールを再送」から再送してください。')
+        }
+        setPassword('')
+        setPasswordConfirm('')
       } else {
-        await signInWithEmailAndPassword(auth, email, password)
+        await signInWithEmailAndPassword(auth, trimmedEmail, password)
       }
     } catch (error) {
-      setAuthError(error.message)
+      console.error('認証エラー:', error)
+      if (error.code === 'auth/email-already-in-use') {
+        setAuthError('このメールアドレスは既に登録されています。ログインするか、確認メールを再送してください。')
+      } else if (error.code === 'auth/weak-password') {
+        setAuthError('パスワードが弱すぎます。8文字以上で英字・数字・記号を含めてください。')
+      } else if (error.code === 'auth/invalid-email') {
+        setAuthError('有効なメールアドレスを入力してください。')
+      } else if (error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found') {
+        setAuthError('メールアドレスまたはパスワードが正しくありません。')
+      } else {
+        setAuthError(error.message)
+      }
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handleResendEmailVerification = async () => {
+    if (!auth?.currentUser || emailVerificationBusy) return
+    const remainMs = emailVerificationResendAt + EMAIL_VERIFICATION_RESEND_COOLDOWN_MS - Date.now()
+    if (remainMs > 0) {
+      setEmailVerificationMessage(`再送は${Math.ceil(remainMs / 1000)}秒後に再度お試しいただけます。`)
+      return
+    }
+    setEmailVerificationBusy(true)
+    setEmailVerificationMessage('')
+    try {
+      await sendEmailVerification(auth.currentUser, {
+        url: `${window.location.origin}/`,
+        handleCodeInApp: false,
+      })
+      setEmailVerificationResendAt(Date.now())
+      setEmailVerificationMessage(`${auth.currentUser.email || '登録メール'} 宛に確認メールを再送しました。`)
+    } catch (error) {
+      console.error('確認メール再送エラー:', error)
+      setEmailVerificationMessage(`確認メールの再送に失敗しました: ${error.message}`)
+    } finally {
+      setEmailVerificationBusy(false)
+    }
+  }
+
+  const handleRefreshEmailVerification = async () => {
+    if (!auth?.currentUser || emailVerificationBusy) return
+    setEmailVerificationBusy(true)
+    setEmailVerificationMessage('')
+    try {
+      await reload(auth.currentUser)
+      const refreshed = auth.currentUser
+      setSession(refreshed)
+      if (refreshed?.emailVerified) {
+        setEmailVerificationMessage('メール確認が完了しました。')
+      } else {
+        setEmailVerificationMessage('まだ確認が完了していません。メール内のリンクを開いたあと、もう一度お試しください。')
+      }
+    } catch (error) {
+      console.error('メール確認状態の更新エラー:', error)
+      setEmailVerificationMessage(`確認状態の更新に失敗しました: ${error.message}`)
+    } finally {
+      setEmailVerificationBusy(false)
     }
   }
 
@@ -5407,34 +5534,138 @@ function App() {
                 placeholder="メールアドレス"
                 style={styles.input}
                 required
+                autoComplete="email"
+                disabled={authBusy}
               />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="パスワード"
-                style={styles.input}
-                required
-              />
+              <div style={styles.passwordFieldWrap}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={authMode === 'signup' ? 'パスワード（8文字以上・英数字・記号）' : 'パスワード'}
+                  style={styles.passwordInput}
+                  required
+                  autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
+                  disabled={authBusy}
+                />
+                <button
+                  type="button"
+                  style={styles.passwordToggleButton}
+                  onClick={() => setShowPassword((current) => !current)}
+                  aria-label={showPassword ? 'パスワードを隠す' : 'パスワードを表示'}
+                  disabled={authBusy}
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              {authMode === 'signup' && (
+                <>
+                  <div style={styles.passwordFieldWrap}>
+                    <input
+                      type={showPasswordConfirm ? 'text' : 'password'}
+                      value={passwordConfirm}
+                      onChange={(e) => setPasswordConfirm(e.target.value)}
+                      placeholder="パスワード（確認）"
+                      style={styles.passwordInput}
+                      required
+                      autoComplete="new-password"
+                      disabled={authBusy}
+                    />
+                    <button
+                      type="button"
+                      style={styles.passwordToggleButton}
+                      onClick={() => setShowPasswordConfirm((current) => !current)}
+                      aria-label={showPasswordConfirm ? '確認パスワードを隠す' : '確認パスワードを表示'}
+                      disabled={authBusy}
+                    >
+                      {showPasswordConfirm ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                  <p style={styles.passwordHint}>
+                    パスワードは8文字以上で、英字・数字・記号をすべて含めてください。登録後に確認メールのリンクを開くと利用できます。
+                  </p>
+                </>
+              )}
               {authMode === 'login' && (
                 <div style={{ textAlign: 'right', marginTop: '-4px', marginBottom: '8px' }}>
                   <button
                     type="button"
                     style={{ ...styles.textButton, fontSize: '12px', padding: 0 }}
                     onClick={handleSendPasswordReset}
+                    disabled={authBusy}
                   >
                     パスワードをお忘れの方はこちら
                   </button>
                 </div>
               )}
-              <button type="submit" style={styles.primaryButton}>
-                {authMode === 'login' ? 'ログイン' : '登録する'}
+              <button type="submit" style={styles.primaryButton} disabled={authBusy}>
+                {authBusy ? '処理中…' : (authMode === 'login' ? 'ログイン' : '登録する')}
               </button>
             </form>
 
-            <button type="button" style={styles.textButton} onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
+            <button
+              type="button"
+              style={styles.textButton}
+              disabled={authBusy}
+              onClick={() => {
+                setAuthMode(authMode === 'login' ? 'signup' : 'login')
+                setAuthError('')
+                setPasswordConfirm('')
+                setShowPassword(false)
+                setShowPasswordConfirm(false)
+              }}
+            >
               {authMode === 'login' ? 'アカウントをお持ちでない方は新規登録' : 'すでにアカウントをお持ちの方はこちら'}
             </button>
+          </div>
+        </div>
+      ) : needsEmailVerification ? (
+        <div style={styles.authContainer}>
+          <div style={styles.authBox}>
+            <div style={styles.brandRow}>
+              <Mail size={28} color="#2d6cdf" />
+              <h2 style={styles.brandTitle}>メール確認が必要です</h2>
+            </div>
+            <p style={styles.authCaption}>
+              {session.email || '登録メール'} 宛に確認メールを送信しました。メール内のリンクを開いたあと、「確認が完了した」を押してください。
+            </p>
+            {emailVerificationMessage && <p style={styles.authInfo}>{emailVerificationMessage}</p>}
+            <div style={styles.authForm}>
+              <button
+                type="button"
+                style={styles.primaryButton}
+                onClick={handleRefreshEmailVerification}
+                disabled={emailVerificationBusy}
+              >
+                {emailVerificationBusy ? '確認中…' : '確認が完了した'}
+              </button>
+              <button
+                type="button"
+                style={styles.secondaryButton}
+                onClick={handleResendEmailVerification}
+                disabled={emailVerificationBusy}
+              >
+                確認メールを再送
+              </button>
+              <button
+                type="button"
+                style={styles.textButton}
+                onClick={() => signOut(auth)}
+                disabled={emailVerificationBusy}
+              >
+                ログアウト
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : !demoResolved ? (
+        <div style={styles.authContainer}>
+          <div style={styles.authBox}>
+            <div style={styles.brandRow}>
+              <CalendarDays size={28} color="#2d6cdf" />
+              <h2 style={styles.brandTitle}>{APP_DISPLAY_NAME}</h2>
+            </div>
+            <p style={styles.authCaption}>アカウントを確認しています…</p>
           </div>
         </div>
       ) : (
@@ -8124,6 +8355,13 @@ const styles = {
     fontSize: '13px',
     textAlign: 'center',
   },
+  authInfo: {
+    margin: '0 0 12px',
+    color: '#1d4ed8',
+    fontSize: '13px',
+    textAlign: 'center',
+    lineHeight: 1.5,
+  },
   authForm: {
     display: 'flex',
     flexDirection: 'column',
@@ -8136,6 +8374,39 @@ const styles = {
     border: '1px solid #d9e2f2',
     background: '#f8fbff',
     fontSize: '14px',
+  },
+  passwordFieldWrap: {
+    position: 'relative',
+    width: '100%',
+  },
+  passwordInput: {
+    width: '100%',
+    padding: '12px 44px 12px 14px',
+    borderRadius: '10px',
+    border: '1px solid #d9e2f2',
+    background: '#f8fbff',
+    fontSize: '14px',
+    boxSizing: 'border-box',
+  },
+  passwordToggleButton: {
+    position: 'absolute',
+    top: '50%',
+    right: '10px',
+    transform: 'translateY(-50%)',
+    border: 0,
+    background: 'transparent',
+    color: '#64748b',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '4px',
+    cursor: 'pointer',
+  },
+  passwordHint: {
+    margin: '-4px 0 0',
+    color: '#64748b',
+    fontSize: '12px',
+    lineHeight: 1.5,
   },
   primaryButton: {
     background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
