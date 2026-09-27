@@ -3603,6 +3603,12 @@ function App() {
     clearLongPress()
     lastCardTapRef.current = { id: null, time: 0 }
     scheduleDragMovedRef.current = true
+    // 長押しで達成バーの絵文字などが選択されるのを防ぐ（並び替え機能自体は変更しない）
+    try {
+      window.getSelection?.()?.removeAllRanges?.()
+    } catch {
+      // ignore
+    }
     const next = {
       itemId: item.id,
       pointerId: event.pointerId,
@@ -3687,8 +3693,19 @@ function App() {
     const captureEl = event.currentTarget
     const pointerId = event.pointerId
 
+    try {
+      window.getSelection?.()?.removeAllRanges?.()
+    } catch {
+      // ignore
+    }
+
     holdTimerRef.current = window.setTimeout(() => {
       holdTimerRef.current = null
+      try {
+        window.getSelection?.()?.removeAllRanges?.()
+      } catch {
+        // ignore
+      }
       beginScheduleCardDrag(item, { pointerId, clientY: startY }, captureEl)
     }, SCHEDULE_LONG_PRESS_MS)
 
@@ -9355,6 +9372,9 @@ const styles = {
     marginBottom: '14px',
     padding: '10px 14px',
     boxShadow: '0 6px 18px rgba(251,146,60,0.08)',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
+    WebkitTouchCallout: 'none',
   },
   achievementItem: {
     display: 'flex',
@@ -9362,6 +9382,8 @@ const styles = {
     gap: '6px',
     fontSize: '13px',
     color: '#7c2d12',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
   },
   achievementBadge: {
     display: 'flex',
@@ -9372,9 +9394,14 @@ const styles = {
     background: '#ffedd5',
     borderRadius: '999px',
     padding: '3px 10px',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
   },
   achievementIcon: {
     fontSize: '16px',
+    userSelect: 'none',
+    WebkitUserSelect: 'none',
+    WebkitTouchCallout: 'none',
   },
   achievementLabel: {
     whiteSpace: 'normal',
@@ -10021,6 +10048,7 @@ const styles = {
     cursor: 'pointer',
     userSelect: 'none',
     WebkitUserSelect: 'none',
+    WebkitTouchCallout: 'none',
     touchAction: 'manipulation',
     overflow: 'visible',
   },
