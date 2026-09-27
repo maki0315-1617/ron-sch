@@ -338,6 +338,11 @@ html.schedule-card-reorder-active .schedule-section {
     font-size: 17px !important;
   }
 
+  .app-brand-mark {
+    width: 28px !important;
+    height: 28px !important;
+  }
+
   .app-user-email {
     display: none !important;
   }

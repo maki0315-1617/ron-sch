@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 720" role="img" aria-label="Ron AI Systems">
+  <path fill="#FFFFFF" fill-rule="evenodd" d="M 78 28 H 268 C 456 28 552 118 552 268 C 552 392 468 476 328 498 L 548 692 H 392 L 214 498 H 206 V 692 H 78 Z M 292 168 L 412 392 L 176 392 Z"/>
+  <g fill="none" stroke="#E10600" stroke-width="22" stroke-linejoin="miter" stroke-linecap="butt">
+    <path d="M 8 408 H 132 L 176 364 L 236 512 L 304 332 L 362 456 L 414 408 H 586"/>
+    <path d="M 612 352 V 464"/>
+  </g>
+</svg>

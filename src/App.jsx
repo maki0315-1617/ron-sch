@@ -82,6 +82,10 @@ const HELP_MAIL_ADDRESS = 'ronron201907@gmail.com'
 const SLEEP_SHORTCUT_URL = 'https://www.icloud.com/shortcuts/829d308f0a34444fbf032d3d0b5f467c'
 const APP_DISPLAY_NAME = 'ロンスケ＋ジュール'
 const APP_DISPLAY_NAME_EN = 'Ron Sche+dule'
+const APP_BRAND_MARK_URL = '/brand/schlogo1.jpg'
+const COMPANY_MARK_URL = '/brand/ron-ai-systems-mark.svg'
+const COMPANY_NAME_JA = 'ロンAIシステムズ'
+const COMPANY_NAME_EN = 'Ron AI Systems'
 
 const buildSubscriptionCancelContactUrl = (email) => {
   const url = new URL(CONTACT_FORM_URL)
@@ -104,7 +108,7 @@ const helpContent = {
     fatigueGuideButton: '「疲れ」判定の説明PDFを開く',
     fatigueDisclaimer: '「疲れ」のスコアとメッセージは、睡眠記録と予定から算出した生活・予定管理の目安です。医療上の診断・治療・服薬判断の代わりにはなりません。',
     prButton: 'アプリ紹介・PRスライドPDFをダウンロード',
-    pricingButton: '有料版の購入はこちら（料金プラン）',
+    pricingButton: '有料版の購入はこちら（料金）',
     shortcutButton: 'iPhone用「睡眠記録」ショートカットを取得',
     about: `『${APP_DISPLAY_NAME}』は、日々の予定管理を簡単にし、達成感と継続を支えるためのアプリです。`,
     summary: '予定の登録から通知、進捗確認まで、日々の生活に沿った使い方をサポートします。',
@@ -5549,7 +5553,7 @@ function App() {
         <div style={styles.authContainer}>
           <div style={styles.authBox}>
             <div style={styles.brandRow}>
-              <CalendarDays size={28} color="#2d6cdf" />
+              <img src={APP_BRAND_MARK_URL} alt="" style={styles.brandMark} width={40} height={40} />
               <h2 style={styles.brandTitle}>{APP_DISPLAY_NAME}</h2>
             </div>
             <p style={styles.authCaption}>{authMode === 'login' ? 'ログイン画面' : '新規登録画面'}</p>
@@ -5652,7 +5656,7 @@ function App() {
         <div style={styles.authContainer}>
           <div style={styles.authBox}>
             <div style={styles.brandRow}>
-              <Mail size={28} color="#2d6cdf" />
+              <img src={APP_BRAND_MARK_URL} alt="" style={styles.brandMark} width={40} height={40} />
               <h2 style={styles.brandTitle}>メール確認が必要です</h2>
             </div>
             <p style={styles.authCaption}>
@@ -5691,7 +5695,7 @@ function App() {
         <div style={styles.authContainer}>
           <div style={styles.authBox}>
             <div style={styles.brandRow}>
-              <CalendarDays size={28} color="#2d6cdf" />
+              <img src={APP_BRAND_MARK_URL} alt="" style={styles.brandMark} width={40} height={40} />
               <h2 style={styles.brandTitle}>{APP_DISPLAY_NAME}</h2>
             </div>
             <p style={styles.authCaption}>アカウントを確認しています…</p>
@@ -5702,9 +5706,19 @@ function App() {
           {demoMode && session && (
             <div className="demo-mode-banner" style={styles.demoModeBanner} role="status">
               <strong style={styles.demoModeBadge}>DEMO</strong>
-              <span>
-                デモ版です。登録は1日{DEMO_MAX_PER_DAY}件・全体{DEMO_MAX_TOTAL}件まで。ログアウト／アカウント削除はできません。
-              </span>
+              <div style={styles.demoModeBannerBody}>
+                <span>
+                  デモ版です。登録は1日{DEMO_MAX_PER_DAY}件・全体{DEMO_MAX_TOTAL}件まで。ログアウト／アカウント削除はできません。
+                </span>
+                <a
+                  href={HELP_PRICING_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={styles.demoPricingLink}
+                >
+                  {helpContent[helpLang].pricingButton}
+                </a>
+              </div>
             </div>
           )}
           {loading && (
@@ -5965,7 +5979,14 @@ function App() {
                   </div>
                 )}
               </div>
-              <CalendarDays size={26} color="#2563eb" />
+              <img
+                src={APP_BRAND_MARK_URL}
+                alt=""
+                className="app-brand-mark"
+                style={styles.headerBrandMark}
+                width={32}
+                height={32}
+              />
               <h1 style={styles.title} className="app-title">{APP_DISPLAY_NAME}</h1>
             </div>
 
@@ -7097,7 +7118,18 @@ function App() {
             )}
 
             {!sleepOnlyMode && (
-              <div style={styles.homeCopyright}>© {new Date().getFullYear()} {APP_DISPLAY_NAME}</div>
+              <div style={styles.homeCopyright}>
+                <img
+                  src={COMPANY_MARK_URL}
+                  alt={COMPANY_NAME_JA}
+                  style={styles.homeCompanyMark}
+                  width={48}
+                  height={54}
+                />
+                <div style={styles.homeCopyrightText}>
+                  © {new Date().getFullYear()} {COMPANY_NAME_JA} / {COMPANY_NAME_EN}. All rights reserved.
+                </div>
+              </div>
             )}
           </main>
           )}
@@ -8384,6 +8416,14 @@ const styles = {
     gap: '10px',
     marginBottom: '8px',
   },
+  brandMark: {
+    width: '40px',
+    height: '40px',
+    objectFit: 'contain',
+    borderRadius: '10px',
+    flexShrink: 0,
+    display: 'block',
+  },
   brandTitle: {
     margin: 0,
     fontSize: '26px',
@@ -8503,6 +8543,27 @@ const styles = {
     fontSize: '13px',
     lineHeight: 1.5,
   },
+  demoModeBannerBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: '8px',
+    minWidth: 0,
+    flex: 1,
+  },
+  demoPricingLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '7px 12px',
+    borderRadius: '999px',
+    background: 'linear-gradient(135deg, #b45309 0%, #c2410c 100%)',
+    color: '#ffffff',
+    fontSize: '12px',
+    fontWeight: 700,
+    textDecoration: 'none',
+    lineHeight: 1.3,
+  },
   demoModeBadge: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -8610,6 +8671,14 @@ const styles = {
     alignItems: 'center',
     gap: '10px',
     minWidth: 0,
+  },
+  headerBrandMark: {
+    width: '32px',
+    height: '32px',
+    objectFit: 'contain',
+    borderRadius: '8px',
+    flexShrink: 0,
+    display: 'block',
   },
   title: {
     margin: 0,
@@ -8799,10 +8868,23 @@ const styles = {
   },
   homeCopyright: {
     marginTop: '16px',
-    paddingTop: '12px',
+    paddingTop: '14px',
     borderTop: '1px solid #e2e8f0',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '8px',
     textAlign: 'center',
+  },
+  homeCompanyMark: {
+    width: '48px',
+    height: '54px',
+    objectFit: 'contain',
+    display: 'block',
+  },
+  homeCopyrightText: {
     fontSize: '11px',
+    lineHeight: 1.5,
     color: '#94a3b8',
   },
   footerStepsLine: {
