@@ -157,7 +157,7 @@ messaging.onBackgroundMessage((payload) => {
 
     await self.registration.showNotification(title, {
       body,
-      icon: '/pwa-192.png',
+      icon: '/brand/schlogo1.jpg',
       badge: '/pwa-192.png',
       tag: getNotificationTag(payload),
       renotify: true,

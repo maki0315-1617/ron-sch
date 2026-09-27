@@ -1601,7 +1601,12 @@ function App() {
           })
           return next
         })
-        const notification = new Notification(title, { body, tag })
+        const notification = new Notification(title, {
+          body,
+          tag,
+          icon: APP_BRAND_MARK_URL,
+          badge: '/pwa-192.png',
+        })
         notification.onclick = () => {
           setNotificationBadgeCount((current) => {
             const next = Math.max(current - 1, 0)
