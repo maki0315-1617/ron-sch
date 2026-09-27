@@ -187,7 +187,7 @@ const bandsWithEn = fatigueScoringReference.bands.map((band) => ({
           : 'Take it easy',
 }))
 
-export const buildFatigueGuideHtml = (lang = 'ja') => {
+export const buildFatigueGuideHtml = (lang = 'ja', brand = null) => {
   const doc = content[lang] || content.ja
   const sectionsHtml = doc.sections
     .map(
@@ -199,6 +199,9 @@ export const buildFatigueGuideHtml = (lang = 'ja') => {
       </section>`
     )
     .join('')
+
+  const brandBarHtml = brand?.barHtml || ''
+  const brandCss = brand?.css || ''
 
   return `<!doctype html>
 <html lang="${doc.htmlLang}">
@@ -221,6 +224,7 @@ export const buildFatigueGuideHtml = (lang = 'ja') => {
       padding: 12px 20px; font-size: 15px; cursor: pointer;
     }
     button.close-button { background: #64748b; }
+    ${brandCss}
     h1 { margin: 0 0 8px; font-size: 24px; color: #0f172a; }
     .subtitle { margin: 0 0 16px; color: #475569; font-size: 14px; line-height: 1.7; }
     .disclaimer {
@@ -256,6 +260,7 @@ export const buildFatigueGuideHtml = (lang = 'ja') => {
       <button type="button" onclick="window.print()">${escapeHtml(doc.saveLabel)}</button>
       <button type="button" class="close-button" onclick="window.close()">${escapeHtml(doc.closeLabel)}</button>
     </div>
+    ${brandBarHtml}
     <h1>${escapeHtml(doc.title)}</h1>
     <p class="subtitle">${escapeHtml(doc.subtitle)}</p>
     <div class="disclaimer" role="note">

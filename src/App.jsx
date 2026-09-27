@@ -478,6 +478,15 @@ const escapeCsvField = (value) => {
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
+const mimeTypeFromPublicPath = (path) => {
+  const lower = String(path || '').toLowerCase().split('?')[0]
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.svg')) return 'image/svg+xml'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.gif')) return 'image/gif'
+  return 'image/png'
+}
+
 const loadPublicImageAsDataUrl = async (path, removeLightBackground = false) => {
   const response = await fetch(path)
   if (!response.ok) throw new Error(`画像を読み込めませんでした: ${path}`)
@@ -508,7 +517,97 @@ const loadPublicImageAsDataUrl = async (path, removeLightBackground = false) => 
   for (let offset = 0; offset < bytes.length; offset += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
   }
-  return `data:image/png;base64,${btoa(binary)}`
+  return `data:${mimeTypeFromPublicPath(path)};base64,${btoa(binary)}`
+}
+
+const loadPdfBrandAssets = async () => {
+  const [appIconSrc, companyMarkSrc] = await Promise.all([
+    loadPublicImageAsDataUrl(APP_BRAND_MARK_URL),
+    loadPublicImageAsDataUrl(COMPANY_MARK_URL),
+  ])
+  return { appIconSrc, companyMarkSrc }
+}
+
+const PDF_BRAND_BAR_CSS = `
+.pdf-brand-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 100%);
+}
+.pdf-brand-app,
+.pdf-brand-company {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pdf-app-icon {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border-radius: 10px;
+  flex-shrink: 0;
+  display: block;
+}
+.pdf-company-mark {
+  width: 34px;
+  height: 38px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: block;
+}
+.pdf-app-name,
+.pdf-company-name {
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.35;
+}
+.pdf-company-name {
+  color: #334155;
+  font-weight: 700;
+}
+.pdf-brand-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pdf-brand-sub {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+`
+
+const buildPdfBrandBarHtml = ({ appIconSrc, companyMarkSrc, lang = 'ja' }) => {
+  const appName = lang === 'en' ? APP_DISPLAY_NAME_EN : APP_DISPLAY_NAME
+  const companyName = lang === 'en' ? COMPANY_NAME_EN : COMPANY_NAME_JA
+  const companySub = lang === 'en' ? COMPANY_NAME_JA : COMPANY_NAME_EN
+  return `
+    <div class="pdf-brand-bar">
+      <div class="pdf-brand-app">
+        <img class="pdf-app-icon" src="${appIconSrc}" alt="" />
+        <div class="pdf-brand-meta">
+          <span class="pdf-app-name">${escapeHtml(appName)}</span>
+          <span class="pdf-brand-sub">${escapeHtml(lang === 'en' ? 'App icon' : 'アプリアイコン')}</span>
+        </div>
+      </div>
+      <div class="pdf-brand-company">
+        <img class="pdf-company-mark" src="${companyMarkSrc}" alt="" />
+        <div class="pdf-brand-meta">
+          <span class="pdf-company-name">${escapeHtml(companyName)}</span>
+          <span class="pdf-brand-sub">${escapeHtml(companySub)}</span>
+        </div>
+      </div>
+    </div>`
 }
 
 const AGGREGATION_MAX_DAYS = 31
@@ -4833,10 +4932,22 @@ function App() {
               '配下タスクがある予定は、配下を削除するまで親を削除できません。親を一般タスクへ変更する場合は、配下が削除される旨の確認があります。',
               '「複製 / 移動」や「未来4週間にコピー」では、配下タスクも一緒にコピー／移動されます。複製先に関連付けは付きません。関連がある予定の移動は、矛盾がある場合のみ関連が自動解除されます。',
               '検索・未完了一覧・スケジュール一覧では配下タスクも表示され、親予定への紐づけが分かります。カレンダーの件数にも含まれます。',
+              '同じ日の並び替えは、次項の長押しドラッグでも行えます。',
             ],
           },
           {
-            heading: '3. 週ごとの一覧と未完了の確認',
+            heading: '3. 長押しドラッグでスケジュールを移動する',
+            body: '同じ日の予定カードを長押ししてドラッグすると、表示順を並べ替えられます。指やマウスを離した位置の前後に挿入されます。',
+            points: [
+              'カードを長押しするとドラッグが始まり、他の予定の上・下へ移動できます。',
+              'ドロップ先の直前／直後に挿入され、その日の並びが保存されます。',
+              '時刻あり予定と一般タスクの両方で利用できます（配下タスクは親カード内の操作対象です）。',
+              '別の日への移動は、従来どおりカードメニューの「複製 / 移動」を使います。',
+              '起動時の利用方法吹き出しでも、長押しドラッグの案内を確認できます。',
+            ],
+          },
+          {
+            heading: '4. 週ごとの一覧と未完了の確認',
             body: 'メニューから「スケジュール一覧」や「未完了一覧」を開くと、今週の予定や未完了の作業をまとめて確認できます。ホームでは「スケジュールを検索」で予定名を検索できます。',
             points: [
               '検索の月移動は、週カレンダーと同じ青いバーで前月・翌月を切り替えます（選択中の日と連動）。',
@@ -4846,7 +4957,7 @@ function App() {
             ],
           },
           {
-            heading: '4. カレンダーの表示を切り替える',
+            heading: '5. カレンダーの表示を切り替える',
             body: '設定メニューの「月カレンダー表示」と「週カレンダー表示」で、月・週カレンダーを個別に表示または非表示にできます。初期状態では両方が表示され、月のみ・週のみ・両方の表示を選べます。',
             points: [
               '表示中のカレンダーが1つだけの場合は、カレンダーがすべて非表示にならないよう、その表示を解除できません。',
@@ -4858,7 +4969,7 @@ function App() {
             ],
           },
           {
-            heading: '5. 睡眠記録を便利に使う',
+            heading: '6. 睡眠記録を便利に使う',
             body: '睡眠記録では、選択日の起床時刻と当日の就寝時刻を保存できます。「現在時刻」を押すと、その時点の時刻をワンタッチで保存できます。前日の就寝時刻は自動的に参照表示されます。睡眠記録は健康生活カウントの直上に表示されます。',
             points: [
               '時刻を手動で変更した場合は「保存」を押して記録します。',
@@ -4868,8 +4979,8 @@ function App() {
             ],
           },
           {
-            heading: '5b. 服薬記録を使う',
-            body: '朝・昼・夜・寝る前の4枠で服薬を記録できます。各枠の時刻は画面内で変更でき、指定時刻の前後30分から未完了の枠がゆっくり点滅します。過去の日も後から記録・取消できます。',
+            heading: '7. 服薬管理',
+            body: '朝・昼・夜・寝る前の4枠で服薬を記録・管理できます。各枠の時刻は画面内で変更でき、指定時刻の前後30分から未完了の枠がゆっくり点滅します。過去の日も後から記録・取消できます。',
             points: [
               '「完了」で服薬済み、「済」をもう一度押すと取消します。',
               '各枠で「服薬なし」にすると、その枠は記録・点滅・通知の対象外になり、PDFでは「無」と表示されます。',
@@ -4880,7 +4991,7 @@ function App() {
             ],
           },
           {
-            heading: '6. 通知を使う',
+            heading: '8. 通知を使う',
             body: '右上の通知ボタンから、時刻ありスケジュールの開始時刻を通知で受け取れます。タスクには通知しません。服薬の5分前通知は服薬記録欄の「通知不要」で別に切り替えられます。ブラウザの通知許可が必要です。',
             points: [
               '通知がオンの場合、予定開始時刻に音や表示で知らせます。',
@@ -4889,7 +5000,7 @@ function App() {
             ],
           },
           {
-            heading: '7. 進捗状況を確認する',
+            heading: '9. 進捗状況を確認する',
             body: '選択日の予定カードの直下に、連続達成日数と今週のバッジが表示されます。達成の判定はその日のスケジュールとタスクの両方を含みます（全部完了で達成）。',
             points: [
               '進捗率の推移をPDFとして保存できます。',
@@ -4898,7 +5009,7 @@ function App() {
             ],
           },
           {
-            heading: '8. 健康生活カウントを使う',
+            heading: '10. 健康生活カウントを使う',
             body: '睡眠・時刻あり予定の負荷などをもとに、選択した日の「疲れ」目安（0〜100）を確認できる機能です。設定メニューの「健康生活カウント表示」で表示できます。初期状態はオフです。',
             points: [
               'オンにすると、ホーム画面の末尾（予定リストの下）にセクションが現れます。見出しをタップして開閉できます（月カレンダーと同様）。',
@@ -4911,7 +5022,7 @@ function App() {
             ],
           },
           {
-            heading: '9. スケジュールを集計する',
+            heading: '11. スケジュールを集計する',
             body: 'メニューの「スケジュール集計」から、期間と「全て / 完了のみ」を指定して、時刻あり予定名ごとの件数と合計時間(分)を集計できます。タスクは集計に含みません。集計結果はPDFまたはCSVで保存できます。',
             points: [
               '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
@@ -4964,10 +5075,22 @@ function App() {
               'You cannot delete a parent while it still has child tasks. Converting a parent into a standalone task asks for confirmation because child tasks will be deleted.',
               'Copy/move and “Copy to next 4 weeks” also copy or move child tasks. Copies do not keep order links. Moving a linked schedule keeps the link when possible; if the new date conflicts, the link is cleared automatically.',
               'Search, incomplete lists, and schedule lists include child tasks with a parent link. Calendar day counts include them too.',
+              'You can also reorder same-day items with long-press drag (next section).',
             ],
           },
           {
-            heading: '3. Review weekly and incomplete tasks',
+            heading: '3. Move schedules with long-press drag',
+            body: 'Long-press a schedule card on the same day, then drag to reorder it. The item is inserted before or after the card where you release.',
+            points: [
+              'Hold a card until drag starts, then move it above or below other items.',
+              'On drop, the item is inserted before or after the target, and the day’s order is saved.',
+              'Works for timed schedules and standalone tasks (child tasks stay inside the parent card).',
+              'To move an item to another day, use “Duplicate / Move” from the card menu.',
+              'The startup tip bubbles also mention long-press drag.',
+            ],
+          },
+          {
+            heading: '4. Review weekly and incomplete tasks',
             body: 'From the menu, open the weekly schedule and incomplete-task list. On Home, use schedule search to find tasks by name.',
             points: [
               'Month navigation for search uses the same blue bar as the week calendar (synced with the selected date).',
@@ -4977,7 +5100,7 @@ function App() {
             ],
           },
           {
-            heading: '4. Switch calendar displays',
+            heading: '5. Switch calendar displays',
             body: 'Use "Show Month Calendar" and "Show Week Calendar" in the settings menu to show or hide each calendar independently. Both are shown by default, and you can use the month calendar only, the week calendar only, or both.',
             points: [
               'When only one calendar is visible, it cannot be turned off, so at least one calendar always remains on screen.',
@@ -4989,18 +5112,30 @@ function App() {
             ],
           },
           {
-            heading: '5. Make good use of sleep records',
+            heading: '6. Make good use of sleep records',
             body: 'Sleep Records lets you save the selected day’s wake-up time and bedtime. Tap “Current time” to save the time instantly with one tap. The previous day’s bedtime is shown automatically for reference.',
             points: [
               'After changing a time manually, tap “Save” to store the edited value.',
               'Tap the Sleep Records heading to collapse or expand the input and details. It is expanded by default.',
               'Use “Show Sleep Records” in Settings to show or hide the sleep record panel. Hiding it does not delete saved data.',
-              'From the menu, open “Healthy Life PDF” to export the month’s sleep table and a combined daily chart (sleep, fatigue, completed tasks).',
+              'From the menu, open “Healthy Life PDF” to export the month’s sleep table, medication records, and a combined daily chart (sleep, fatigue, completed tasks).',
             ],
           },
           {
-            heading: '6. Use notifications',
-            body: 'Tap the notification button in the upper-right corner to receive reminders when a timed schedule is about to start. Tasks do not send notifications. Browser notification permission is required.',
+            heading: '7. Medication management',
+            body: 'Track medication in four slots: morning, noon, evening, and bedtime. You can edit each slot’s time; unfinished slots blink slowly from 30 minutes before/after the set time. Past days can be recorded or cleared later.',
+            points: [
+              'Tap Complete to mark taken; tap Done again to undo.',
+              'Mark a slot as “No medication” to exclude it from records, blinking, and reminders (shown as “None” in PDF).',
+              '“Notifications off” disables only the 5-minute-before medication reminder (separate from schedule alerts).',
+              'Use “Show Medication Records” in Settings to show or hide the panel.',
+              'The sleep-only shortcut (?sleep=1) hides the medication panel.',
+              'Medication columns in Healthy Life PDF are display-only and do not affect the fatigue score.',
+            ],
+          },
+          {
+            heading: '8. Use notifications',
+            body: 'Tap the notification button in the upper-right corner to receive reminders when a timed schedule is about to start. Tasks do not send notifications. Medication reminders (5 minutes before) are controlled separately with “Notifications off” in the medication panel. Browser notification permission is required.',
             points: [
               'When notifications are enabled, you will receive a reminder at the scheduled time.',
               'For iPhone and Safari, add the app to your home screen before enabling alerts.',
@@ -5008,7 +5143,7 @@ function App() {
             ],
           },
           {
-            heading: '7. Track your progress',
+            heading: '9. Track your progress',
             body: 'Below the schedule cards for the selected day, you see your streak and weekly badge. Achievement counts both timed schedules and tasks (all must be complete).',
             points: [
               'Progress trends can be saved as a PDF report.',
@@ -5017,7 +5152,7 @@ function App() {
             ],
           },
           {
-            heading: '8. Use Healthy Life Count',
+            heading: '10. Use Healthy Life Count',
             body: 'This optional feature shows a fatigue score (0–100) for the selected day based on sleep records and incomplete timed schedule load. Turn it on with “Show Healthy Life Count” in Settings. It is off by default.',
             points: [
               'When enabled, a section appears at the bottom of Home (below your schedule list). Tap the heading to expand or collapse it, like the month calendar.',
@@ -5030,7 +5165,7 @@ function App() {
             ],
           },
           {
-            heading: '9. Summarize your schedules',
+            heading: '11. Summarize your schedules',
             body: 'From the menu, open "Schedule Summary" to choose a date range and either "All" or "Completed only", then get the count and total minutes for each timed schedule title. Tasks are excluded. Results can be saved as PDF or CSV.',
             points: [
               'The date range can be up to 31 days; a message appears if it is exceeded.',
@@ -5068,16 +5203,21 @@ function App() {
         ...Array.from({ length: 7 }, (_, index) => ({ path: `/guide-screen-${index + 1}.png`, alt: `${APP_DISPLAY_NAME}画面${index + 1}`, caption: `アプリ画面例 ${index + 1}` })),
       ]
     let guideScreenshots
+    let brandAssets
     try {
-      guideScreenshots = await Promise.all(guideScreenshotPaths.map(async (screenshot) => ({
-        ...screenshot,
-        src: await loadPublicImageAsDataUrl(screenshot.path),
-      })))
+      ;[guideScreenshots, brandAssets] = await Promise.all([
+        Promise.all(guideScreenshotPaths.map(async (screenshot) => ({
+          ...screenshot,
+          src: await loadPublicImageAsDataUrl(screenshot.path),
+        }))),
+        loadPdfBrandAssets(),
+      ])
     } catch (error) {
       if (!reportWindow.closed) reportWindow.close()
       alert(`${lang === 'en' ? 'The guide images could not be loaded' : 'ガイド画像を読み込めませんでした'}:\n${error.message}`)
       return
     }
+    const brandBarHtml = buildPdfBrandBarHtml({ ...brandAssets, lang })
     const guideScreenshotsHtml = guideScreenshots.map((screenshot, index) => `
       <figure class="guide-screenshot${index === guideScreenshots.length - 1 ? ' guide-screenshot-wide' : ''}">
         <img src="${screenshot.src}" alt="${screenshot.alt}" />
@@ -5114,25 +5254,7 @@ function App() {
               margin: 0 auto;
               padding: 24px 20px 40px;
             }
-            .topbar {
-              display: flex;
-              justify-content: space-between;
-              align-items: center;
-              gap: 12px;
-              margin-bottom: 18px;
-            }
-            .brand {
-              display: inline-flex;
-              align-items: center;
-              gap: 10px;
-              background: #eff6ff;
-              border: 1px solid #bfdbfe;
-              border-radius: 999px;
-              padding: 8px 14px;
-              color: #1d4ed8;
-              font-weight: 700;
-              font-size: 12px;
-            }
+            ${PDF_BRAND_BAR_CSS}
             .actions {
               display: flex;
               justify-content: flex-end;
@@ -5269,9 +5391,7 @@ function App() {
               <button class="close-button" onclick="window.close()">${guide.closeLabel}</button>
             </div>
             <div class="sheet">
-              <div class="topbar">
-                <div class="brand">${escapeHtml(lang === 'en' ? APP_DISPLAY_NAME_EN : APP_DISPLAY_NAME)}</div>
-              </div>
+              ${brandBarHtml}
               <h1>${guide.title}</h1>
               <p class="subtitle">${guide.subtitle}</p>
               ${sectionsHtml}
@@ -5298,7 +5418,7 @@ function App() {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
   }
 
-  const openFatigueGuidePdf = (lang = 'ja') => {
+  const openFatigueGuidePdf = async (lang = 'ja') => {
     const reportWindow = window.open('', '_blank', 'width=1000,height=750')
     if (!reportWindow) {
       const alertText = lang === 'en'
@@ -5307,7 +5427,18 @@ function App() {
       alert(alertText)
       return
     }
-    const guideHtml = buildFatigueGuideHtml(lang)
+    let brandAssets
+    try {
+      brandAssets = await loadPdfBrandAssets()
+    } catch (error) {
+      if (!reportWindow.closed) reportWindow.close()
+      alert(`${lang === 'en' ? 'Brand images could not be loaded' : 'ブランド画像を読み込めませんでした'}:\n${error.message}`)
+      return
+    }
+    const guideHtml = buildFatigueGuideHtml(lang, {
+      css: PDF_BRAND_BAR_CSS,
+      barHtml: buildPdfBrandBarHtml({ ...brandAssets, lang }),
+    })
     const blobUrl = URL.createObjectURL(new Blob([guideHtml], { type: 'text/html' }))
     setTimeout(() => {
       if (reportWindow.closed) {
@@ -5348,23 +5479,23 @@ function App() {
 
     const slideScreenshotPaths = Array.from({ length: 7 }, (_, index) => `/guide-screen-${index + 1}.png`)
     let slideScreenshots
+    let brandAssets
+    let ronImage
     try {
-      slideScreenshots = await Promise.all(slideScreenshotPaths.map((path) => loadPublicImageAsDataUrl(path)))
+      ;[slideScreenshots, brandAssets, ronImage] = await Promise.all([
+        Promise.all(slideScreenshotPaths.map((path) => loadPublicImageAsDataUrl(path))),
+        loadPdfBrandAssets(),
+        loadPublicImageAsDataUrl('/ron.png', true),
+      ])
     } catch (error) {
       if (!reportWindow.closed) reportWindow.close()
       alert(`${isEnglish ? 'The slide images could not be loaded' : 'スライド画像を読み込めませんでした'}:\n${error.message}`)
       return
     }
-    let ronImage
-    try {
-      ronImage = await loadPublicImageAsDataUrl('/ron.png', true)
-    } catch (error) {
-      if (!reportWindow.closed) reportWindow.close()
-      alert(`${isEnglish ? 'Ron-kun image could not be loaded' : 'ロン君の画像を読み込めませんでした'}:\n${error.message}`)
-      return
-    }
+    const brandBarHtml = buildPdfBrandBarHtml({ ...brandAssets, lang: isEnglish ? 'en' : 'ja' })
     const slideHtml = slides.map((slide, index) => `
       <section class="slide ${index === 0 ? 'cover' : ''}">
+        ${brandBarHtml}
         <div class="brand">${escapeHtml(slide.tag)}</div>
         <div class="illustration">${slide.art}</div>
         <div class="slide-number">${String(index + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}</div>
@@ -5380,17 +5511,23 @@ function App() {
       <style>
         @page { size: A4 landscape; margin: 0; } * { box-sizing: border-box; }
         body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; background: #dfe8f2; }
-        .slide { position: relative; width: 297mm; height: 210mm; page-break-after: always; overflow: hidden; padding: 24mm 28mm; background: linear-gradient(135deg, #f8fbff 0%, #e7f4f2 100%); }
+        .slide { position: relative; width: 297mm; height: 210mm; page-break-after: always; overflow: hidden; padding: 16mm 28mm 24mm; background: linear-gradient(135deg, #f8fbff 0%, #e7f4f2 100%); }
         .slide.cover { background: linear-gradient(135deg, #dbeafe 0%, #ccfbf1 100%); }
+        ${PDF_BRAND_BAR_CSS}
+        .slide .pdf-brand-bar { margin-bottom: 8mm; background: rgba(255,255,255,.78); }
+        .slide .pdf-app-icon { width: 34px; height: 34px; }
+        .slide .pdf-company-mark { width: 28px; height: 32px; }
+        .slide .pdf-app-name, .slide .pdf-company-name { font-size: 12px; }
+        .slide .pdf-brand-sub { font-size: 10px; }
         .brand { color: #0f766e; font-size: 15px; font-weight: 800; letter-spacing: 2px; }
         .illustration { position: absolute; top: 42mm; right: 25mm; font-size: 58px; letter-spacing: 10px; white-space: nowrap; }
-        .slide h1 { position: relative; z-index: 1; max-width: 82mm; margin: 38mm 0 10mm; color: #0f172a; font-size: 39px; line-height: 1.2; }
+        .slide h1 { position: relative; z-index: 1; max-width: 82mm; margin: 18mm 0 10mm; color: #0f172a; font-size: 39px; line-height: 1.2; }
         .slide p { position: relative; z-index: 1; max-width: 82mm; color: #475569; font-size: 19px; line-height: 1.65; }
         .appeal-points { position: relative; z-index: 1; max-width: 82mm; margin: 8mm 0 0; padding-left: 7mm; color: #0f766e; font-size: 15px; line-height: 1.7; font-weight: 700; }
         .screen-shot { position: absolute; z-index: 1; right: 80mm; bottom: 28mm; width: 100mm; height: 66mm; object-fit: contain; object-position: center; background: rgba(255,255,255,.72); border: 2px solid rgba(255,255,255,.9); border-radius: 10px; box-shadow: 0 12px 28px rgba(15,23,42,.18); }
         .ron { position: absolute; z-index: 2; right: 25mm; bottom: 20mm; width: 32mm; max-height: 46mm; object-fit: contain; background: transparent; }
         .slide-number { position: absolute; right: 28mm; bottom: 14mm; color: #64748b; font-size: 12px; }
-        .cover h1 { font-size: 50px; margin-top: 52mm; } .cover p { font-size: 21px; }
+        .cover h1 { font-size: 50px; margin-top: 28mm; } .cover p { font-size: 21px; }
         .actions { position: fixed; z-index: 10; top: 12px; right: 12px; display: flex; gap: 8px; }
         button { border: 0; border-radius: 8px; padding: 10px 16px; background: #0f766e; color: white; font-weight: 700; cursor: pointer; } .close { background: #64748b; }
         @media print { body { background: white; } .actions { display: none; } }
