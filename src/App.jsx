@@ -5112,6 +5112,21 @@ function App() {
       console.error('健康生活PDF 歩数CSV読込:', error)
     }
 
+    // 睡眠はPDF生成時に再取得（一覧ルール不整合や map 未同期でも空にしない）
+    const sleepByDate = { ...sleepRecordMap }
+    try {
+      const sleepSnapshot = await getDocs(query(
+        collection(db, 'sleep_records'),
+        where('user_id', '==', session.uid)
+      ))
+      sleepSnapshot.forEach((docSnap) => {
+        const data = docSnap.data() || {}
+        if (data.date) sleepByDate[data.date] = data
+      })
+    } catch (error) {
+      console.error('健康生活PDF 睡眠記録取得エラー:', error)
+    }
+
     const medicationByDate = { ...medicationRecordMap }
     // 画面上で見えている当日データを必ずマージ（他端末で map 未同期でもPDFに出す）
     if (
@@ -5171,11 +5186,11 @@ function App() {
     const reportRows = Array.from({ length: daysInMonth }, (_, index) => {
       const date = new Date(year, month, index + 1)
       const dateKey = formatDateKey(date)
-      const record = sleepRecordMap[dateKey]
+      const record = sleepByDate[dateKey]
       const wakeTime = record?.wakeTime || ''
       const currentBedtime = record?.bedtime || ''
       const previousDateKey = formatDateKey(addDays(date, -1))
-      const previousBedtime = sleepRecordMap[previousDateKey]?.bedtime || ''
+      const previousBedtime = sleepByDate[previousDateKey]?.bedtime || ''
       let minutes = null
       if (previousBedtime && wakeTime) {
         minutes = parseTimeValue(wakeTime) - parseTimeValue(previousBedtime)
@@ -5188,7 +5203,7 @@ function App() {
       const date = new Date(year, month, index + 1)
       const dayScheduleMap = { [row.dateKey]: scheduleByDate[row.dateKey] || [] }
       const stepsForScoring = getStepsForScoring(pdfStepsByDate, row.dateKey)
-      const fatigue = computeFatigueScore(date, sleepRecordMap, dayScheduleMap, {
+      const fatigue = computeFatigueScore(date, sleepByDate, dayScheduleMap, {
         isToday: row.dateKey === todayKey,
         stepsForScoring,
       })

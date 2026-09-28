@@ -24,16 +24,20 @@ service cloud.firestore {
     }
 
     match /sleep_records/{recordId} {
-      // ドキュメントIDは `${uid}_${date}`。未作成ドキュメントへの get でも resource が null のため、
-      // resource.data 参照だけのルールだと開始時の getDoc が permission-denied になる。
+      // get: 未作成ドキュメント（resource == null）でも自UIDのIDなら許可（目覚まし開始の getDoc 用）
+      // list: user_id クエリと整合させ、一覧・健康生活PDFが空にならないようにする
+      allow get: if isSignedIn() && (
+        (resource == null && recordId.matches('^' + request.auth.uid + '_.*'))
+        || (resource != null && resource.data.user_id == request.auth.uid)
+      );
+      allow list: if isSignedIn() && resource.data.user_id == request.auth.uid;
       allow create: if isSignedIn()
         && request.resource.data.user_id == request.auth.uid
         && recordId == request.auth.uid + '_' + request.resource.data.date;
-      allow read, delete: if isSignedIn()
-        && recordId.matches('^' + request.auth.uid + '_.*');
       allow update: if isSignedIn()
-        && recordId.matches('^' + request.auth.uid + '_.*')
+        && resource.data.user_id == request.auth.uid
         && request.resource.data.user_id == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
     }
 
     // 目覚ましアラーム状態（ドキュメントID = uid）
@@ -48,14 +52,18 @@ service cloud.firestore {
 
     // 日次服薬・体調記録（ドキュメントID = `${uid}_${date}`。見守り参照用の conditionLevel / conditionNote 含む）
     match /medication_records/{recordId} {
+      allow get: if isSignedIn() && (
+        (resource == null && recordId.matches('^' + request.auth.uid + '_.*'))
+        || (resource != null && resource.data.user_id == request.auth.uid)
+      );
+      allow list: if isSignedIn() && resource.data.user_id == request.auth.uid;
       allow create: if isSignedIn()
         && request.resource.data.user_id == request.auth.uid
         && recordId == request.auth.uid + '_' + request.resource.data.date;
-      allow read, delete: if isSignedIn()
-        && recordId.matches('^' + request.auth.uid + '_.*');
       allow update: if isSignedIn()
-        && recordId.matches('^' + request.auth.uid + '_.*')
+        && resource.data.user_id == request.auth.uid
         && request.resource.data.user_id == request.auth.uid;
+      allow delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
     }
 
     match /fcm_tokens/{tokenId} {
