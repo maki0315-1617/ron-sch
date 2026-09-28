@@ -6237,18 +6237,20 @@ function App() {
                 </button>
                 {menuOpen && (
                   <div style={styles.menuDropdown} role="menu">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      style={styles.menuItem}
-                      onClick={() => {
-                        setView('home')
-                        setSelectedDate(new Date())
-                        setMenuOpen(false)
-                      }}
-                    >
-                      <Home size={18} /> ホーム
-                    </button>
+                    <div style={styles.menuDropdownStickyRow}>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        style={styles.menuItem}
+                        onClick={() => {
+                          setView('home')
+                          setSelectedDate(new Date())
+                          setMenuOpen(false)
+                        }}
+                      >
+                        <Home size={18} /> ホーム
+                      </button>
+                    </div>
                     <button
                       type="button"
                       role="menuitem"
@@ -9206,14 +9208,26 @@ const styles = {
     top: 'calc(100% + 8px)',
     left: '0',
     minWidth: '220px',
+    maxHeight: 'min(70vh, calc(100dvh - 96px))',
+    overflowY: 'auto',
+    overscrollBehavior: 'contain',
     background: '#ffffff',
     border: '1px solid #dbeafe',
     borderRadius: '12px',
     boxShadow: '0 14px 32px rgba(15, 23, 42, 0.18)',
-    padding: '6px',
+    padding: '0 6px 6px',
     zIndex: 30,
     display: 'flex',
     flexDirection: 'column',
+  },
+  menuDropdownStickyRow: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 2,
+    background: '#ffffff',
+    borderBottom: '1px solid #e2e8f0',
+    paddingTop: '6px',
+    marginBottom: '2px',
   },
   menuItem: {
     display: 'flex',
