@@ -75,6 +75,7 @@ import {
   scheduleItemRelationsValidAt,
   sortDayScheduleItems,
 } from './scheduleItemUtils'
+import { renderLinkedScheduleDetails } from './scheduleDetailsLinkify'
 
 const dayNames = ['日', '月', '火', '水', '木', '金', '土']
 
@@ -7082,7 +7083,7 @@ function App() {
                         </div>
 
                         <div style={styles.scheduleDetailText}>
-                          {item.details ? item.details : '詳細なし'}
+                          {item.details ? renderLinkedScheduleDetails(item.details) : '詳細なし'}
                         </div>
                         {!taskItem && (item.relatedPrev || item.relatedNext) && (
                           <div style={styles.relationInfoGroup} aria-label="順番指定">
@@ -8210,7 +8211,11 @@ function App() {
                     {formatChildTaskParentLabel(findParentScheduleItem(scheduleMap, schedulePreview))}
                   </div>
                 )}
-                <div style={styles.previewDetails}>{schedulePreview.details || '詳細メモはありません。'}</div>
+                <div style={styles.previewDetails}>
+                  {schedulePreview.details
+                    ? renderLinkedScheduleDetails(schedulePreview.details)
+                    : '詳細メモはありません。'}
+                </div>
                 {!isScheduleTask(schedulePreview) && (schedulePreview.relatedPrev || schedulePreview.relatedNext) && (
                   <div style={styles.relationInfoGroup} aria-label="順番指定">
                     {schedulePreview.relatedPrev && (
