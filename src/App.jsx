@@ -866,6 +866,7 @@ function App() {
   const loadedWeeksRef = useRef(new Set())
   const mainRef = useRef(null)
   const scheduleSectionRef = useRef(null)
+  const weekSectionRef = useRef(null)
   const selectedKey = formatDateKey(selectedDate)
   const sleepOnlyMode = isSleepShortcutLaunch()
   // 判定前・失敗時は本番扱い（デモ制限をかけない）
@@ -908,6 +909,19 @@ function App() {
         })
       }
     }
+  }
+
+  const scrollWeekSectionToTop = () => {
+    const el = weekSectionRef.current
+    if (!el || typeof el.scrollIntoView !== 'function') return
+    el.scrollIntoView({ block: 'start', behavior: 'smooth', inline: 'nearest' })
+  }
+
+  const selectWeekCalendarDate = (date) => {
+    setSelectedDate(date)
+    requestAnimationFrame(() => {
+      scrollWeekSectionToTop()
+    })
   }
 
   useEffect(() => {
@@ -7146,6 +7160,7 @@ function App() {
             {/* 週カレンダー: 睡眠・服薬の直上に配置（カレンダー連動用） */}
             {weekCalendarEnabled && (
               <section
+                ref={weekSectionRef}
                 className="week-section"
                 style={{ ...styles.weekSection, ...(weekCalendarFixed ? styles.fixedWeekSection : {}), touchAction: 'pan-y' }}
               onTouchStart={(event) => {
@@ -7204,7 +7219,7 @@ function App() {
                       type="button"
                       key={key}
                       className="week-day-tile"
-                      onClick={() => setSelectedDate(date)}
+                      onClick={() => selectWeekCalendarDate(date)}
                       style={{
                         ...styles.dayButton,
                         background: isSelected ? '#dbeafe' : isToday ? '#e3f6e8' : '#ffffff',
@@ -7407,16 +7422,31 @@ function App() {
                     {medicationRecordCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
                     <strong style={styles.sleepRecordTitle}>服薬記録</strong>
                   </button>
-                  <button
-                    type="button"
-                    style={styles.alarmSecondaryButton}
-                    onClick={() => {
-                      setMedicationSettingsOpen((current) => !current)
-                      setMedicationSaveMessage('')
-                    }}
-                  >
-                    服薬時刻・有無
-                  </button>
+                  <div style={styles.medicationTitleActions}>
+                    <button
+                      type="button"
+                      style={styles.alarmSecondaryButton}
+                      onClick={() => {
+                        setMedicationSettingsOpen((current) => !current)
+                        setMedicationSaveMessage('')
+                        if (medicationRecordCollapsed) setMedicationRecordCollapsed(false)
+                      }}
+                    >
+                      服薬時刻・有無
+                    </button>
+                    <button
+                      type="button"
+                      style={{
+                        ...styles.medicationNotifyButton,
+                        ...(medicationSettingsDraft.notifyEnabled === false ? styles.medicationNotifyButtonOff : {}),
+                      }}
+                      onClick={toggleMedicationNotifyEnabled}
+                      disabled={medicationSaving}
+                      title="服薬の5分前通知のみ切り替えます（目覚まし通知とは別です）"
+                    >
+                      {medicationSettingsDraft.notifyEnabled === false ? '服薬通知オフ' : '通知不要'}
+                    </button>
+                  </div>
                 </div>
                 {!medicationRecordCollapsed && (
                   <>
@@ -7479,19 +7509,6 @@ function App() {
                     {medicationSettingsOpen && (
                       <div style={styles.medicationSettingsBlock} aria-label="服薬時刻の設定">
                         <div style={styles.medicationSettingsHeading}>服薬時刻・有無</div>
-                        <button
-                          type="button"
-                          style={{
-                            ...styles.medicationNotifyButton,
-                            ...(medicationSettingsDraft.notifyEnabled === false ? styles.medicationNotifyButtonOff : {}),
-                            marginBottom: '10px',
-                          }}
-                          onClick={toggleMedicationNotifyEnabled}
-                          disabled={medicationSaving}
-                          title="服薬の5分前通知のみ切り替えます（目覚まし通知とは別です）"
-                        >
-                          {medicationSettingsDraft.notifyEnabled === false ? '服薬通知オフ' : '通知不要'}
-                        </button>
                         <div style={styles.medicationSettingsFields}>
                           {MEDICATION_SLOT_KEYS.map((slotKey) => {
                             const enabledKey = `${slotKey}Enabled`
@@ -7542,10 +7559,10 @@ function App() {
                         </button>
                       </div>
                     )}
-                    {medicationSaveMessage && (
-                      <div style={styles.sleepSaveMessage} role="status">{medicationSaveMessage}</div>
-                    )}
                   </>
+                )}
+                {medicationSaveMessage && (
+                  <div style={styles.sleepSaveMessage} role="status">{medicationSaveMessage}</div>
                 )}
               </section>
             )}
@@ -9723,6 +9740,7 @@ const styles = {
     borderRadius: '18px',
     padding: '12px',
     boxShadow: '0 12px 26px rgba(15, 23, 42, 0.04)',
+    scrollMarginTop: '8px',
   },
   fixedWeekSection: {
     flexShrink: 0,
@@ -10132,6 +10150,14 @@ const styles = {
     justifyContent: 'space-between',
     gap: '8px',
     marginBottom: '8px',
+    flexWrap: 'wrap',
+  },
+  medicationTitleActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
   },
   medicationNotifyButton: {
     border: '1px solid #f59e0b',
