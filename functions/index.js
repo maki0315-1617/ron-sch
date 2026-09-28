@@ -492,3 +492,106 @@ exports.sendMedicationReminders = onSchedule(
     logger.info('服薬リマインダーバッチを完了しました。', { dateKey, timeKey });
   }
 );
+
+/** 起床予定時刻の通知（sleep_alarm_state.active かつ notifyEnabled） */
+exports.sendWakeAlarms = onSchedule(
+  {
+    schedule: 'every 1 minutes',
+    timeZone: TIME_ZONE,
+    region: 'asia-northeast1',
+    retryCount: 0,
+  },
+  async () => {
+    const now = new Date();
+    const { dateKey, timeKey } = toDateAndTimeKey(now);
+    const graceMinutes = 5;
+    const offsetMinutes = 0;
+
+    logger.info('起床アラームバッチを実行します。', { dateKey, timeKey });
+
+    let alarmSnapshot;
+    try {
+      alarmSnapshot = await db.collection('sleep_alarm_state').where('active', '==', true).get();
+    } catch (error) {
+      logger.error('起床アラーム状態の取得に失敗しました。', error);
+      return;
+    }
+
+    if (alarmSnapshot.empty) {
+      logger.info('有効な起床アラームはありません。', { dateKey, timeKey });
+      return;
+    }
+
+    const tokenCache = new Map();
+
+    for (const alarmDoc of alarmSnapshot.docs) {
+      const userId = alarmDoc.id;
+      const data = alarmDoc.data() || {};
+      if (data.notifyEnabled === false) continue;
+      if (data.plannedWakeDate !== dateKey) continue;
+      const plannedWakeTime = data.plannedWakeTime;
+      if (!plannedWakeTime) continue;
+      if (!isDueForReminder(plannedWakeTime, timeKey, offsetMinutes, graceMinutes)) {
+        continue;
+      }
+
+      const logId = `wake_${userId}_${dateKey}_${plannedWakeTime}_alarm`;
+      const logRef = db.collection('notification_logs').doc(logId);
+
+      try {
+        await logRef.create({
+          kind: 'wake_alarm',
+          user_id: userId,
+          date: dateKey,
+          time: plannedWakeTime,
+          scheduled_for: plannedWakeTime,
+          reminder_offset_minutes: offsetMinutes,
+          status: 'pending',
+          created_at: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (error) {
+        if (isAlreadyExistsError(error)) {
+          continue;
+        }
+        logger.error('起床アラームログ作成に失敗しました。', { userId, error });
+        continue;
+      }
+
+      const tokenEntries = await resolveActiveTokens(userId, tokenCache);
+      if (tokenEntries.length === 0) {
+        await logRef.set(
+          {
+            status: 'skipped_no_token',
+            updated_at: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        continue;
+      }
+
+      const title = '起床アラーム';
+      const body = `起床予定時刻（${plannedWakeTime}）です。目覚ましを止めて起床を記録してください。`;
+      const message = buildWebPushDataMessage(tokenEntries, {
+        date: dateKey,
+        time: plannedWakeTime,
+        title,
+        body,
+        kind: 'wake_alarm',
+      });
+
+      try {
+        const result = await messaging.sendEachForMulticast(message);
+        await finalizeMulticastSend(logRef, result, tokenEntries, {
+          userId,
+          dateKey,
+          timeKey,
+          kind: 'wake_alarm',
+        });
+      } catch (error) {
+        logger.error('起床アラーム送信に失敗しました。', { userId, error });
+      }
+    }
+
+    logger.info('起床アラームバッチを完了しました。', { dateKey, timeKey });
+  }
+);

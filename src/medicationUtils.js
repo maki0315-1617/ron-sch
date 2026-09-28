@@ -62,9 +62,8 @@ export const normalizeMedicationRecordSlots = (slots = {}) => {
 }
 
 /**
- * 今日の選択日で、指定時刻を過ぎて未完了なら注意対象。
+ * 今日の選択日で、指定時刻の前後30分かつ未完了なら注意対象。
  * 服薬なしスロットは対象外。
- * 点滅開始: scheduled - 30分以降（未完了）
  * @returns {'none' | 'due'}
  */
 export const getMedicationSlotAlert = ({
@@ -79,7 +78,8 @@ export const getMedicationSlotAlert = ({
   const nowMinutes = now.getHours() * 60 + now.getMinutes()
   const scheduledMinutes = parseTimeValue(scheduledTime)
   const windowStart = scheduledMinutes - MEDICATION_WINDOW_MINUTES
-  if (nowMinutes < windowStart) return 'none'
+  const windowEnd = scheduledMinutes + MEDICATION_WINDOW_MINUTES
+  if (nowMinutes < windowStart || nowMinutes > windowEnd) return 'none'
   return 'due'
 }
 

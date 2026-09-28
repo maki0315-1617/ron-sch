@@ -28,6 +28,11 @@ service cloud.firestore {
       allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
     }
 
+    // 目覚ましアラーム状態（ドキュメントID = uid）
+    match /sleep_alarm_state/{userId} {
+      allow create, read, update, delete: if isOwner(userId);
+    }
+
     // 服薬時刻・通知設定（ドキュメントID = uid）
     match /medication_settings/{userId} {
       allow create, read, update, delete: if isOwner(userId);

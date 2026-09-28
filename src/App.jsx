@@ -39,6 +39,12 @@ import {
   normalizeMedicationRecordSlots,
   normalizeMedicationSettings,
 } from './medicationUtils'
+import {
+  getMedicationSlotActionState,
+  hasSleepAlarmPlan,
+  isSleepAlarmStarted,
+  normalizeSleepAlarmState,
+} from './sleepMedicationUiUtils'
 import { computeFatigueScore, fatigueBandColors } from './fatigueScore'
 import { buildFatigueGuideHtml } from './fatigueGuideDocument'
 import { buildHealthLifeCountPresentation } from './dayFooterPresentation'
@@ -457,6 +463,22 @@ const formatMonthTitle = (date) =>
 const formatDisplayDate = (date) =>
   new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' }).format(date)
 
+const formatDateKeyJa = (dateKey) => {
+  if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return '—'
+  const [year, month, day] = dateKey.split('-').map(Number)
+  return `${year}年${month}月${day}日`
+}
+
+/** 起床予定日ラベル: 翌日／明後日／それ以外は年月日のみ */
+const formatWakePlanDateLabel = (dateKey, now = new Date()) => {
+  if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return '—'
+  const tomorrowKey = formatDateKey(addDays(now, 1))
+  const dayAfterKey = formatDateKey(addDays(now, 2))
+  if (dateKey === tomorrowKey) return '翌日の起床予定'
+  if (dateKey === dayAfterKey) return '明後日の起床予定'
+  return formatDateKeyJa(dateKey)
+}
+
 const parseHolidayCsv = (csvText) => {
   const holidays = {}
   csvText.replace(/^\uFEFF/, '').split(/\r?\n/).slice(1).forEach((line) => {
@@ -790,10 +812,17 @@ function App() {
     return isSleepShortcutLaunch() || typeof window === 'undefined' || window.localStorage.getItem(SLEEP_RECORD_ENABLED_KEY) !== 'false'
   })
   const [sleepRecordCollapsed, setSleepRecordCollapsed] = useState(false)
+  const [sleepAlarmState, setSleepAlarmState] = useState(() => normalizeSleepAlarmState())
+  const [sleepAlarmPickerOpen, setSleepAlarmPickerOpen] = useState(false)
+  const [sleepAlarmDraftWake, setSleepAlarmDraftWake] = useState('07:00')
+  const [sleepAlarmDraftBedtimeDate, setSleepAlarmDraftBedtimeDate] = useState('')
+  const [sleepAlarmDraftWakeDate, setSleepAlarmDraftWakeDate] = useState('')
+  const [sleepAlarmEditingWake, setSleepAlarmEditingWake] = useState(false)
   const [medicationRecordEnabled, setMedicationRecordEnabled] = useState(() => {
     return typeof window === 'undefined' || window.localStorage.getItem(MEDICATION_RECORD_ENABLED_KEY) !== 'false'
   })
   const [medicationRecordCollapsed, setMedicationRecordCollapsed] = useState(false)
+  const [medicationSettingsOpen, setMedicationSettingsOpen] = useState(false)
   const [medicationSettings, setMedicationSettings] = useState(() => normalizeMedicationSettings())
   const [medicationSettingsDraft, setMedicationSettingsDraft] = useState(() => normalizeMedicationSettings())
   const [medicationRecord, setMedicationRecord] = useState(() => ({
@@ -1127,8 +1156,8 @@ function App() {
         const data = snapshot.exists() ? snapshot.data() : {}
         const previousData = previousSnapshot.exists() ? previousSnapshot.data() : null
         setSleepRecord({
-          bedtime: data.bedtime || formatCurrentTime(),
-          wakeTime: data.wakeTime || formatCurrentTime(),
+          bedtime: data.bedtime || '',
+          wakeTime: data.wakeTime || '',
           exists: snapshot.exists(),
         })
         setPreviousSleepRecord(previousData)
@@ -1146,6 +1175,33 @@ function App() {
       cancelled = true
     }
   }, [session?.uid, selectedKey])
+
+  useEffect(() => {
+    if (!session) {
+      setSleepAlarmState(normalizeSleepAlarmState())
+      return
+    }
+    let cancelled = false
+    const loadSleepAlarm = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'sleep_alarm_state', session.uid))
+        if (cancelled) return
+        setSleepAlarmState(normalizeSleepAlarmState(snap.exists() ? snap.data() : {}))
+      } catch (error) {
+        console.error('目覚まし状態取得エラー:', error)
+      }
+    }
+    loadSleepAlarm()
+    return () => {
+      cancelled = true
+    }
+  }, [session?.uid])
+
+  useEffect(() => {
+    if (!sleepAlarmPickerOpen || sleepAlarmEditingWake) return
+    setSleepAlarmDraftBedtimeDate(selectedKey)
+    setSleepAlarmDraftWakeDate(formatDateKey(addDays(selectedDate, 1)))
+  }, [selectedKey, selectedDate, sleepAlarmPickerOpen, sleepAlarmEditingWake])
 
   useEffect(() => {
     if (!session) return
@@ -1791,27 +1847,283 @@ function App() {
     return `${Math.floor(minutes / 60)}時間${minutes % 60}分`
   }
 
-  const saveSleepTime = async (field, value = formatCurrentTime()) => {
-    if (!session || sleepSaving) return
+  const writeSleepField = async (field, value = formatCurrentTime(), dateKey = selectedKey) => {
+    if (!session) return null
 
     const time = value || formatCurrentTime()
+    const existingSnap = await getDoc(doc(db, 'sleep_records', `${session.uid}_${dateKey}`))
+    const existing = existingSnap.exists() ? existingSnap.data() : {}
     const nextRecord = {
-      bedtime: sleepRecord?.bedtime || time,
-      wakeTime: sleepRecord?.wakeTime || time,
+      bedtime: existing.bedtime || '',
+      wakeTime: existing.wakeTime || '',
+      ...existing,
       [field]: time,
       user_id: session.uid,
-      date: selectedKey,
+      date: dateKey,
+    }
+
+    await setDoc(doc(db, 'sleep_records', `${session.uid}_${dateKey}`), nextRecord)
+    setSleepRecordMap((current) => ({ ...current, [dateKey]: { ...nextRecord } }))
+    if (dateKey === selectedKey) {
+      setSleepRecord({ ...nextRecord, exists: true })
+    }
+    if (dateKey === formatDateKey(addDays(selectedDate, -1))) {
+      setPreviousSleepRecord(nextRecord)
+    }
+    return nextRecord
+  }
+
+  const persistSleepAlarmState = async (nextState) => {
+    if (!session) return false
+    const normalized = normalizeSleepAlarmState(nextState)
+    await setDoc(doc(db, 'sleep_alarm_state', session.uid), {
+      ...normalized,
+      user_id: session.uid,
+      updatedAt: serverTimestamp(),
+    })
+    setSleepAlarmState(normalized)
+    return true
+  }
+
+  const openSleepAlarmPicker = (editing = false) => {
+    if (!session || sleepSaving) return
+    const todayKey = formatDateKey(new Date())
+    if (isSleepAlarmStarted(sleepAlarmState) && !editing) {
+      alert('先に「目覚ましを止める」を押してください。')
+      return
+    }
+    if (!editing && selectedKey < todayKey) {
+      alert('目覚ましの設定は当日または未来日のみできます。カレンダーで日付を選んでください。')
+      return
+    }
+    const defaultWakeDate = formatDateKey(addDays(selectedDate, 1))
+    if (editing && isSleepAlarmStarted(sleepAlarmState)) {
+      setSleepAlarmDraftWake(sleepAlarmState.plannedWakeTime || '07:00')
+      setSleepAlarmDraftBedtimeDate(sleepAlarmState.bedtimeDate || selectedKey)
+      setSleepAlarmDraftWakeDate(sleepAlarmState.plannedWakeDate || defaultWakeDate)
+    } else {
+      setSleepAlarmDraftWake(
+        hasSleepAlarmPlan(sleepAlarmState) && sleepAlarmState.bedtimeDate === selectedKey
+          ? (sleepAlarmState.plannedWakeTime || '07:00')
+          : '07:00'
+      )
+      setSleepAlarmDraftBedtimeDate(selectedKey)
+      setSleepAlarmDraftWakeDate(defaultWakeDate)
+    }
+    setSleepAlarmEditingWake(editing)
+    setSleepAlarmPickerOpen(true)
+    setSleepSaveMessage('')
+  }
+
+  const cancelSleepAlarmPicker = () => {
+    setSleepAlarmPickerOpen(false)
+    setSleepAlarmEditingWake(false)
+    setSleepSaveMessage('目覚まし設定を取り消しました。')
+  }
+
+  const confirmSleepAlarmPicker = async () => {
+    if (!session || sleepSaving || !sleepAlarmDraftWake) return
+    const todayKey = formatDateKey(new Date())
+    const plannedWakeTime = sleepAlarmDraftWake
+    const bedtimeDate = sleepAlarmEditingWake && isSleepAlarmStarted(sleepAlarmState)
+      ? (sleepAlarmState.bedtimeDate || sleepAlarmDraftBedtimeDate)
+      : selectedKey
+    const plannedWakeDate = sleepAlarmEditingWake && isSleepAlarmStarted(sleepAlarmState)
+      ? (sleepAlarmState.plannedWakeDate || sleepAlarmDraftWakeDate)
+      : formatDateKey(addDays(selectedDate, 1))
+
+    if (!bedtimeDate || !/^\d{4}-\d{2}-\d{2}$/.test(bedtimeDate)) {
+      alert('就寝日を確認してください。カレンダーで日付を選んでください。')
+      return
+    }
+    if (!plannedWakeDate || !/^\d{4}-\d{2}-\d{2}$/.test(plannedWakeDate)) {
+      alert('起床予定日を確認してください。')
+      return
+    }
+    if (!sleepAlarmEditingWake && bedtimeDate < todayKey) {
+      alert('目覚ましの設定は当日または未来日のみできます。')
+      return
+    }
+    if (plannedWakeDate < bedtimeDate) {
+      alert('起床予定日は就寝日以降にしてください。')
+      return
+    }
+
+    if (
+      !(sleepAlarmEditingWake && isSleepAlarmStarted(sleepAlarmState)) &&
+      hasSleepAlarmPlan(sleepAlarmState) &&
+      sleepAlarmState.bedtimeDate &&
+      sleepAlarmState.bedtimeDate !== bedtimeDate
+    ) {
+      const ok = window.confirm(
+        `既に ${formatDateKeyJa(sleepAlarmState.bedtimeDate)} の目覚まし予定があります。上書きしますか？`
+      )
+      if (!ok) return
     }
 
     setSleepSaving(true)
     try {
-      await setDoc(doc(db, 'sleep_records', `${session.uid}_${selectedKey}`), nextRecord)
-      setSleepRecord({ ...nextRecord, exists: true })
-      setSleepRecordMap((current) => ({ ...current, [selectedKey]: { ...nextRecord } }))
-      setSleepSaveMessage('睡眠記録を保存しました。')
+      if (sleepAlarmEditingWake && isSleepAlarmStarted(sleepAlarmState)) {
+        await persistSleepAlarmState({
+          ...sleepAlarmState,
+          active: true,
+          plannedWakeDate,
+          plannedWakeTime,
+        })
+        setSleepAlarmPickerOpen(false)
+        setSleepAlarmEditingWake(false)
+        setSleepSaveMessage(`起床予定を ${formatDateKeyJa(plannedWakeDate)} ${plannedWakeTime} に更新しました。`)
+        return
+      }
+
+      await persistSleepAlarmState({
+        active: false,
+        bedtimeDate,
+        bedtime: '',
+        plannedWakeDate,
+        plannedWakeTime,
+        notifyEnabled: sleepAlarmState.notifyEnabled !== false,
+      })
+      setSleepAlarmPickerOpen(false)
+      setSleepAlarmEditingWake(false)
+      setSleepSaveMessage(
+        `目覚まし予定を保存しました（就寝 ${formatDateKeyJa(bedtimeDate)} / 起床予定 ${formatDateKeyJa(plannedWakeDate)} ${plannedWakeTime}）。寝るときに「目覚まし開始（寝る）」を押してください。`
+      )
     } catch (error) {
-      console.error('睡眠記録保存エラー:', error)
-      alert(`睡眠記録の保存に失敗しました:\n${error.message}`)
+      console.error('目覚まし設定エラー:', error)
+      alert(`目覚ましの設定に失敗しました:\n${error.message}`)
+    } finally {
+      setSleepSaving(false)
+    }
+  }
+
+  const startSleepAlarm = async () => {
+    if (!session || sleepSaving) return
+    const todayKey = formatDateKey(new Date())
+    if (!selectedIsToday) {
+      alert('「目覚まし開始（寝る）」は当日のみ使えます。')
+      return
+    }
+    if (!hasSleepAlarmPlan(sleepAlarmState) || sleepAlarmState.bedtimeDate !== todayKey) {
+      alert('当日の目覚まし予定がありません。先に「目覚まし時計設定」で起床予定を保存してください。')
+      return
+    }
+    if (isSleepAlarmStarted(sleepAlarmState)) {
+      alert('すでに開始済みです。「目覚ましを止める」で起床を記録してください。')
+      return
+    }
+
+    const bedtime = formatCurrentTime()
+    const bedtimeDate = todayKey
+    setSleepSaving(true)
+    try {
+      await writeSleepField('bedtime', bedtime, bedtimeDate)
+      await persistSleepAlarmState({
+        ...sleepAlarmState,
+        active: true,
+        bedtimeDate,
+        bedtime,
+        notifyEnabled: sleepAlarmState.notifyEnabled !== false,
+      })
+      setSleepSaveMessage(`就寝 ${formatDateKeyJa(bedtimeDate)} ${bedtime} を記録しました。起床予定 ${formatDateKeyJa(sleepAlarmState.plannedWakeDate)} ${sleepAlarmState.plannedWakeTime}`)
+    } catch (error) {
+      console.error('目覚まし開始エラー:', error)
+      alert(`目覚ましの開始に失敗しました:\n${error.message}`)
+    } finally {
+      setSleepSaving(false)
+    }
+  }
+
+  const cancelActiveSleepAlarm = async () => {
+    if (!session || sleepSaving || !hasSleepAlarmPlan(sleepAlarmState)) return
+    const started = isSleepAlarmStarted(sleepAlarmState)
+    const confirmMessage = started
+      ? '目覚ましを取り消し、今回の就寝記録も取り消しますか？'
+      : '保存済みの目覚まし予定を取り消しますか？'
+    if (!window.confirm(confirmMessage)) return
+
+    setSleepSaving(true)
+    try {
+      const bedtimeDate = sleepAlarmState.bedtimeDate
+      if (started && bedtimeDate) {
+        const ref = doc(db, 'sleep_records', `${session.uid}_${bedtimeDate}`)
+        const snap = await getDoc(ref)
+        if (snap.exists()) {
+          const data = snap.data() || {}
+          if (data.wakeTime) {
+            await updateDoc(ref, { bedtime: deleteField() })
+            const nextLocal = { ...data, bedtime: '' }
+            setSleepRecordMap((current) => ({ ...current, [bedtimeDate]: nextLocal }))
+            if (bedtimeDate === selectedKey) setSleepRecord({ ...nextLocal, exists: true })
+            if (bedtimeDate === formatDateKey(addDays(selectedDate, -1))) setPreviousSleepRecord(nextLocal)
+          } else {
+            await deleteDoc(ref)
+            setSleepRecordMap((current) => {
+              const next = { ...current }
+              delete next[bedtimeDate]
+              return next
+            })
+            if (bedtimeDate === selectedKey) setSleepRecord(null)
+            if (bedtimeDate === formatDateKey(addDays(selectedDate, -1))) setPreviousSleepRecord(null)
+          }
+        }
+      }
+      await persistSleepAlarmState({
+        active: false,
+        bedtimeDate: '',
+        bedtime: '',
+        plannedWakeDate: '',
+        plannedWakeTime: '',
+        notifyEnabled: sleepAlarmState.notifyEnabled !== false,
+      })
+      setSleepAlarmPickerOpen(false)
+      setSleepAlarmEditingWake(false)
+      setSleepSaveMessage(started ? '目覚ましを取り消しました。' : '目覚まし予定を取り消しました。')
+    } catch (error) {
+      console.error('目覚まし取消エラー:', error)
+      alert(`目覚ましの取消に失敗しました:\n${error.message}`)
+    } finally {
+      setSleepSaving(false)
+    }
+  }
+
+  const stopSleepAlarm = async () => {
+    if (!session || sleepSaving || !isSleepAlarmStarted(sleepAlarmState)) return
+    const wakeTime = formatCurrentTime()
+    const wakeDate = formatDateKey(new Date())
+    setSleepSaving(true)
+    try {
+      await writeSleepField('wakeTime', wakeTime, wakeDate)
+      await persistSleepAlarmState({
+        active: false,
+        bedtimeDate: '',
+        bedtime: '',
+        plannedWakeDate: '',
+        plannedWakeTime: '',
+        notifyEnabled: sleepAlarmState.notifyEnabled !== false,
+      })
+      setSleepSaveMessage(`起床 ${wakeTime} を記録しました。`)
+    } catch (error) {
+      console.error('目覚まし停止エラー:', error)
+      alert(`起床記録に失敗しました:\n${error.message}`)
+    } finally {
+      setSleepSaving(false)
+    }
+  }
+
+  const toggleSleepAlarmNotifyEnabled = async () => {
+    if (!session || sleepSaving) return
+    const nextEnabled = !(sleepAlarmState.notifyEnabled !== false)
+    setSleepSaving(true)
+    try {
+      await persistSleepAlarmState({
+        ...sleepAlarmState,
+        notifyEnabled: nextEnabled,
+      })
+      setSleepSaveMessage(nextEnabled ? '目覚まし通知をオンにしました。' : '目覚まし通知をオフにしました。')
+    } catch (error) {
+      console.error('目覚まし通知設定エラー:', error)
+      alert(`目覚まし通知の切り替えに失敗しました:\n${error.message}`)
     } finally {
       setSleepSaving(false)
     }
@@ -1828,6 +2140,7 @@ function App() {
       }, { merge: true })
       setMedicationSettings(next)
       setMedicationSettingsDraft(next)
+      setMedicationSettingsOpen(false)
       setMedicationSaveMessage('服薬時刻・通知設定を保存しました。')
     } catch (error) {
       console.error('服薬設定保存エラー:', error)
@@ -1862,6 +2175,14 @@ function App() {
   const toggleMedicationSlot = async (slotKey) => {
     if (!session || medicationSaving) return
     if (!isMedicationSlotEnabled(medicationSettings, slotKey)) return
+    const action = getMedicationSlotActionState({
+      slotKey,
+      settings: medicationSettings,
+      slots: medicationRecord?.slots,
+      isSelectedToday: selectedIsToday,
+      nowMs: Date.now(),
+    })
+    if (!action.clickable) return
     const currentSlots = normalizeMedicationRecordSlots(medicationRecord?.slots)
     const current = currentSlots[slotKey] || { completed: false, takenAt: null }
     const nextCompleted = !current.completed
@@ -4992,31 +5313,31 @@ function App() {
           },
           {
             heading: '6. 睡眠記録を便利に使う',
-            body: '睡眠記録では、選択日の起床時刻と当日の就寝時刻を保存できます。「現在時刻」を押すと、その時点の時刻をワンタッチで保存できます。前日の就寝時刻は自動的に参照表示されます。睡眠記録は健康生活カウントの直上に表示されます。',
+            body: '睡眠記録は目覚まし時計の操作で残します。「目覚まし時計設定」で起床予定を保存し、寝るときに「目覚まし開始（寝る）」で就寝を記録、「目覚ましを止める」で起床を記録します。睡眠時間は当日起床−前日就寝です。',
             points: [
-              '時刻を手動で変更した場合は「保存」を押して記録します。',
-              '睡眠記録の見出しを押すと、入力欄と詳細を折りたためます。初期状態は開いた状態です。',
-              '設定メニューの「睡眠記録表示」で、睡眠記録欄の表示・非表示を切り替えられます。非表示にしても保存済みデータは削除されません。',
-              'メニューの「健康生活PDF」から、選択中の月の睡眠一覧・服薬記録と、睡眠・疲れ・完了件数を1枚にまとめた日別グラフを出力できます。',
+              '設定は当日または未来日のみ。就寝日・起床予定日はカレンダー選択日に連動（表示のみ）。起床予定時刻だけ指定します。',
+              '「目覚まし開始（寝る）」は当日のみ。押した現在時刻が就寝です。未来日・過去日では開始ボタンは出ません。',
+              '停止前のみ「起床予定を変更」と「取消」ができます。停止後の起床・過去の就寝は修正できません。止めない限り次の開始はできません。',
+              '起床予定時刻の通知は開始後のみです（「通知不要」で通知だけオフ）。端末オフや通知拒否など届かない場合もあります。',
+              '睡眠専用ショートカット（?sleep=1）でも同じ操作です。見出しの折りたたみ・表示切替は従来どおりです。',
             ],
           },
           {
             heading: '7. 服薬管理',
-            body: '朝・昼・夜・寝る前の4枠で服薬を記録・管理できます。各枠の時刻は画面内で変更でき、指定時刻の前後30分から未完了の枠がゆっくり点滅します。過去の日も後から記録・取消できます。',
+            body: '朝・昼・夜・寝る前のうち「服薬あり」の枠だけボタン表示します。指定時刻の前後30分だけ点滅し操作できます。同時に操作できるのは順序上の1枠です。',
             points: [
-              '「完了」で服薬済み、「済」をもう一度押すと取消します。',
-              '各枠で「服薬なし」にすると、その枠は記録・点滅・通知の対象外になり、PDFでは「無」と表示されます。',
-              '「通知不要」は服薬の5分前通知だけをオフにします（予定の通知とは別です）。',
-              '設定メニューの「服薬記録表示」で表示・非表示を切り替えられます。',
-              '睡眠専用ショートカット（?sleep=1）では服薬欄は表示されません。',
-              '健康生活PDFの服薬列は表示のみで、疲れスコアには加点しません。',
+              '点滅中に完了／取消できます。先の枠が点滅中で未完了の間は後続を操作できません。帯を逃した記録はできません。',
+              '「服薬時刻・有無」から時刻・有無・服薬通知不要を設定します。全枠なしのときは「服薬予定無」と表示します。',
+              '設定変更で点滅中の枠を「無」にすると、そのボタンはすぐ消えます。',
+              '服薬通知と目覚まし通知は別です。健康生活PDFの服薬列は表示のみで疲れスコアには加点しません。',
             ],
           },
           {
             heading: '8. 通知を使う',
-            body: '右上の通知ボタンから、時刻ありスケジュールの開始時刻を通知で受け取れます。タスクには通知しません。服薬の5分前通知は服薬記録欄の「通知不要」で別に切り替えられます。ブラウザの通知許可が必要です。',
+            body: '右上の通知ボタンから、時刻ありスケジュールの開始時刻を通知で受け取れます。タスクには通知しません。目覚まし通知・服薬の5分前通知は各セッションの「通知不要」で個別に切り替えられます。ブラウザの通知許可が必要です。',
             points: [
               '通知がオンの場合、予定開始時刻に音や表示で知らせます。',
+              '目覚ましは本物のアラームほど確実ではない場合があります（電池最適化・通知拒否・端末オフなど）。',
               'iPhone / Safari はホーム画面に追加後に設定してください。',
               '通知がブロックされている場合は、ブラウザ設定から許可を切り替えてください。',
             ],
@@ -5135,31 +5456,30 @@ function App() {
           },
           {
             heading: '6. Make good use of sleep records',
-            body: 'Sleep Records lets you save the selected day’s wake-up time and bedtime. Tap “Current time” to save the time instantly with one tap. The previous day’s bedtime is shown automatically for reference.',
+            body: 'Sleep is logged with alarm actions. “Set alarm” records bedtime and a planned wake time; “Stop alarm” records wake time. Sleep duration is today’s wake minus the previous day’s bedtime.',
             points: [
-              'After changing a time manually, tap “Save” to store the edited value.',
-              'Tap the Sleep Records heading to collapse or expand the input and details. It is expanded by default.',
-              'Use “Show Sleep Records” in Settings to show or hide the sleep record panel. Hiding it does not delete saved data.',
-              'From the menu, open “Healthy Life PDF” to export the month’s sleep table, medication records, and a combined daily chart (sleep, fatigue, completed tasks).',
+              'Set = bedtime, picker = planned wake, stop = wake on the calendar date. Bedtime between 00:00–01:59 belongs to the previous day.',
+              'Before stop you can change the planned wake time or cancel. After stop, wake and past bedtime cannot be edited. You must stop before setting again.',
+              'A wake notification fires at the planned time (toggle “Notifications off” to silence only that alert). Delivery is not guaranteed if the device/notifications are blocked.',
+              'The sleep-only shortcut (?sleep=1) uses the same controls. Collapse and show/hide settings work as before.',
             ],
           },
           {
             heading: '7. Medication management',
-            body: 'Track medication in four slots: morning, noon, evening, and bedtime. You can edit each slot’s time; unfinished slots blink slowly from 30 minutes before/after the set time. Past days can be recorded or cleared later.',
+            body: 'Only enabled slots (morning/noon/evening/bedtime) show buttons. They blink and are operable only within ±30 minutes of the set time. Only one slot can be operated at a time in order.',
             points: [
-              'Tap Complete to mark taken; tap Done again to undo.',
-              'Mark a slot as “No medication” to exclude it from records, blinking, and reminders (shown as “None” in PDF).',
-              '“Notifications off” disables only the 5-minute-before medication reminder (separate from schedule alerts).',
-              'Use “Show Medication Records” in Settings to show or hide the panel.',
-              'The sleep-only shortcut (?sleep=1) hides the medication panel.',
-              'Medication columns in Healthy Life PDF are display-only and do not affect the fatigue score.',
+              'Complete or undo only while blinking. Later slots stay locked while an earlier blinking slot is incomplete. Missed windows cannot be backfilled.',
+              'Open “Medication times” for times, on/off per slot, and medication notification toggle. If every slot is off, the panel shows “No medication planned”.',
+              'Turning a blinking slot off removes its button immediately.',
+              'Medication alerts are separate from the wake alarm. Healthy Life PDF medication columns are display-only and do not affect fatigue score.',
             ],
           },
           {
             heading: '8. Use notifications',
-            body: 'Tap the notification button in the upper-right corner to receive reminders when a timed schedule is about to start. Tasks do not send notifications. Medication reminders (5 minutes before) are controlled separately with “Notifications off” in the medication panel. Browser notification permission is required.',
+            body: 'Use the notification button to get reminders for timed schedules. Tasks do not notify. Wake-alarm and medication (5 minutes before) alerts each have their own “Notifications off” toggle. Browser permission is required.',
             points: [
-              'When notifications are enabled, you will receive a reminder at the scheduled time.',
+              'When enabled, you get a reminder at the scheduled time.',
+              'The wake alarm is not as reliable as a native clock alarm (battery optimization, blocked notifications, device off, etc.).',
               'For iPhone and Safari, add the app to your home screen before enabling alerts.',
               'If notifications are blocked, change the browser settings to allow them.',
             ],
@@ -6413,97 +6733,6 @@ function App() {
                 )}
               </section>
             )}
-            {weekCalendarEnabled && (
-              <section
-                className="week-section"
-                style={{ ...styles.weekSection, ...(weekCalendarFixed ? styles.fixedWeekSection : {}), touchAction: 'pan-y' }}
-              onTouchStart={(event) => {
-                weekTouchRef.current = event.changedTouches[0].clientX
-              }}
-              onTouchEnd={(event) => {
-                if (weekTouchRef.current === null) return
-                const distance = event.changedTouches[0].clientX - weekTouchRef.current
-                weekTouchRef.current = null
-                if (Math.abs(distance) > 50) changeWeek(distance < 0 ? 7 : -7)
-              }}
-              onPointerDown={(event) => {
-                if (event.pointerType === 'touch') return
-                weekSwipeRef.current = event.clientX
-              }}
-              onPointerUp={(event) => {
-                if (event.pointerType === 'touch') return
-                if (weekSwipeRef.current === null) return
-                const distance = event.clientX - weekSwipeRef.current
-                weekSwipeRef.current = null
-                if (Math.abs(distance) > 60) changeWeek(distance < 0 ? 7 : -7)
-              }}
-              onPointerCancel={() => {
-                weekSwipeRef.current = null
-              }}
-              onWheel={(e) => {
-                if (Math.abs(e.deltaY) > 30) {
-                  changeWeek(e.deltaY > 0 ? 7 : -7)
-                }
-              }}
-            >
-              <div className="week-nav" style={styles.weekNav}>
-                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeek}>
-                  <ChevronLeft size={16} />
-                </button>
-                <div className="week-nav-title" style={styles.weekTitle}>{formatMonthTitle(selectedDate)}</div>
-                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="次の週" onClick={selectNextWeek}>
-                  <ChevronRight size={16} />
-                </button>
-              </div>
-
-              <div className="week-grid" style={styles.weekGrid}>
-                {weekDates.map((date) => {
-                  const key = formatDateKey(date)
-                  const list = scheduleMap[key] || []
-                  const totalCount = list.length
-                  const incompleteCount = list.filter((item) => item.completed !== true).length
-                  const isAllCompleted = totalCount > 0 && incompleteCount === 0
-                  const isCountAbbreviated = incompleteCount >= 100 || totalCount >= 100
-                  const isSelected = key === selectedKey
-                  const isToday = key === formatDateKey(new Date())
-                  const isHoliday = Boolean(holidayMap[key])
-
-                  return (
-                    <button
-                      type="button"
-                      key={key}
-                      className="week-day-tile"
-                      onClick={() => setSelectedDate(date)}
-                      style={{
-                        ...styles.dayButton,
-                        background: isSelected ? '#dbeafe' : isToday ? '#e3f6e8' : '#ffffff',
-                        borderColor: isSelected ? '#2563eb' : isToday ? '#86d9a0' : '#d9e2f2',
-                        boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.16)' : '0 2px 6px rgba(15,23,42,0.04)',
-                      }}
-                    >
-                      <span className="week-day-label" style={{ ...styles.dayLabel, color: isHoliday || date.getDay() === 0 ? '#dc2626' : date.getDay() === 6 ? '#2563eb' : '#475569' }}>
-                        {dayNames[date.getDay()]}
-                      </span>
-                      <strong className="week-day-number" style={{ ...styles.dayNumber, color: isHoliday ? '#dc2626' : '#0f172a' }}>{date.getDate()}</strong>
-                      <span style={styles.dayMeta}>
-                        {totalCount > 0 && (
-                          isCountAbbreviated ? '…/…' : isAllCompleted ? (
-                            <span style={styles.monthCalendarCompletedCount}>{totalCount}</span>
-                          ) : (
-                            <>
-                              <span style={styles.monthCalendarIncompleteCount}>{incompleteCount}</span>
-                              <span style={styles.monthCalendarCountSeparator}>/</span>
-                              <span>{totalCount}</span>
-                            </>
-                          )
-                        )}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-              </section>
-            )}
 
             <section
               ref={scheduleSectionRef}
@@ -6914,6 +7143,99 @@ function App() {
               </section>
             )}
 
+            {/* 週カレンダー: 睡眠・服薬の直上に配置（カレンダー連動用） */}
+            {weekCalendarEnabled && (
+              <section
+                className="week-section"
+                style={{ ...styles.weekSection, ...(weekCalendarFixed ? styles.fixedWeekSection : {}), touchAction: 'pan-y' }}
+              onTouchStart={(event) => {
+                weekTouchRef.current = event.changedTouches[0].clientX
+              }}
+              onTouchEnd={(event) => {
+                if (weekTouchRef.current === null) return
+                const distance = event.changedTouches[0].clientX - weekTouchRef.current
+                weekTouchRef.current = null
+                if (Math.abs(distance) > 50) changeWeek(distance < 0 ? 7 : -7)
+              }}
+              onPointerDown={(event) => {
+                if (event.pointerType === 'touch') return
+                weekSwipeRef.current = event.clientX
+              }}
+              onPointerUp={(event) => {
+                if (event.pointerType === 'touch') return
+                if (weekSwipeRef.current === null) return
+                const distance = event.clientX - weekSwipeRef.current
+                weekSwipeRef.current = null
+                if (Math.abs(distance) > 60) changeWeek(distance < 0 ? 7 : -7)
+              }}
+              onPointerCancel={() => {
+                weekSwipeRef.current = null
+              }}
+              onWheel={(e) => {
+                if (Math.abs(e.deltaY) > 30) {
+                  changeWeek(e.deltaY > 0 ? 7 : -7)
+                }
+              }}
+            >
+              <div className="week-nav" style={styles.weekNav}>
+                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="前の週" onClick={selectPreviousWeek}>
+                  <ChevronLeft size={16} />
+                </button>
+                <div className="week-nav-title" style={styles.weekTitle}>{formatMonthTitle(selectedDate)}</div>
+                <button type="button" className="week-nav-btn" style={styles.navButton} aria-label="次の週" onClick={selectNextWeek}>
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+
+              <div className="week-grid" style={styles.weekGrid}>
+                {weekDates.map((date) => {
+                  const key = formatDateKey(date)
+                  const list = scheduleMap[key] || []
+                  const totalCount = list.length
+                  const incompleteCount = list.filter((item) => item.completed !== true).length
+                  const isAllCompleted = totalCount > 0 && incompleteCount === 0
+                  const isCountAbbreviated = incompleteCount >= 100 || totalCount >= 100
+                  const isSelected = key === selectedKey
+                  const isToday = key === formatDateKey(new Date())
+                  const isHoliday = Boolean(holidayMap[key])
+
+                  return (
+                    <button
+                      type="button"
+                      key={key}
+                      className="week-day-tile"
+                      onClick={() => setSelectedDate(date)}
+                      style={{
+                        ...styles.dayButton,
+                        background: isSelected ? '#dbeafe' : isToday ? '#e3f6e8' : '#ffffff',
+                        borderColor: isSelected ? '#2563eb' : isToday ? '#86d9a0' : '#d9e2f2',
+                        boxShadow: isSelected ? '0 6px 18px rgba(37,99,235,0.16)' : '0 2px 6px rgba(15,23,42,0.04)',
+                      }}
+                    >
+                      <span className="week-day-label" style={{ ...styles.dayLabel, color: isHoliday || date.getDay() === 0 ? '#dc2626' : date.getDay() === 6 ? '#2563eb' : '#475569' }}>
+                        {dayNames[date.getDay()]}
+                      </span>
+                      <strong className="week-day-number" style={{ ...styles.dayNumber, color: isHoliday ? '#dc2626' : '#0f172a' }}>{date.getDate()}</strong>
+                      <span style={styles.dayMeta}>
+                        {totalCount > 0 && (
+                          isCountAbbreviated ? '…/…' : isAllCompleted ? (
+                            <span style={styles.monthCalendarCompletedCount}>{totalCount}</span>
+                          ) : (
+                            <>
+                              <span style={styles.monthCalendarIncompleteCount}>{incompleteCount}</span>
+                              <span style={styles.monthCalendarCountSeparator}>/</span>
+                              <span>{totalCount}</span>
+                            </>
+                          )
+                        )}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+            )}
+
             {sleepRecordEnabled && (
               <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
                 <div style={styles.sleepRecordTitleRow}>
@@ -6926,59 +7248,148 @@ function App() {
                     {sleepRecordCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
                     <strong style={styles.sleepRecordTitle}>睡眠記録</strong>
                   </button>
-                  <span style={styles.sleepRecordStatus}>{sleepRecord?.exists ? '保存済み' : '未記録'}</span>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.medicationNotifyButton,
+                      ...(sleepAlarmState.notifyEnabled === false ? styles.medicationNotifyButtonOff : {}),
+                    }}
+                    onClick={toggleSleepAlarmNotifyEnabled}
+                    disabled={sleepSaving}
+                    title="起床予定時刻の通知のみ切り替えます（服薬通知とは別です）"
+                  >
+                    {sleepAlarmState.notifyEnabled === false ? '目覚まし通知オフ' : '通知不要'}
+                  </button>
                 </div>
-                {sleepOnlyMode && <div style={styles.sleepOnlyDate}>{formatWeekTitle(selectedDate)}</div>}
+                {sleepOnlyMode && <div style={styles.sleepOnlyDate}>{formatDisplayDate(selectedDate)}</div>}
                 {!sleepRecordCollapsed && (
                   <>
-                    <div style={styles.sleepRecordFields}>
-                      <label style={styles.sleepRecordField}>
-                        <span>起床</span>
-                        <input
-                          type="time"
-                          value={sleepRecord?.wakeTime || formatCurrentTime()}
-                          onChange={(event) => {
-                            setSleepSaveMessage('')
-                            setSleepRecord((current) => ({ ...(current || {}), wakeTime: event.target.value }))
-                          }}
-                          style={styles.sleepRecordInput}
-                        />
-                        <span style={styles.sleepRecordActions}>
-                          <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('wakeTime', sleepRecord?.wakeTime)} disabled={sleepSaving}>
-                            保存
+                    <div style={styles.alarmActionRow}>
+                      {isSleepAlarmStarted(sleepAlarmState) ? (
+                        <>
+                          <button
+                            type="button"
+                            style={styles.alarmStopButton}
+                            onClick={stopSleepAlarm}
+                            disabled={sleepSaving}
+                          >
+                            <span aria-hidden="true">⏰</span>
+                            目覚ましを止める
                           </button>
-                          <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('wakeTime')} disabled={sleepSaving}>
-                            現在時刻
+                          <button
+                            type="button"
+                            style={styles.alarmSecondaryButton}
+                            onClick={() => openSleepAlarmPicker(true)}
+                            disabled={sleepSaving}
+                          >
+                            起床予定を変更
                           </button>
-                        </span>
-                      </label>
-                      <label style={styles.sleepRecordField}>
-                        <span>就寝</span>
-                        <input
-                          type="time"
-                          value={sleepRecord?.bedtime || formatCurrentTime()}
-                          onChange={(event) => {
-                            setSleepSaveMessage('')
-                            setSleepRecord((current) => ({ ...(current || {}), bedtime: event.target.value }))
-                          }}
-                          style={styles.sleepRecordInput}
-                        />
-                        <span style={styles.sleepRecordActions}>
-                          <button type="button" style={styles.sleepRecordSaveButton} onClick={() => saveSleepTime('bedtime', sleepRecord?.bedtime)} disabled={sleepSaving}>
-                            保存
+                          <button
+                            type="button"
+                            style={styles.alarmSecondaryButton}
+                            onClick={cancelActiveSleepAlarm}
+                            disabled={sleepSaving}
+                          >
+                            取消
                           </button>
-                          <button type="button" style={styles.currentTimeButton} onClick={() => saveSleepTime('bedtime')} disabled={sleepSaving}>
-                            現在時刻
-                          </button>
-                        </span>
-                      </label>
+                        </>
+                      ) : (
+                        <>
+                          {selectedKey >= formatDateKey(new Date()) && (
+                            <button
+                              type="button"
+                              style={styles.alarmPrimaryButton}
+                              onClick={() => openSleepAlarmPicker(false)}
+                              disabled={sleepSaving || sleepAlarmPickerOpen}
+                            >
+                              <span aria-hidden="true">⏰</span>
+                              目覚まし時計設定
+                            </button>
+                          )}
+                          {selectedIsToday &&
+                            hasSleepAlarmPlan(sleepAlarmState) &&
+                            sleepAlarmState.bedtimeDate === formatDateKey(new Date()) && (
+                            <button
+                              type="button"
+                              style={styles.alarmStartButton}
+                              onClick={startSleepAlarm}
+                              disabled={sleepSaving || sleepAlarmPickerOpen}
+                            >
+                              目覚まし開始（寝る）
+                            </button>
+                          )}
+                          {hasSleepAlarmPlan(sleepAlarmState) && (
+                            <button
+                              type="button"
+                              style={styles.alarmSecondaryButton}
+                              onClick={cancelActiveSleepAlarm}
+                              disabled={sleepSaving}
+                            >
+                              取消
+                            </button>
+                          )}
+                        </>
+                      )}
                     </div>
+
+                    {sleepAlarmPickerOpen && (
+                      <div style={styles.alarmPickerPanel} role="dialog" aria-label="目覚ましの設定">
+                        <div style={styles.alarmWakePlanStack}>
+                          <div style={styles.alarmWakePlanDate}>
+                            {formatWakePlanDateLabel(
+                              sleepAlarmDraftWakeDate && /^\d{4}-\d{2}-\d{2}$/.test(sleepAlarmDraftWakeDate)
+                                ? sleepAlarmDraftWakeDate
+                                : formatDateKey(addDays(selectedDate, 1))
+                            )}
+                          </div>
+                          <label style={styles.alarmWakePlanTimeField}>
+                            <span>起床予定時刻</span>
+                            <input
+                              type="time"
+                              value={sleepAlarmDraftWake}
+                              onChange={(event) => setSleepAlarmDraftWake(event.target.value)}
+                              style={styles.sleepRecordInput}
+                            />
+                          </label>
+                        </div>
+                        <div style={styles.alarmPickerActions}>
+                          <button type="button" style={styles.alarmSecondaryButton} onClick={cancelSleepAlarmPicker} disabled={sleepSaving}>
+                            キャンセル
+                          </button>
+                          <button type="button" style={styles.alarmPrimaryButton} onClick={confirmSleepAlarmPicker} disabled={sleepSaving || !sleepAlarmDraftWake}>
+                            {sleepAlarmEditingWake ? '予定を更新' : '設定を保存'}
+                          </button>
+                        </div>
+                        <div style={styles.alarmPickerHint}>
+                          <p style={{ margin: '0 0 6px' }}>・設定は当日または未来日のみです。起床予定日は週／月カレンダーの選択日（翌日）に連動し、ここでは変更できません。</p>
+                          <p style={{ margin: '0 0 6px' }}>・「設定を保存」では起床予定だけ覚えます。就寝時刻は当日に「目覚まし開始（寝る）」を押した現在時刻です。</p>
+                          <p style={{ margin: '0 0 6px' }}>・起床は「目覚ましを止める」を押した現在時刻です。開始・停止は当日のみです。</p>
+                          <p style={{ margin: 0 }}>・停止前のみ起床予定の変更と取消ができます。キャンセルでこの設定画面を閉じます。</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {hasSleepAlarmPlan(sleepAlarmState) && (
+                      <div style={styles.alarmActiveSummary} role="status">
+                        {isSleepAlarmStarted(sleepAlarmState) ? (
+                          <>
+                            <div>就寝 {formatDateKeyJa(sleepAlarmState.bedtimeDate)} {sleepAlarmState.bedtime || '—'}</div>
+                            <div>
+                              {formatWakePlanDateLabel(sleepAlarmState.plannedWakeDate)}
+                              {' '}{sleepAlarmState.plannedWakeTime || '—'}
+                            </div>
+                          </>
+                        ) : (
+                          <div>
+                            予定（未開始）{' '}
+                            {formatWakePlanDateLabel(sleepAlarmState.plannedWakeDate)}
+                            {' '}{sleepAlarmState.plannedWakeTime || '—'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {sleepSaveMessage && <div style={styles.sleepSaveMessage} role="status">{sleepSaveMessage}</div>}
-                    <div style={styles.previousSleepRecord}>
-                      <span>前日の就寝</span>
-                      <strong>{previousSleepRecord?.bedtime || '未記録'}</strong>
-                      <span style={styles.previousSleepRecordNote}>前日の記録を表示</span>
-                    </div>
                   </>
                 )}
               </div>
@@ -6998,127 +7409,139 @@ function App() {
                   </button>
                   <button
                     type="button"
-                    style={{
-                      ...styles.medicationNotifyButton,
-                      ...(medicationSettingsDraft.notifyEnabled === false ? styles.medicationNotifyButtonOff : {}),
+                    style={styles.alarmSecondaryButton}
+                    onClick={() => {
+                      setMedicationSettingsOpen((current) => !current)
+                      setMedicationSaveMessage('')
                     }}
-                    onClick={toggleMedicationNotifyEnabled}
-                    disabled={medicationSaving}
-                    title="服薬の5分前通知のみ切り替えます（予定通知とは別です）"
                   >
-                    {medicationSettingsDraft.notifyEnabled === false ? '服薬通知オフ' : '通知不要'}
+                    服薬時刻・有無
                   </button>
                 </div>
                 {!medicationRecordCollapsed && (
                   <>
-                    <div style={styles.medicationSlotList}>
-                      {MEDICATION_SLOT_KEYS.map((slotKey) => {
-                        const slotEnabled = isMedicationSlotEnabled(medicationSettings, slotKey)
-                        const slot = medicationRecord?.slots?.[slotKey] || { completed: false, takenAt: null }
-                        const scheduledTime = medicationSettings[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]
-                        const alert = getMedicationSlotAlert({
-                          scheduledTime,
-                          completed: slot.completed,
-                          enabled: slotEnabled,
-                          isSelectedToday: selectedIsToday,
-                          nowMs: nowTick,
-                        })
-                        return (
-                          <div
-                            key={slotKey}
-                            className={alert === 'due' ? 'medication-slot-due' : undefined}
-                            style={{
-                              ...styles.medicationSlotRow,
-                              ...(slotEnabled && slot.completed ? styles.medicationSlotRowDone : {}),
-                              ...(alert === 'due' ? styles.medicationSlotRowDue : {}),
-                              ...(!slotEnabled ? styles.medicationSlotRowDisabled : {}),
-                            }}
-                          >
-                            <div style={styles.medicationSlotMeta}>
-                              <strong>{MEDICATION_SLOT_LABELS[slotKey]}</strong>
-                              {slotEnabled ? (
-                                <>
-                                  <span style={styles.medicationSlotTime}>{scheduledTime}</span>
-                                  {slot.completed && slot.takenAt && (
-                                    <span style={styles.medicationSlotTaken}>記録 {slot.takenAt}</span>
-                                  )}
-                                  {alert === 'due' && !slot.completed && (
-                                    <span style={styles.medicationSlotWarn}>未服薬</span>
-                                  )}
-                                </>
-                              ) : (
-                                <span style={styles.medicationSlotNone}>無</span>
-                              )}
-                            </div>
-                            {slotEnabled ? (
+                    {(() => {
+                      const enabledSlots = MEDICATION_SLOT_KEYS.filter((key) => isMedicationSlotEnabled(medicationSettings, key))
+                      if (enabledSlots.length === 0) {
+                        return <div style={styles.medicationNoneBanner}>服薬予定無</div>
+                      }
+                      return (
+                        <div style={styles.medicationQuickButtonRow}>
+                          {enabledSlots.map((slotKey) => {
+                            const slot = medicationRecord?.slots?.[slotKey] || { completed: false, takenAt: null }
+                            const action = getMedicationSlotActionState({
+                              slotKey,
+                              settings: medicationSettings,
+                              slots: medicationRecord?.slots,
+                              isSelectedToday: selectedIsToday,
+                              nowMs: nowTick,
+                            })
+                            const alert = getMedicationSlotAlert({
+                              scheduledTime: medicationSettings[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey],
+                              completed: slot.completed,
+                              enabled: true,
+                              isSelectedToday: selectedIsToday,
+                              nowMs: nowTick,
+                            })
+                            return (
                               <button
+                                key={slotKey}
                                 type="button"
+                                className={alert === 'due' && !slot.completed ? 'medication-slot-due' : undefined}
                                 style={{
-                                  ...styles.medicationSlotButton,
-                                  ...(slot.completed ? styles.medicationSlotButtonDone : {}),
+                                  ...styles.medicationQuickButton,
+                                  ...(slot.completed ? styles.medicationQuickButtonDone : {}),
+                                  ...(action.clickable ? {} : styles.medicationQuickButtonDisabled),
+                                  ...(alert === 'due' && !slot.completed ? styles.medicationSlotRowDue : {}),
                                 }}
                                 onClick={() => toggleMedicationSlot(slotKey)}
-                                disabled={medicationSaving}
+                                disabled={medicationSaving || !action.clickable}
                                 aria-pressed={slot.completed}
+                                title={
+                                  action.clickable
+                                    ? (slot.completed ? '取消（点滅中のみ）' : `${MEDICATION_SLOT_LABELS[slotKey]}を完了`)
+                                    : (action.reason === 'locked' ? '先の枠を完了してください' : '点滅帯のみ操作できます')
+                                }
                               >
-                                {slot.completed ? '済' : '完了'}
+                                <span aria-hidden="true">💊</span>
+                                <span>{MEDICATION_SLOT_LABELS[slotKey]}</span>
+                                <span style={styles.medicationQuickButtonMeta}>
+                                  {medicationSettings[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]}
+                                  {slot.completed ? '・済' : ''}
+                                </span>
                               </button>
-                            ) : (
-                              <span style={styles.medicationSlotNoneBadge}>服薬なし</span>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                    <div style={styles.medicationSettingsBlock} aria-label="服薬時刻の設定">
-                      <div style={styles.medicationSettingsHeading}>服薬時刻・有無</div>
-                      <div style={styles.medicationSettingsFields}>
-                        {MEDICATION_SLOT_KEYS.map((slotKey) => {
-                          const enabledKey = `${slotKey}Enabled`
-                          const slotEnabled = medicationSettingsDraft[enabledKey] !== false
-                          return (
-                            <div key={slotKey} style={styles.medicationSettingsField}>
-                              <span>{MEDICATION_SLOT_LABELS[slotKey]}</span>
-                              <label style={styles.medicationEnabledLabel}>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
+
+                    {medicationSettingsOpen && (
+                      <div style={styles.medicationSettingsBlock} aria-label="服薬時刻の設定">
+                        <div style={styles.medicationSettingsHeading}>服薬時刻・有無</div>
+                        <button
+                          type="button"
+                          style={{
+                            ...styles.medicationNotifyButton,
+                            ...(medicationSettingsDraft.notifyEnabled === false ? styles.medicationNotifyButtonOff : {}),
+                            marginBottom: '10px',
+                          }}
+                          onClick={toggleMedicationNotifyEnabled}
+                          disabled={medicationSaving}
+                          title="服薬の5分前通知のみ切り替えます（目覚まし通知とは別です）"
+                        >
+                          {medicationSettingsDraft.notifyEnabled === false ? '服薬通知オフ' : '通知不要'}
+                        </button>
+                        <div style={styles.medicationSettingsFields}>
+                          {MEDICATION_SLOT_KEYS.map((slotKey) => {
+                            const enabledKey = `${slotKey}Enabled`
+                            const slotEnabled = medicationSettingsDraft[enabledKey] !== false
+                            return (
+                              <div key={slotKey} style={styles.medicationSettingsField}>
+                                <span>{MEDICATION_SLOT_LABELS[slotKey]}</span>
+                                <label style={styles.medicationEnabledLabel}>
+                                  <input
+                                    type="checkbox"
+                                    checked={slotEnabled}
+                                    onChange={(event) => {
+                                      setMedicationSaveMessage('')
+                                      setMedicationSettingsDraft((current) => ({
+                                        ...current,
+                                        [enabledKey]: event.target.checked,
+                                      }))
+                                    }}
+                                  />
+                                  服薬あり
+                                </label>
                                 <input
-                                  type="checkbox"
-                                  checked={slotEnabled}
+                                  type="time"
+                                  value={medicationSettingsDraft[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]}
                                   onChange={(event) => {
                                     setMedicationSaveMessage('')
                                     setMedicationSettingsDraft((current) => ({
                                       ...current,
-                                      [enabledKey]: event.target.checked,
+                                      [slotKey]: event.target.value,
                                     }))
                                   }}
+                                  style={styles.sleepRecordInput}
+                                  disabled={!slotEnabled}
                                 />
-                                服薬あり
-                              </label>
-                              <input
-                                type="time"
-                                value={medicationSettingsDraft[slotKey] || DEFAULT_MEDICATION_TIMES[slotKey]}
-                                onChange={(event) => {
-                                  setMedicationSaveMessage('')
-                                  setMedicationSettingsDraft((current) => ({
-                                    ...current,
-                                    [slotKey]: event.target.value,
-                                  }))
-                                }}
-                                style={styles.sleepRecordInput}
-                                disabled={!slotEnabled}
-                              />
-                            </div>
-                          )
-                        })}
+                              </div>
+                            )
+                          })}
+                        </div>
+                        <button
+                          type="button"
+                          style={styles.medicationSettingsSaveButton}
+                          onClick={async () => {
+                            await saveMedicationSettings()
+                          }}
+                          disabled={medicationSaving}
+                        >
+                          設定を保存
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        style={styles.medicationSettingsSaveButton}
-                        onClick={saveMedicationSettings}
-                        disabled={medicationSaving}
-                      >
-                        設定を保存
-                      </button>
-                    </div>
+                    )}
                     {medicationSaveMessage && (
                       <div style={styles.sleepSaveMessage} role="status">{medicationSaveMessage}</div>
                     )}
@@ -9724,6 +10147,171 @@ const styles = {
     borderColor: '#94a3b8',
     background: '#f1f5f9',
     color: '#475569',
+  },
+  alarmActionRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
+    marginBottom: '10px',
+  },
+  alarmPrimaryButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: '0',
+    borderRadius: '10px',
+    background: '#2563eb',
+    color: '#ffffff',
+    fontWeight: 700,
+    fontSize: '13px',
+    padding: '10px 14px',
+    cursor: 'pointer',
+  },
+  alarmStopButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: '0',
+    borderRadius: '10px',
+    background: '#dc2626',
+    color: '#ffffff',
+    fontWeight: 700,
+    fontSize: '13px',
+    padding: '10px 14px',
+    cursor: 'pointer',
+  },
+  alarmStartButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: '0',
+    borderRadius: '10px',
+    background: '#0f766e',
+    color: '#ffffff',
+    fontWeight: 700,
+    fontSize: '13px',
+    padding: '10px 14px',
+    cursor: 'pointer',
+  },
+  alarmSecondaryButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    border: '1px solid #cbd5e1',
+    borderRadius: '10px',
+    background: '#ffffff',
+    color: '#334155',
+    fontWeight: 700,
+    fontSize: '12px',
+    padding: '8px 12px',
+    cursor: 'pointer',
+  },
+  alarmPickerPanel: {
+    marginBottom: '10px',
+    padding: '12px',
+    borderRadius: '12px',
+    border: '1px solid #bfdbfe',
+    background: '#eff6ff',
+  },
+  alarmPickerActions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
+    marginTop: '10px',
+  },
+  alarmPickerHint: {
+    margin: '8px 0 0',
+    fontSize: '12px',
+    color: '#475569',
+    lineHeight: 1.5,
+  },
+  alarmDateDisplay: {
+    display: 'block',
+    marginTop: '4px',
+    fontSize: '15px',
+    color: '#0f172a',
+  },
+  alarmWakePlanStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  alarmWakePlanDate: {
+    fontSize: '15px',
+    fontWeight: 700,
+    color: '#0f172a',
+    lineHeight: 1.4,
+  },
+  alarmWakePlanTimeField: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: '6px',
+    color: '#475569',
+    fontSize: '13px',
+    fontWeight: 700,
+  },
+  alarmActiveSummary: {
+    marginBottom: '10px',
+    padding: '10px 12px',
+    borderRadius: '10px',
+    background: '#fff7ed',
+    border: '1px solid #fed7aa',
+    color: '#9a3412',
+    fontSize: '13px',
+    lineHeight: 1.6,
+    fontWeight: 600,
+  },
+  sleepReadonlySummary: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  medicationQuickButtonRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  medicationQuickButton: {
+    display: 'inline-flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: '2px',
+    minWidth: '88px',
+    border: '1px solid #f59e0b',
+    borderRadius: '12px',
+    background: '#fff7ed',
+    color: '#9a3412',
+    fontWeight: 700,
+    fontSize: '13px',
+    padding: '10px 12px',
+    cursor: 'pointer',
+  },
+  medicationQuickButtonDone: {
+    borderColor: '#86efac',
+    background: '#f0fdf4',
+    color: '#166534',
+  },
+  medicationQuickButtonDisabled: {
+    opacity: 0.45,
+    cursor: 'not-allowed',
+  },
+  medicationQuickButtonMeta: {
+    fontSize: '11px',
+    fontWeight: 600,
+    opacity: 0.85,
+  },
+  medicationNoneBanner: {
+    marginBottom: '8px',
+    padding: '12px',
+    borderRadius: '10px',
+    background: '#f8fafc',
+    border: '1px dashed #cbd5e1',
+    color: '#64748b',
+    fontWeight: 700,
+    fontSize: '13px',
+    textAlign: 'center',
   },
   medicationSlotList: {
     display: 'flex',
