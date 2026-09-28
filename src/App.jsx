@@ -850,6 +850,8 @@ function App() {
   const [aggError, setAggError] = useState('')
   const [aggResult, setAggResult] = useState(null)
   const menuRef = useRef(null)
+  const menuButtonRef = useRef(null)
+  const [menuDropdownPos, setMenuDropdownPos] = useState(null)
   const holdTimerRef = useRef(null)
   const lastCardTapRef = useRef({ id: null, time: 0 })
   const scheduleDragRef = useRef(null)
@@ -1313,20 +1315,46 @@ function App() {
   }, [session?.uid])
 
   useEffect(() => {
-    if (!menuOpen) return
+    if (!menuOpen) {
+      setMenuDropdownPos(null)
+      return undefined
+    }
+
+    const updateMenuDropdownPosition = () => {
+      const button = menuButtonRef.current
+      if (!button) return
+      const rect = button.getBoundingClientRect()
+      const menuWidth = 240
+      const top = Math.round(rect.bottom + 8)
+      const left = Math.round(Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)))
+      const maxHeight = Math.max(180, Math.round(window.innerHeight - top - 12))
+      setMenuDropdownPos({ top, left, maxHeight, width: menuWidth })
+    }
+
+    updateMenuDropdownPosition()
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
     const handlePointerDown = (event) => {
       if (menuRef.current && !menuRef.current.contains(event.target)) setMenuOpen(false)
     }
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') setMenuOpen(false)
     }
+    const handleReposition = () => updateMenuDropdownPosition()
+
     document.addEventListener('mousedown', handlePointerDown)
     document.addEventListener('touchstart', handlePointerDown)
     document.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('resize', handleReposition)
+    window.addEventListener('scroll', handleReposition, true)
     return () => {
+      document.body.style.overflow = previousOverflow
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('touchstart', handlePointerDown)
       document.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('resize', handleReposition)
+      window.removeEventListener('scroll', handleReposition, true)
     }
   }, [menuOpen])
 
@@ -6224,10 +6252,26 @@ function App() {
               <div style={styles.menuWrapper} ref={menuRef}>
                 <button
                   type="button"
+                  ref={menuButtonRef}
                   style={styles.menuButton}
                   onClick={() => {
-                    setMenuOpen((current) => !current)
+                    if (menuOpen) {
+                      setMenuOpen(false)
+                      setMenuDropdownPos(null)
+                      setSettingsMenuOpen(false)
+                      return
+                    }
+                    const button = menuButtonRef.current
+                    if (button) {
+                      const rect = button.getBoundingClientRect()
+                      const menuWidth = Math.min(280, window.innerWidth - 16)
+                      const top = Math.round(rect.bottom + 8)
+                      const left = Math.round(Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)))
+                      const maxHeight = Math.max(200, Math.round(window.innerHeight - top - 16))
+                      setMenuDropdownPos({ top, left, maxHeight, width: menuWidth })
+                    }
                     setSettingsMenuOpen(false)
+                    setMenuOpen(true)
                   }}
                   aria-haspopup="true"
                   aria-expanded={menuOpen}
@@ -6235,9 +6279,19 @@ function App() {
                 >
                   {menuOpen ? <X size={28} /> : <Menu size={28} />}
                 </button>
-                {menuOpen && (
-                  <div style={styles.menuDropdown} role="menu">
-                    <div style={styles.menuDropdownStickyRow}>
+                {menuOpen && menuDropdownPos && (
+                  <div
+                    style={{
+                      ...styles.menuDropdown,
+                      top: menuDropdownPos.top,
+                      left: menuDropdownPos.left,
+                      width: menuDropdownPos.width,
+                      height: menuDropdownPos.maxHeight,
+                      maxHeight: menuDropdownPos.maxHeight,
+                    }}
+                    role="menu"
+                  >
+                    <div style={styles.menuDropdownHeader}>
                       <button
                         type="button"
                         role="menuitem"
@@ -6246,11 +6300,13 @@ function App() {
                           setView('home')
                           setSelectedDate(new Date())
                           setMenuOpen(false)
+                          setMenuDropdownPos(null)
                         }}
                       >
                         <Home size={18} /> ホーム
                       </button>
                     </div>
+                    <div style={styles.menuDropdownScroll} data-menu-scroll="true">
                     <button
                       type="button"
                       role="menuitem"
@@ -6471,6 +6527,7 @@ function App() {
                         </button>
                       </>
                     )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -9186,9 +9243,14 @@ const styles = {
     marginBottom: '10px',
     paddingBottom: '8px',
     borderBottom: '1px solid #dfeaf7',
+    position: 'sticky',
+    top: 0,
+    zIndex: 50,
+    background: '#f4f7fb',
   },
   menuWrapper: {
     position: 'relative',
+    zIndex: 60,
   },
   menuButton: {
     display: 'flex',
@@ -9204,30 +9266,34 @@ const styles = {
     flexShrink: 0,
   },
   menuDropdown: {
-    position: 'absolute',
-    top: 'calc(100% + 8px)',
-    left: '0',
+    position: 'fixed',
+    boxSizing: 'border-box',
     minWidth: '220px',
-    maxHeight: 'min(70vh, calc(100dvh - 96px))',
-    overflowY: 'auto',
+    overflow: 'hidden',
     overscrollBehavior: 'contain',
     background: '#ffffff',
     border: '1px solid #dbeafe',
     borderRadius: '12px',
     boxShadow: '0 14px 32px rgba(15, 23, 42, 0.18)',
-    padding: '0 6px 6px',
-    zIndex: 30,
+    zIndex: 1200,
     display: 'flex',
     flexDirection: 'column',
   },
-  menuDropdownStickyRow: {
-    position: 'sticky',
-    top: 0,
-    zIndex: 2,
+  menuDropdownHeader: {
+    flex: '0 0 auto',
     background: '#ffffff',
     borderBottom: '1px solid #e2e8f0',
-    paddingTop: '6px',
-    marginBottom: '2px',
+    padding: '6px 6px 2px',
+  },
+  menuDropdownScroll: {
+    flex: '1 1 auto',
+    minHeight: 0,
+    height: '100%',
+    overflowY: 'scroll',
+    overscrollBehavior: 'contain',
+    WebkitOverflowScrolling: 'touch',
+    padding: '2px 6px 6px',
+    touchAction: 'pan-y',
   },
   menuItem: {
     display: 'flex',

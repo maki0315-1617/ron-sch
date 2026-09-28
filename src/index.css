@@ -329,6 +329,10 @@ html.schedule-card-reorder-active .schedule-section {
     row-gap: 6px !important;
     padding-bottom: 6px !important;
     margin-bottom: 8px !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 50 !important;
+    background: #f4f7fb !important;
   }
 
   .app-header-title-box {
