@@ -46,10 +46,16 @@ service cloud.firestore {
       allow create, read, update, delete: if isOwner(userId);
     }
 
-    // 日次服薬記録（user_id 必須）
+    // 日次服薬・体調記録（ドキュメントID = `${uid}_${date}`。見守り参照用の conditionLevel / conditionNote 含む）
     match /medication_records/{recordId} {
-      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.user_id == request.auth.uid
+        && recordId == request.auth.uid + '_' + request.resource.data.date;
+      allow read, delete: if isSignedIn()
+        && recordId.matches('^' + request.auth.uid + '_.*');
+      allow update: if isSignedIn()
+        && recordId.matches('^' + request.auth.uid + '_.*')
+        && request.resource.data.user_id == request.auth.uid;
     }
 
     match /fcm_tokens/{tokenId} {

@@ -30,12 +30,18 @@ import {
 import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, Eye, EyeOff, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import {
+  CONDITION_LEVELS,
+  CONDITION_NOTE_MAX_LENGTH,
+  CONDITION_PLACEHOLDER_LABEL,
   DEFAULT_MEDICATION_TIMES,
   MEDICATION_SLOT_KEYS,
   MEDICATION_SLOT_LABELS,
   createEmptyMedicationSlots,
+  getConditionLevelLabel,
   getMedicationSlotAlert,
   isMedicationSlotEnabled,
+  normalizeConditionLevel,
+  normalizeConditionNote,
   normalizeMedicationRecordSlots,
   normalizeMedicationSettings,
 } from './medicationUtils'
@@ -828,8 +834,11 @@ function App() {
   const [medicationSettingsDraft, setMedicationSettingsDraft] = useState(() => normalizeMedicationSettings())
   const [medicationRecord, setMedicationRecord] = useState(() => ({
     slots: createEmptyMedicationSlots(),
+    conditionLevel: '',
+    conditionNote: '',
     exists: false,
   }))
+  const [conditionNoteDraft, setConditionNoteDraft] = useState('')
   const [medicationRecordMap, setMedicationRecordMap] = useState({})
   const [medicationSaving, setMedicationSaving] = useState(false)
   const [medicationSaveMessage, setMedicationSaveMessage] = useState('')
@@ -1127,7 +1136,8 @@ function App() {
     setSleepSaveMessage('')
     setMedicationSettings(normalizeMedicationSettings())
     setMedicationSettingsDraft(normalizeMedicationSettings())
-    setMedicationRecord({ slots: createEmptyMedicationSlots(), exists: false })
+    setMedicationRecord({ slots: createEmptyMedicationSlots(), conditionLevel: '', conditionNote: '', exists: false })
+    setConditionNoteDraft('')
     setMedicationRecordMap({})
     setMedicationSaveMessage('')
   }, [session?.uid])
@@ -1247,6 +1257,8 @@ function App() {
             nextMap[data.date] = {
               ...data,
               slots: normalizeMedicationRecordSlots(data.slots),
+              conditionLevel: normalizeConditionLevel(data.conditionLevel),
+              conditionNote: normalizeConditionNote(data.conditionNote),
             }
           }
         })
@@ -1273,14 +1285,20 @@ function App() {
         const snapshot = await getDoc(doc(db, 'medication_records', `${session.uid}_${selectedKey}`))
         if (cancelled) return
         const data = snapshot.exists() ? snapshot.data() : {}
+        const conditionLevel = normalizeConditionLevel(data.conditionLevel)
+        const conditionNote = normalizeConditionNote(data.conditionNote)
         setMedicationRecord({
           slots: normalizeMedicationRecordSlots(data.slots),
+          conditionLevel,
+          conditionNote,
           exists: snapshot.exists(),
         })
+        setConditionNoteDraft(conditionNote)
       } catch (error) {
         console.error('服薬記録取得エラー:', error)
         if (!cancelled) {
-          setMedicationRecord({ slots: createEmptyMedicationSlots(), exists: false })
+          setMedicationRecord({ slots: createEmptyMedicationSlots(), conditionLevel: '', conditionNote: '', exists: false })
+          setConditionNoteDraft('')
         }
       }
     }
@@ -2246,11 +2264,22 @@ function App() {
     setMedicationSaving(true)
     try {
       await setDoc(doc(db, 'medication_records', `${session.uid}_${selectedKey}`), nextRecord, { merge: true })
-      const localRecord = { slots: nextSlots, exists: true }
+      const localRecord = {
+        slots: nextSlots,
+        conditionLevel: medicationRecord?.conditionLevel || '',
+        conditionNote: medicationRecord?.conditionNote || '',
+        exists: true,
+      }
       setMedicationRecord(localRecord)
       setMedicationRecordMap((prev) => ({
         ...prev,
-        [selectedKey]: { user_id: session.uid, date: selectedKey, slots: nextSlots },
+        [selectedKey]: {
+          user_id: session.uid,
+          date: selectedKey,
+          slots: nextSlots,
+          conditionLevel: localRecord.conditionLevel,
+          conditionNote: localRecord.conditionNote,
+        },
       }))
       setMedicationSaveMessage(
         nextCompleted
@@ -2260,6 +2289,55 @@ function App() {
     } catch (error) {
       console.error('服薬記録保存エラー:', error)
       alert(`服薬記録の保存に失敗しました:\n${error.message}`)
+    } finally {
+      setMedicationSaving(false)
+    }
+  }
+
+  const saveMedicationCondition = async ({
+    conditionLevel = medicationRecord?.conditionLevel || '',
+    conditionNote = conditionNoteDraft,
+  } = {}) => {
+    if (!session || medicationSaving) return
+    if (!selectedIsToday) {
+      alert('体調の記録は当日のみ入力できます。')
+      return
+    }
+    const nextLevel = normalizeConditionLevel(conditionLevel)
+    const nextNote = normalizeConditionNote(conditionNote)
+    const nextRecord = {
+      user_id: session.uid,
+      date: selectedKey,
+      conditionLevel: nextLevel,
+      conditionNote: nextNote,
+      conditionUpdatedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }
+    setMedicationSaving(true)
+    try {
+      await setDoc(doc(db, 'medication_records', `${session.uid}_${selectedKey}`), nextRecord, { merge: true })
+      setMedicationRecord((current) => ({
+        ...current,
+        conditionLevel: nextLevel,
+        conditionNote: nextNote,
+        exists: true,
+      }))
+      setConditionNoteDraft(nextNote)
+      setMedicationRecordMap((prev) => ({
+        ...prev,
+        [selectedKey]: {
+          ...(prev[selectedKey] || {}),
+          user_id: session.uid,
+          date: selectedKey,
+          slots: normalizeMedicationRecordSlots(medicationRecord?.slots || prev[selectedKey]?.slots),
+          conditionLevel: nextLevel,
+          conditionNote: nextNote,
+        },
+      }))
+      setMedicationSaveMessage('体調を記録しました。')
+    } catch (error) {
+      console.error('体調記録保存エラー:', error)
+      alert(`体調の保存に失敗しました:\n${error.message}`)
     } finally {
       setMedicationSaving(false)
     }
@@ -5021,6 +5099,28 @@ function App() {
       console.error('健康生活PDF 歩数CSV読込:', error)
     }
 
+    const medicationByDate = { ...medicationRecordMap }
+    try {
+      const medicationSnapshot = await getDocs(query(
+        collection(db, 'medication_records'),
+        where('user_id', '==', session.uid),
+        where('date', '>=', monthStartKey),
+        where('date', '<=', monthEndKey)
+      ))
+      medicationSnapshot.forEach((docSnap) => {
+        const data = docSnap.data() || {}
+        if (!data.date) return
+        medicationByDate[data.date] = {
+          ...data,
+          slots: normalizeMedicationRecordSlots(data.slots),
+          conditionLevel: normalizeConditionLevel(data.conditionLevel),
+          conditionNote: normalizeConditionNote(data.conditionNote),
+        }
+      })
+    } catch (error) {
+      console.error('健康生活PDF 服薬・体調記録取得エラー:', error)
+    }
+
     const reportRows = Array.from({ length: daysInMonth }, (_, index) => {
       const date = new Date(year, month, index + 1)
       const dateKey = formatDateKey(date)
@@ -5063,17 +5163,25 @@ function App() {
       : null
     const formatMedSlot = (dateKey, slotKey) => {
       if (!isMedicationSlotEnabled(medicationSettings, slotKey)) return '無'
-      const record = medicationRecordMap[dateKey]
+      const record = medicationByDate[dateKey]
       const slot = record?.slots?.[slotKey]
       if (!slot?.completed) return '未'
       return slot.takenAt ? `済 ${slot.takenAt}` : '済'
+    }
+    const formatConditionCell = (dateKey) => {
+      const label = getConditionLevelLabel(medicationByDate[dateKey]?.conditionLevel)
+      return label || '—'
+    }
+    const formatConditionNoteCell = (dateKey) => {
+      const note = normalizeConditionNote(medicationByDate[dateKey]?.conditionNote)
+      return note ? escapeHtml(note) : '—'
     }
     const rows = reportRows.map((row, index) => {
       const fatigue = fatigueByDay[index]
       const stepsCell = fatigue.stepCount === null ? '—' : String(fatigue.stepCount)
       const stepPtsCell = fatigue.stepPoints === null ? '—' : (fatigue.stepPoints > 0 ? `+${fatigue.stepPoints}` : '0')
       return `
-      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${stepsCell}</td><td>${stepPtsCell}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td><td>${formatMedSlot(row.dateKey, 'morning')}</td><td>${formatMedSlot(row.dateKey, 'noon')}</td><td>${formatMedSlot(row.dateKey, 'evening')}</td><td>${formatMedSlot(row.dateKey, 'bedtime')}</td></tr>`
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${stepsCell}</td><td>${stepPtsCell}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td><td>${formatMedSlot(row.dateKey, 'morning')}</td><td>${formatMedSlot(row.dateKey, 'noon')}</td><td>${formatMedSlot(row.dateKey, 'evening')}</td><td>${formatMedSlot(row.dateKey, 'bedtime')}</td><td>${formatConditionCell(row.dateKey)}</td><td class="note-cell">${formatConditionNoteCell(row.dateKey)}</td></tr>`
     }).join('')
     const chartWidth = 760
     const chartHeight = 330
@@ -5148,8 +5256,9 @@ function App() {
         body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
         h1 { margin: 0 0 5px; font-size: 24px; } h2 { margin: 22px 0 10px; font-size: 17px; color: #115e59; }
         .period, .output-date { color: #64748b; font-size: 13px; } .output-date { margin: 4px 0 18px; } .average { margin: 0 0 14px; color: #134e4a; font-size: 15px; } .average span { margin-left: 6px; color: #64748b; font-size: 12px; }
-        table { width: 100%; border-collapse: collapse; font-size: 12px; } th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
-        th { background: #ccfbf1; color: #115e59; } .chart-box { border: 1px solid #e2e8f0; padding: 10px; margin-bottom: 14px; } .chart-note { margin: 6px 0 0; font-size: 10px; color: #64748b; line-height: 1.45; } svg { width: 100%; height: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 11px; } th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; vertical-align: top; }
+        th { background: #ccfbf1; color: #115e59; } .note-cell { max-width: 140px; white-space: pre-wrap; word-break: break-word; }
+        .chart-box { border: 1px solid #e2e8f0; padding: 10px; margin-bottom: 14px; } .chart-note { margin: 6px 0 0; font-size: 10px; color: #64748b; line-height: 1.45; } svg { width: 100%; height: auto; }
         .disclaimer { margin-top: 16px; font-size: 11px; color: #64748b; line-height: 1.5; }
         .empty { color: #64748b; text-align: center; padding: 30px; } .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
         button { border: 0; border-radius: 8px; background: #0f766e; color: white; padding: 10px 18px; font-weight: 700; cursor: pointer; } .close-button { background: #64748b; }
@@ -5157,9 +5266,9 @@ function App() {
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
       <h1>健康生活PDF</h1><div class="period">対象期間: ${year}年${month + 1}月（選択中の月）</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
-      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th><th>服薬・朝</th><th>服薬・昼</th><th>服薬・夜</th><th>服薬・寝る前</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th><th>服薬・朝</th><th>服薬・昼</th><th>服薬・夜</th><th>服薬・寝る前</th><th>体調</th><th>体調一言</th></tr></thead><tbody>${rows}</tbody></table>
       <h2>日別の健康生活（睡眠・疲れ・完了件数）</h2><div class="chart-box">${combinedChart}</div>
-      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。服薬列は記録の表示のみで疲れ加点には使いません（服薬なしの枠は「無」）。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
+      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。服薬列・体調列は記録の表示のみで疲れ加点には使いません（服薬なしの枠は「無」）。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
@@ -5371,6 +5480,7 @@ function App() {
             points: [
               '点滅中に完了／取消できます。先の枠が点滅中で未完了の間は後続を操作できません。帯を逃した記録はできません。',
               '「服薬時刻・有無」から時刻・有無・服薬通知不要を設定します。全枠なしのときは「服薬予定無」と表示します。',
+              '体調は5段階（大変良い〜大変悪い）と一言メモを当日のみ記録できます。見守り機能から参照する想定です。',
               '設定変更で点滅中の枠を「無」にすると、そのボタンはすぐ消えます。',
               '服薬通知と目覚まし通知は別です。健康生活PDFの服薬列は表示のみで疲れスコアには加点しません。',
             ],
@@ -7565,6 +7675,55 @@ function App() {
                         </div>
                       )
                     })()}
+
+                    <div style={styles.conditionBlock} aria-label="体調（見守り参照）">
+                      <label style={styles.conditionField}>
+                        <span style={styles.conditionFieldLabel}>体調</span>
+                        <select
+                          value={medicationRecord?.conditionLevel || ''}
+                          onChange={(event) => {
+                            const nextLevel = event.target.value
+                            setMedicationRecord((current) => ({
+                              ...current,
+                              conditionLevel: normalizeConditionLevel(nextLevel),
+                            }))
+                            saveMedicationCondition({
+                              conditionLevel: nextLevel,
+                              conditionNote: conditionNoteDraft,
+                            })
+                          }}
+                          style={styles.conditionSelect}
+                          disabled={medicationSaving || !selectedIsToday}
+                          aria-label="体調について"
+                        >
+                          <option value="">{CONDITION_PLACEHOLDER_LABEL}</option>
+                          {CONDITION_LEVELS.map((item) => (
+                            <option key={item.value} value={item.value}>{item.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={styles.conditionField}>
+                        <span style={styles.conditionFieldLabel}>体調について一言</span>
+                        <textarea
+                          value={conditionNoteDraft}
+                          onChange={(event) => setConditionNoteDraft(event.target.value.slice(0, CONDITION_NOTE_MAX_LENGTH))}
+                          onBlur={() => {
+                            if (!selectedIsToday) return
+                            if (normalizeConditionNote(conditionNoteDraft) === normalizeConditionNote(medicationRecord?.conditionNote)) return
+                            saveMedicationCondition({
+                              conditionLevel: medicationRecord?.conditionLevel || '',
+                              conditionNote: conditionNoteDraft,
+                            })
+                          }}
+                          placeholder="体調について一言"
+                          rows={2}
+                          maxLength={CONDITION_NOTE_MAX_LENGTH}
+                          style={styles.conditionNoteInput}
+                          disabled={medicationSaving || !selectedIsToday}
+                        />
+                      </label>
+                      <p style={styles.conditionHint}>見守り機能で参照できる記録です。当日のみ入力できます。</p>
+                    </div>
 
                     {medicationSettingsOpen && (
                       <div style={styles.medicationSettingsBlock} aria-label="服薬時刻の設定">
@@ -10243,6 +10402,58 @@ const styles = {
     gap: '8px',
     flexWrap: 'wrap',
     justifyContent: 'flex-end',
+  },
+  conditionBlock: {
+    marginTop: '10px',
+    marginBottom: '8px',
+    padding: '10px 12px',
+    borderRadius: '12px',
+    border: '1px solid #fde68a',
+    background: '#fffbeb',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  conditionField: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    color: '#78350f',
+    fontSize: '13px',
+    fontWeight: 700,
+  },
+  conditionFieldLabel: {
+    fontSize: '12px',
+    color: '#92400e',
+  },
+  conditionSelect: {
+    width: '100%',
+    border: '1px solid #fcd34d',
+    borderRadius: '8px',
+    background: '#ffffff',
+    color: '#1f2937',
+    padding: '10px 12px',
+    fontSize: '14px',
+    fontWeight: 600,
+  },
+  conditionNoteInput: {
+    width: '100%',
+    border: '1px solid #fcd34d',
+    borderRadius: '8px',
+    background: '#ffffff',
+    color: '#1f2937',
+    padding: '10px 12px',
+    fontSize: '14px',
+    lineHeight: 1.5,
+    resize: 'vertical',
+    minHeight: '64px',
+  },
+  conditionHint: {
+    margin: 0,
+    fontSize: '11px',
+    color: '#a16207',
+    lineHeight: 1.45,
+    fontWeight: 500,
   },
   medicationNotifyButton: {
     border: '1px solid #f59e0b',

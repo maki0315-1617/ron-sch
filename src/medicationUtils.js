@@ -19,6 +19,33 @@ export const DEFAULT_MEDICATION_TIMES = {
 /** 指定時刻の前後何分を服薬ウィンドウとするか */
 export const MEDICATION_WINDOW_MINUTES = 30
 
+/** 体調（見守り機能参照用）。value は安定キー、label は表示 */
+export const CONDITION_LEVELS = [
+  { value: 'very_good', label: '大変良い' },
+  { value: 'good', label: '良い' },
+  { value: 'normal', label: '普通' },
+  { value: 'bad', label: '悪い' },
+  { value: 'very_bad', label: '大変悪い' },
+]
+
+export const CONDITION_LEVEL_VALUES = CONDITION_LEVELS.map((item) => item.value)
+
+export const CONDITION_PLACEHOLDER_LABEL = '体調について'
+export const CONDITION_NOTE_MAX_LENGTH = 200
+
+export const normalizeConditionLevel = (value) => (
+  CONDITION_LEVEL_VALUES.includes(value) ? value : ''
+)
+
+export const normalizeConditionNote = (value) => (
+  String(value || '').slice(0, CONDITION_NOTE_MAX_LENGTH)
+)
+
+export const getConditionLevelLabel = (value) => {
+  const found = CONDITION_LEVELS.find((item) => item.value === value)
+  return found ? found.label : ''
+}
+
 export const createEmptyMedicationSlots = () => (
   MEDICATION_SLOT_KEYS.reduce((acc, key) => {
     acc[key] = { completed: false, takenAt: null }
