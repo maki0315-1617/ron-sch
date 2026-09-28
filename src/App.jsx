@@ -1294,6 +1294,19 @@ function App() {
           exists: snapshot.exists(),
         })
         setConditionNoteDraft(conditionNote)
+        if (snapshot.exists()) {
+          setMedicationRecordMap((prev) => ({
+            ...prev,
+            [selectedKey]: {
+              ...(prev[selectedKey] || {}),
+              user_id: session.uid,
+              date: selectedKey,
+              slots: normalizeMedicationRecordSlots(data.slots),
+              conditionLevel,
+              conditionNote,
+            },
+          }))
+        }
       } catch (error) {
         console.error('服薬記録取得エラー:', error)
         if (!cancelled) {
@@ -5100,25 +5113,59 @@ function App() {
     }
 
     const medicationByDate = { ...medicationRecordMap }
+    // 画面上で見えている当日データを必ずマージ（他端末で map 未同期でもPDFに出す）
+    if (
+      medicationRecord
+      && (medicationRecord.exists
+        || medicationRecord.conditionLevel
+        || medicationRecord.conditionNote
+        || conditionNoteDraft)
+    ) {
+      medicationByDate[selectedKey] = {
+        ...(medicationByDate[selectedKey] || {}),
+        user_id: session.uid,
+        date: selectedKey,
+        slots: normalizeMedicationRecordSlots(medicationRecord.slots || medicationByDate[selectedKey]?.slots),
+        conditionLevel: normalizeConditionLevel(medicationRecord.conditionLevel),
+        conditionNote: normalizeConditionNote(
+          conditionNoteDraft || medicationRecord.conditionNote || medicationByDate[selectedKey]?.conditionNote
+        ),
+      }
+    }
+    const ingestMedicationDoc = (data = {}) => {
+      if (!data.date) return
+      medicationByDate[data.date] = {
+        ...(medicationByDate[data.date] || {}),
+        ...data,
+        slots: normalizeMedicationRecordSlots(data.slots),
+        conditionLevel: normalizeConditionLevel(data.conditionLevel),
+        conditionNote: normalizeConditionNote(data.conditionNote),
+      }
+    }
     try {
+      // 単一フィールドクエリ（全端末で確実）。月範囲はクライアントで絞る。
       const medicationSnapshot = await getDocs(query(
         collection(db, 'medication_records'),
-        where('user_id', '==', session.uid),
-        where('date', '>=', monthStartKey),
-        where('date', '<=', monthEndKey)
+        where('user_id', '==', session.uid)
       ))
       medicationSnapshot.forEach((docSnap) => {
-        const data = docSnap.data() || {}
-        if (!data.date) return
-        medicationByDate[data.date] = {
-          ...data,
-          slots: normalizeMedicationRecordSlots(data.slots),
-          conditionLevel: normalizeConditionLevel(data.conditionLevel),
-          conditionNote: normalizeConditionNote(data.conditionNote),
-        }
+        ingestMedicationDoc(docSnap.data() || {})
       })
     } catch (error) {
       console.error('健康生活PDF 服薬・体調記録取得エラー:', error)
+      try {
+        const medicationSnapshot = await getDocs(query(
+          collection(db, 'medication_records'),
+          where('user_id', '==', session.uid),
+          where('date', '>=', monthStartKey),
+          where('date', '<=', monthEndKey)
+        ))
+        medicationSnapshot.forEach((docSnap) => {
+          ingestMedicationDoc(docSnap.data() || {})
+        })
+      } catch (rangeError) {
+        console.error('健康生活PDF 服薬・体調 月次取得エラー:', rangeError)
+      }
     }
 
     const reportRows = Array.from({ length: daysInMonth }, (_, index) => {
@@ -5181,8 +5228,11 @@ function App() {
       const stepsCell = fatigue.stepCount === null ? '—' : String(fatigue.stepCount)
       const stepPtsCell = fatigue.stepPoints === null ? '—' : (fatigue.stepPoints > 0 ? `+${fatigue.stepPoints}` : '0')
       return `
-      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${stepsCell}</td><td>${stepPtsCell}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td><td>${formatMedSlot(row.dateKey, 'morning')}</td><td>${formatMedSlot(row.dateKey, 'noon')}</td><td>${formatMedSlot(row.dateKey, 'evening')}</td><td>${formatMedSlot(row.dateKey, 'bedtime')}</td><td>${formatConditionCell(row.dateKey)}</td><td class="note-cell">${formatConditionNoteCell(row.dateKey)}</td></tr>`
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${row.wakeTime || '-'}</td><td>${row.currentBedtime || '-'}</td><td>${row.previousBedtime || '-'}</td><td>${formatDuration(row.minutes)}</td><td>${stepsCell}</td><td>${stepPtsCell}</td><td>${fatigue.score}</td><td>${fatigue.bandLabel}</td><td>${formatMedSlot(row.dateKey, 'morning')}</td><td>${formatMedSlot(row.dateKey, 'noon')}</td><td>${formatMedSlot(row.dateKey, 'evening')}</td><td>${formatMedSlot(row.dateKey, 'bedtime')}</td></tr>`
     }).join('')
+    const conditionRows = reportRows.map((row) => `
+      <tr><td>${row.dateKey} (${row.dayName})</td><td>${formatConditionCell(row.dateKey)}</td><td class="note-cell">${formatConditionNoteCell(row.dateKey)}</td></tr>`
+    ).join('')
     const chartWidth = 760
     const chartHeight = 330
     const plotLeft = 52
@@ -5256,8 +5306,8 @@ function App() {
         body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
         h1 { margin: 0 0 5px; font-size: 24px; } h2 { margin: 22px 0 10px; font-size: 17px; color: #115e59; }
         .period, .output-date { color: #64748b; font-size: 13px; } .output-date { margin: 4px 0 18px; } .average { margin: 0 0 14px; color: #134e4a; font-size: 15px; } .average span { margin-left: 6px; color: #64748b; font-size: 12px; }
-        table { width: 100%; border-collapse: collapse; font-size: 11px; } th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; vertical-align: top; }
-        th { background: #ccfbf1; color: #115e59; } .note-cell { max-width: 140px; white-space: pre-wrap; word-break: break-word; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; } th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; vertical-align: top; }
+        th { background: #ccfbf1; color: #115e59; } .note-cell { white-space: pre-wrap; word-break: break-word; }
         .chart-box { border: 1px solid #e2e8f0; padding: 10px; margin-bottom: 14px; } .chart-note { margin: 6px 0 0; font-size: 10px; color: #64748b; line-height: 1.45; } svg { width: 100%; height: auto; }
         .disclaimer { margin-top: 16px; font-size: 11px; color: #64748b; line-height: 1.5; }
         .empty { color: #64748b; text-align: center; padding: 30px; } .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
@@ -5266,9 +5316,11 @@ function App() {
       </style></head><body><div class="actions"><button onclick="window.print()">PDFとして保存 / 印刷</button><button class="close-button" onclick="window.close()">閉じる</button></div>
       <h1>健康生活PDF</h1><div class="period">対象期間: ${year}年${month + 1}月（選択中の月）</div><div class="output-date">出力日: ${escapeHtml(formatDisplayDate(new Date()))}</div>
       <div class="average">当月平均睡眠時間: <strong>${formatDuration(averageSleepMinutes)}</strong><span>（${recordedSleepMinutes.length}日を集計）</span></div>
-      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th><th>服薬・朝</th><th>服薬・昼</th><th>服薬・夜</th><th>服薬・寝る前</th><th>体調</th><th>体調一言</th></tr></thead><tbody>${rows}</tbody></table>
+      <table><thead><tr><th>日付</th><th>起床時間</th><th>就寝時間（当日）</th><th>就寝時間（前日）</th><th>睡眠時間</th><th>歩数</th><th>歩数加点</th><th>疲れ</th><th>帯域</th><th>服薬・朝</th><th>服薬・昼</th><th>服薬・夜</th><th>服薬・寝る前</th></tr></thead><tbody>${rows}</tbody></table>
+      <h2>日別の体調</h2>
+      <table><thead><tr><th>日付</th><th>体調</th><th>体調一言</th></tr></thead><tbody>${conditionRows}</tbody></table>
       <h2>日別の健康生活（睡眠・疲れ・完了件数）</h2><div class="chart-box">${combinedChart}</div>
-      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。服薬列・体調列は記録の表示のみで疲れ加点には使いません（服薬なしの枠は「無」）。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
+      <p class="disclaimer">※疲れスコアは睡眠記録と未完了の時刻あり予定から算出した目安であり、医療上の診断・治療の代わりにはなりません。服薬列・体調表は記録の表示のみで疲れ加点には使いません（服薬なしの枠は「無」）。タスク（時刻なし）は疲れ・下帯の完了件数に含みません。達成（連続日数など）はタスク込みです。歩数はCSVで is_final=true の日のみ加点（最大15点）。日別スコアは出力時点の予定データに基づきます。</p></body></html>`
     const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
     setTimeout(() => { if (!reportWindow.closed) { reportWindow.location.href = blobUrl; reportWindow.focus() } }, 0)
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
