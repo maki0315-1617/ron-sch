@@ -24,8 +24,16 @@ service cloud.firestore {
     }
 
     match /sleep_records/{recordId} {
-      allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
+      // ドキュメントIDは `${uid}_${date}`。未作成ドキュメントへの get でも resource が null のため、
+      // resource.data 参照だけのルールだと開始時の getDoc が permission-denied になる。
+      allow create: if isSignedIn()
+        && request.resource.data.user_id == request.auth.uid
+        && recordId == request.auth.uid + '_' + request.resource.data.date;
+      allow read, delete: if isSignedIn()
+        && recordId.matches('^' + request.auth.uid + '_.*');
+      allow update: if isSignedIn()
+        && recordId.matches('^' + request.auth.uid + '_.*')
+        && request.resource.data.user_id == request.auth.uid;
     }
 
     // 目覚ましアラーム状態（ドキュメントID = uid）
