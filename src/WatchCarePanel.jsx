@@ -119,8 +119,8 @@ export default function WatchCarePanel({
 
     if (preferred?.status === WATCH_STATUS_ACTIVE) {
       const [nextEvents, nextComments] = await Promise.all([
-        listWatchEventsForMatch(preferred.id),
-        listWatchCommentsForMatch(preferred.id),
+        listWatchEventsForMatch(preferred, session.uid),
+        listWatchCommentsForMatch(preferred, session.uid),
       ])
       setEvents(nextEvents)
       setComments(nextComments)
@@ -168,8 +168,8 @@ export default function WatchCarePanel({
     ;(async () => {
       try {
         const [nextEvents, nextComments] = await Promise.all([
-          listWatchEventsForMatch(match.id),
-          listWatchCommentsForMatch(match.id),
+          listWatchEventsForMatch(match, session.uid),
+          listWatchCommentsForMatch(match, session.uid),
         ])
         if (!cancelled) {
           setEvents(nextEvents)
@@ -182,7 +182,7 @@ export default function WatchCarePanel({
     return () => {
       cancelled = true
     }
-  }, [open, selectedMatchId, matches])
+  }, [open, selectedMatchId, matches, session?.uid])
 
   const runAction = async (action, successMessage) => {
     setBusy(true)

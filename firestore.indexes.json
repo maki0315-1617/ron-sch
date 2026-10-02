@@ -39,6 +39,38 @@
         { "fieldPath": "requesterUid", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "watch_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "matchId", "order": "ASCENDING" },
+        { "fieldPath": "watcherUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "watch_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "matchId", "order": "ASCENDING" },
+        { "fieldPath": "requesterUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "watch_comments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "matchId", "order": "ASCENDING" },
+        { "fieldPath": "watcherUid", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "watch_comments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "matchId", "order": "ASCENDING" },
+        { "fieldPath": "requesterUid", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

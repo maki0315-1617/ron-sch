@@ -404,11 +404,16 @@ export const publishWatchCareEvent = async ({
   return { id: eventRef.id, ...payload }
 }
 
-export const listWatchEventsForMatch = async (matchId, max = 80) => {
-  if (!db || !matchId) return []
+export const listWatchEventsForMatch = async (match, viewerUid, max = 80) => {
+  if (!db || !match?.id || !viewerUid) return []
+  const partyField = match.watcherUid === viewerUid
+    ? 'watcherUid'
+    : (match.requesterUid === viewerUid ? 'requesterUid' : null)
+  if (!partyField) return []
   const snapshot = await getDocs(query(
     collection(db, 'watch_events'),
-    where('matchId', '==', matchId),
+    where('matchId', '==', match.id),
+    where(partyField, '==', viewerUid),
     limit(max),
   ))
   return snapshot.docs
@@ -416,11 +421,16 @@ export const listWatchEventsForMatch = async (matchId, max = 80) => {
     .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt))
 }
 
-export const listWatchCommentsForMatch = async (matchId, max = 80) => {
-  if (!db || !matchId) return []
+export const listWatchCommentsForMatch = async (match, viewerUid, max = 80) => {
+  if (!db || !match?.id || !viewerUid) return []
+  const partyField = match.watcherUid === viewerUid
+    ? 'watcherUid'
+    : (match.requesterUid === viewerUid ? 'requesterUid' : null)
+  if (!partyField) return []
   const snapshot = await getDocs(query(
     collection(db, 'watch_comments'),
-    where('matchId', '==', matchId),
+    where('matchId', '==', match.id),
+    where(partyField, '==', viewerUid),
     limit(max),
   ))
   return snapshot.docs
