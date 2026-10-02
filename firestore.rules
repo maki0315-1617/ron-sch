@@ -90,5 +90,65 @@ service cloud.firestore {
         && resource.data.email == request.auth.token.email;
       allow create, update, delete: if false;
     }
+
+    // 見守りプロフィール（本人のみ）
+    match /watch_profiles/{userId} {
+      allow create, read, update, delete: if isOwner(userId);
+    }
+
+    // 契約メールからの見守り人検索用（認証済みの get のみ。list 不可）
+    match /watch_email_index/{emailKey} {
+      allow get: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.email is string
+        && request.resource.data.role in ['watcher', 'requester'];
+      allow delete: if isSignedIn()
+        && resource.data.user_id == request.auth.uid;
+      allow list: if false;
+    }
+
+    // 見守りマッチ（当事者のみ）
+    match /watch_matches/{matchId} {
+      allow create: if isSignedIn()
+        && request.resource.data.requesterUid == request.auth.uid
+        && request.resource.data.watcherUid is string
+        && request.resource.data.status == 'pending_approval';
+      allow read: if isSignedIn()
+        && (resource.data.watcherUid == request.auth.uid
+          || resource.data.requesterUid == request.auth.uid);
+      allow update: if isSignedIn()
+        && (resource.data.watcherUid == request.auth.uid
+          || resource.data.requesterUid == request.auth.uid)
+        && request.resource.data.watcherUid == resource.data.watcherUid
+        && request.resource.data.requesterUid == resource.data.requesterUid;
+      allow delete: if false;
+    }
+
+    // 見守り共有イベント（依頼人が作成、当事者が閲覧）
+    match /watch_events/{eventId} {
+      allow create: if isSignedIn()
+        && request.resource.data.requesterUid == request.auth.uid
+        && request.resource.data.watcherUid is string
+        && request.resource.data.matchId is string
+        && request.resource.data.kind in ['bedtime', 'wake', 'medication'];
+      allow read: if isSignedIn()
+        && (resource.data.watcherUid == request.auth.uid
+          || resource.data.requesterUid == request.auth.uid);
+      allow update, delete: if false;
+    }
+
+    // 見守りコメント（当事者が作成・閲覧。終了後は作成不可はアプリ側で制御）
+    match /watch_comments/{commentId} {
+      allow create: if isSignedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.matchId is string
+        && (request.resource.data.watcherUid == request.auth.uid
+          || request.resource.data.requesterUid == request.auth.uid);
+      allow read: if isSignedIn()
+        && (resource.data.watcherUid == request.auth.uid
+          || resource.data.requesterUid == request.auth.uid);
+      allow update, delete: if false;
+    }
   }
 }

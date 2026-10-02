@@ -23,6 +23,22 @@
         { "fieldPath": "user_id", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "watch_matches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "watcherUid", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "watch_matches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "requesterUid", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

@@ -1,4 +1,5 @@
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { onDocumentCreated } = require('firebase-functions/v2/firestore');
 const logger = require('firebase-functions/logger');
 const admin = require('firebase-admin');
 
@@ -593,5 +594,106 @@ exports.sendWakeAlarms = onSchedule(
     }
 
     logger.info('起床アラームバッチを完了しました。', { dateKey, timeKey });
+  }
+);
+
+const watchEventKindLabel = (kind, slotLabel) => {
+  if (kind === 'bedtime') return '就寝';
+  if (kind === 'wake') return '起床';
+  if (kind === 'medication') return slotLabel ? `服薬（${slotLabel}）` : '服薬';
+  return '記録';
+};
+
+/** 見守り共有イベント作成時、見守り人へ Web Push */
+exports.notifyWatchCareEvent = onDocumentCreated(
+  {
+    document: 'watch_events/{eventId}',
+    region: 'asia-northeast1',
+  },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+
+    const data = snapshot.data() || {};
+    const watcherUid = data.watcherUid;
+    const matchId = data.matchId;
+    const requesterName = data.requesterName || '依頼人';
+    const kind = data.kind || '';
+    const dateKey = data.dateKey || '';
+    const timeKey = data.timeKey || '';
+    const slotLabel = data.slotLabel || '';
+
+    if (!watcherUid || !matchId) {
+      logger.warn('見守り通知をスキップしました（必須項目不足）。', { eventId: event.params.eventId });
+      return;
+    }
+
+    try {
+      const matchSnap = await db.collection('watch_matches').doc(matchId).get();
+      if (!matchSnap.exists || matchSnap.data()?.status !== 'active') {
+        logger.info('見守り通知をスキップしました（マッチ未成立）。', { matchId });
+        return;
+      }
+    } catch (error) {
+      logger.error('見守りマッチ確認に失敗しました。', { matchId, error });
+      return;
+    }
+
+    const logId = `watch_${snapshot.id}`;
+    const logRef = db.collection('notification_logs').doc(logId);
+    try {
+      await logRef.create({
+        kind: 'watch_care_event',
+        user_id: watcherUid,
+        match_id: matchId,
+        event_id: snapshot.id,
+        watch_kind: kind,
+        date: dateKey,
+        time: timeKey,
+        status: 'pending',
+        created_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      if (isAlreadyExistsError(error)) return;
+      logger.error('見守り通知ログ作成に失敗しました。', { error });
+      return;
+    }
+
+    const tokenCache = new Map();
+    const tokenEntries = await resolveActiveTokens(watcherUid, tokenCache);
+    if (tokenEntries.length === 0) {
+      await logRef.set(
+        {
+          status: 'skipped_no_token',
+          updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return;
+    }
+
+    const label = watchEventKindLabel(kind, slotLabel);
+    const title = '見守り通知';
+    const body = `${requesterName}さんが${label}を記録しました（${dateKey} ${timeKey}）`;
+    const message = buildWebPushDataMessage(tokenEntries, {
+      date: dateKey,
+      time: timeKey,
+      title,
+      body,
+      kind: 'watch_care_event',
+      matchId,
+    });
+
+    try {
+      const result = await messaging.sendEachForMulticast(message);
+      await finalizeMulticastSend(logRef, result, tokenEntries, {
+        userId: watcherUid,
+        matchId,
+        kind: 'watch_care_event',
+        watchKind: kind,
+      });
+    } catch (error) {
+      logger.error('見守り通知の送信に失敗しました。', { watcherUid, matchId, error });
+    }
   }
 );

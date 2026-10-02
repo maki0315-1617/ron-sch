@@ -27,7 +27,7 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, Eye, EyeOff, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Trash2, TrendingUp, UserX, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, Eye, EyeOff, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Shield, Trash2, TrendingUp, UserX, X } from 'lucide-react'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import {
   CONDITION_LEVELS,
@@ -58,6 +58,19 @@ import { getStepsDisplayState, STEPS_LINKED_STORAGE_KEY } from './stepsDisplay'
 import { formatJstIsoTimestamp, getStepsForDisplay, getStepsForScoring } from './stepsCsv'
 import { clearStepsCsvWebOnly, importStepsCsvText, loadStepsByDate, upsertStepsCsvRow } from './stepsCsvStore'
 import { openDeviceStepsAppForCheck } from './openDeviceStepsApp'
+import WatchCarePanel from './WatchCarePanel'
+import {
+  WATCH_EVENT_BEDTIME,
+  WATCH_EVENT_MEDICATION,
+  WATCH_EVENT_WAKE,
+  WATCH_ROLE_REQUESTER,
+  WATCH_ROLE_WATCHER,
+  formatWatchPlanLabel,
+  isWatchCarePlanEligible,
+  loadActiveMatchForRequester,
+  loadWatchProfile,
+  publishWatchCareEvent,
+} from './watchCare'
 import {
   buildScheduleRelationTimeChangeConfirm,
   filterTimedSchedules,
@@ -299,23 +312,53 @@ const clearUsageTipsDismissed = (uid) => {
 }
 
 /**
- * 本番: subscriptions に email 一致かつ status === "active" が1件以上
- * デモ: 該当なし
- * クエリ失敗: 本番扱い（安全側）
- * @returns {Promise<boolean>} true = 本番購読者
+ * subscriptions: email 一致かつ status === "active" の先頭件からプラン情報を取得
+ * クエリ失敗時は本番扱い（isActive: true）で安全側
  */
-const resolveIsProductionSubscriber = async (user) => {
-  if (!user?.email || !db) return true
+const resolveSubscriptionInfo = async (user) => {
+  const email = user?.email || ''
+  if (!email || !db) {
+    return {
+      isActive: true,
+      plan: '',
+      planLabel: formatWatchPlanLabel(''),
+      status: '',
+      email,
+    }
+  }
   try {
     const snapshot = await getDocs(query(
       collection(db, 'subscriptions'),
-      where('email', '==', user.email),
+      where('email', '==', email),
       where('status', '==', SUBSCRIPTION_ACTIVE_STATUS),
     ))
-    return !snapshot.empty
+    if (snapshot.empty) {
+      return {
+        isActive: false,
+        plan: '',
+        planLabel: formatWatchPlanLabel(''),
+        status: '',
+        email,
+      }
+    }
+    const data = snapshot.docs[0].data() || {}
+    const plan = String(data.plan || data.plan_id || data.planId || '').trim()
+    return {
+      isActive: true,
+      plan,
+      planLabel: formatWatchPlanLabel(plan),
+      status: data.status || SUBSCRIPTION_ACTIVE_STATUS,
+      email: data.email || email,
+    }
   } catch (error) {
     console.warn('subscriptions 照会に失敗したため本番扱いとします:', error)
-    return true
+    return {
+      isActive: true,
+      plan: '',
+      planLabel: formatWatchPlanLabel(''),
+      status: 'unknown',
+      email,
+    }
   }
 }
 
@@ -794,6 +837,16 @@ function App() {
   const [notificationBadgeCount, setNotificationBadgeCount] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  const [watchCareMenuOpen, setWatchCareMenuOpen] = useState(false)
+  const [watchCarePanelMode, setWatchCarePanelMode] = useState(null)
+  const [subscriptionInfo, setSubscriptionInfo] = useState({
+    isActive: false,
+    plan: '',
+    planLabel: formatWatchPlanLabel(''),
+    status: '',
+    email: '',
+  })
+  const [watchProfile, setWatchProfile] = useState(null)
   const [deleteAccountModalOpen, setDeleteAccountModalOpen] = useState(false)
   const [subscriptionCancelModalOpen, setSubscriptionCancelModalOpen] = useState(false)
   const [deletePassword, setDeletePassword] = useState('')
@@ -880,6 +933,29 @@ function App() {
   const scheduleSectionRef = useRef(null)
   const weekSectionRef = useRef(null)
   const selectedKey = formatDateKey(selectedDate)
+  const watchCareEligible = isWatchCarePlanEligible({
+    plan: subscriptionInfo.plan,
+    status: subscriptionInfo.isActive ? SUBSCRIPTION_ACTIVE_STATUS : '',
+  })
+
+  const publishWatchCareEventSafe = async ({ kind, dateKey, timeKey, slotKey = '', slotLabel = '' }) => {
+    if (!session?.uid || !watchCareEligible) return
+    if (watchProfile?.role && watchProfile.role !== WATCH_ROLE_REQUESTER) return
+    try {
+      const match = await loadActiveMatchForRequester(session.uid)
+      if (!match) return
+      await publishWatchCareEvent({
+        match,
+        kind,
+        dateKey,
+        timeKey,
+        slotKey,
+        slotLabel,
+      })
+    } catch (error) {
+      console.warn('見守りイベントの送信をスキップしました:', error)
+    }
+  }
   const sleepOnlyMode = isSleepShortcutLaunch()
   // 判定前・失敗時は本番扱い（デモ制限をかけない）
   const [demoMode, setDemoMode] = useState(false)
@@ -973,6 +1049,14 @@ function App() {
       setDemoResolved(false)
       setDemoWelcomeOpen(false)
       setEmailVerificationMessage('')
+      setSubscriptionInfo({
+        isActive: false,
+        plan: '',
+        planLabel: formatWatchPlanLabel(''),
+        status: '',
+        email: '',
+      })
+      setWatchProfile(null)
       return undefined
     }
 
@@ -982,9 +1066,10 @@ function App() {
     setDemoWelcomeOpen(false)
 
     ;(async () => {
-      const isProduction = await resolveIsProductionSubscriber(session)
+      const info = await resolveSubscriptionInfo(session)
       if (cancelled) return
-      const nextDemoMode = !isProduction
+      setSubscriptionInfo(info)
+      const nextDemoMode = !info.isActive
       setDemoMode(nextDemoMode)
       setDemoResolved(true)
       if (!nextDemoMode) {
@@ -1006,6 +1091,29 @@ function App() {
       cancelled = true
     }
   }, [session?.uid, session?.email])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!session?.uid || !isWatchCarePlanEligible({
+      plan: subscriptionInfo.plan,
+      status: subscriptionInfo.isActive ? SUBSCRIPTION_ACTIVE_STATUS : '',
+    })) {
+      setWatchProfile(null)
+      return undefined
+    }
+    ;(async () => {
+      try {
+        const profile = await loadWatchProfile(session.uid)
+        if (!cancelled) setWatchProfile(profile)
+      } catch (error) {
+        console.warn('見守りプロフィール取得に失敗:', error)
+        if (!cancelled) setWatchProfile(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [session?.uid, subscriptionInfo.plan, subscriptionInfo.isActive])
 
   const dismissDemoWelcome = () => {
     try {
@@ -1349,6 +1457,7 @@ function App() {
   useEffect(() => {
     if (!menuOpen) {
       setMenuDropdownPos(null)
+      setWatchCareMenuOpen(false)
       return undefined
     }
 
@@ -2100,6 +2209,11 @@ function App() {
         notifyEnabled: sleepAlarmState.notifyEnabled !== false,
       })
       setSleepSaveMessage(`就寝 ${formatDateKeyJa(bedtimeDate)} ${bedtime} を記録しました。起床予定 ${formatDateKeyJa(sleepAlarmState.plannedWakeDate)} ${sleepAlarmState.plannedWakeTime}`)
+      await publishWatchCareEventSafe({
+        kind: WATCH_EVENT_BEDTIME,
+        dateKey: bedtimeDate,
+        timeKey: bedtime,
+      })
     } catch (error) {
       console.error('目覚まし開始エラー:', error)
       alert(`目覚ましの開始に失敗しました:\n${error.message}`)
@@ -2177,6 +2291,11 @@ function App() {
         notifyEnabled: sleepAlarmState.notifyEnabled !== false,
       })
       setSleepSaveMessage(`起床 ${wakeTime} を記録しました。`)
+      await publishWatchCareEventSafe({
+        kind: WATCH_EVENT_WAKE,
+        dateKey: wakeDate,
+        timeKey: wakeTime,
+      })
     } catch (error) {
       console.error('目覚まし停止エラー:', error)
       alert(`起床記録に失敗しました:\n${error.message}`)
@@ -2299,6 +2418,15 @@ function App() {
           ? `${MEDICATION_SLOT_LABELS[slotKey]}の服薬を記録しました。`
           : `${MEDICATION_SLOT_LABELS[slotKey]}の服薬記録を取り消しました。`
       )
+      if (nextCompleted) {
+        await publishWatchCareEventSafe({
+          kind: WATCH_EVENT_MEDICATION,
+          dateKey: selectedKey,
+          timeKey: nextSlots[slotKey]?.takenAt || formatCurrentTime(),
+          slotKey,
+          slotLabel: MEDICATION_SLOT_LABELS[slotKey],
+        })
+      }
     } catch (error) {
       console.error('服薬記録保存エラー:', error)
       alert(`服薬記録の保存に失敗しました:\n${error.message}`)
@@ -6437,6 +6565,7 @@ function App() {
                       setMenuOpen(false)
                       setMenuDropdownPos(null)
                       setSettingsMenuOpen(false)
+                      setWatchCareMenuOpen(false)
                       return
                     }
                     const button = menuButtonRef.current
@@ -6449,6 +6578,7 @@ function App() {
                       setMenuDropdownPos({ top, left, maxHeight, width: menuWidth })
                     }
                     setSettingsMenuOpen(false)
+                    setWatchCareMenuOpen(false)
                     setMenuOpen(true)
                   }}
                   aria-haspopup="true"
@@ -6645,6 +6775,87 @@ function App() {
                     >
                       <ChartColumn size={18} /> スケジュール集計
                     </button>
+                    {watchCareEligible && (
+                      <>
+                        <div style={styles.menuDivider} />
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
+                          onClick={() => {
+                            setSettingsMenuOpen(false)
+                            setWatchCareMenuOpen((current) => !current)
+                          }}
+                          aria-expanded={watchCareMenuOpen}
+                        >
+                          <Shield size={18} /> 見守り処理
+                        </button>
+                        {watchCareMenuOpen && (
+                          <div style={styles.settingsSubmenu} role="group" aria-label="見守り処理">
+                            {!watchProfile && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                style={styles.menuItem}
+                                onClick={() => {
+                                  setWatchCarePanelMode('setup')
+                                  setMenuOpen(false)
+                                  setMenuDropdownPos(null)
+                                  setWatchCareMenuOpen(false)
+                                }}
+                              >
+                                初期設定
+                              </button>
+                            )}
+                            {watchProfile?.role === WATCH_ROLE_WATCHER && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                style={styles.menuItem}
+                                onClick={() => {
+                                  setWatchCarePanelMode('watcher')
+                                  setMenuOpen(false)
+                                  setMenuDropdownPos(null)
+                                  setWatchCareMenuOpen(false)
+                                }}
+                              >
+                                見守り人処理
+                              </button>
+                            )}
+                            {watchProfile?.role === WATCH_ROLE_REQUESTER && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                style={styles.menuItem}
+                                onClick={() => {
+                                  setWatchCarePanelMode('requester')
+                                  setMenuOpen(false)
+                                  setMenuDropdownPos(null)
+                                  setWatchCareMenuOpen(false)
+                                }}
+                              >
+                                見守り依頼人処理
+                              </button>
+                            )}
+                            {watchProfile && (
+                              <button
+                                type="button"
+                                role="menuitem"
+                                style={styles.menuItem}
+                                onClick={() => {
+                                  setWatchCarePanelMode('setup')
+                                  setMenuOpen(false)
+                                  setMenuDropdownPos(null)
+                                  setWatchCareMenuOpen(false)
+                                }}
+                              >
+                                初期設定（名前・役割）
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
                     <div style={styles.menuDivider} />
                     <button
                       type="button"
@@ -8503,6 +8714,12 @@ function App() {
 
                 <div style={styles.helpBody}>
                   <p style={styles.helpAppInfo}>{helpContent[helpLang].appInfo}</p>
+                  <p style={styles.helpAppInfo}>
+                    {helpLang === 'ja' ? 'プラン' : 'Plan'}: {subscriptionInfo.planLabel || formatWatchPlanLabel('')}
+                    {subscriptionInfo.isActive && subscriptionInfo.plan === 's_plus'
+                      ? (helpLang === 'ja' ? '（有効）' : ' (active)')
+                      : ''}
+                  </p>
                   <a
                     href={HELP_SITE_URL}
                     target="_blank"
@@ -8570,6 +8787,16 @@ function App() {
               </div>
             </div>
           )}
+
+          <WatchCarePanel
+            open={Boolean(watchCarePanelMode)}
+            mode={watchCarePanelMode || 'setup'}
+            session={session}
+            contractEmail={subscriptionInfo.email || session?.email || ''}
+            styles={styles}
+            onClose={() => setWatchCarePanelMode(null)}
+            onProfileChanged={setWatchProfile}
+          />
 
           {aggregationOpen && (
             <div style={styles.modalOverlay} onClick={closeAggregationModal}>
