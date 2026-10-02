@@ -601,6 +601,7 @@ const watchEventKindLabel = (kind, slotLabel) => {
   if (kind === 'bedtime') return '就寝';
   if (kind === 'wake') return '起床';
   if (kind === 'medication') return slotLabel ? `服薬（${slotLabel}）` : '服薬';
+  if (kind === 'condition') return slotLabel ? `体調（${slotLabel}）` : '体調';
   return '記録';
 };
 
@@ -673,8 +674,11 @@ exports.notifyWatchCareEvent = onDocumentCreated(
     }
 
     const label = watchEventKindLabel(kind, slotLabel);
+    const note = String(data.conditionNote || '').trim();
     const title = '見守り通知';
-    const body = `${requesterName}さんが${label}を記録しました（${dateKey} ${timeKey}）`;
+    const body = note && kind === 'condition'
+      ? `${requesterName}さんが${label}を記録しました（${dateKey} ${timeKey}）: ${note.slice(0, 80)}`
+      : `${requesterName}さんが${label}を記録しました（${dateKey} ${timeKey}）`;
     const message = buildWebPushDataMessage(tokenEntries, {
       date: dateKey,
       time: timeKey,

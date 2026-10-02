@@ -5,6 +5,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  onSnapshot,
   query,
   serverTimestamp,
   setDoc,
@@ -29,10 +30,11 @@ export const WATCH_COMMENT_MAX_LENGTH = 200
 export const WATCH_EVENT_BEDTIME = 'bedtime'
 export const WATCH_EVENT_WAKE = 'wake'
 export const WATCH_EVENT_MEDICATION = 'medication'
+export const WATCH_EVENT_CONDITION = 'condition'
 
 export const WATCH_TERMS_TEXT = [
-  '見守り機能では、あなたが記録した実就寝時刻・実起床時刻・実服薬時刻が見守り人に共有され、そのたびにお知らせが送られます。',
-  'お互いのコメントも共有されます。体調・住所・電話番号・スケジュール内容は共有されません。',
+  '見守り機能では、あなたが記録した実就寝時刻・実起床時刻・実服薬時刻・体調が見守り人に共有され、そのたびにお知らせが送られます。',
+  'お互いのコメントも共有されます。住所・電話番号・スケジュール内容は共有されません。',
   '見守り関係は、あなたまたは見守り人のどちらからでも、申請だけで即時終了できます。',
   'Sプラスかつ契約が有効なあいだのみ利用できます。条件を外れた場合は参照・通知が停止します。',
   '見守りは生活の参考情報であり、医療行為や緊急対応の代替ではありません。',
@@ -71,6 +73,7 @@ export const getWatchEventLabel = (kind, slotLabel = '') => {
   if (kind === WATCH_EVENT_BEDTIME) return '就寝'
   if (kind === WATCH_EVENT_WAKE) return '起床'
   if (kind === WATCH_EVENT_MEDICATION) return slotLabel ? `服薬（${slotLabel}）` : '服薬'
+  if (kind === WATCH_EVENT_CONDITION) return slotLabel ? `体調（${slotLabel}）` : '体調'
   return '記録'
 }
 
@@ -384,6 +387,8 @@ export const publishWatchCareEvent = async ({
   timeKey,
   slotKey = '',
   slotLabel = '',
+  conditionLevel = '',
+  conditionNote = '',
 }) => {
   if (!db || !match || match.status !== WATCH_STATUS_ACTIVE) return null
   if (!kind || !dateKey || !timeKey) return null
@@ -398,17 +403,26 @@ export const publishWatchCareEvent = async ({
     timeKey,
     slotKey: slotKey || '',
     slotLabel: slotLabel || '',
+    conditionLevel: conditionLevel || '',
+    conditionNote: String(conditionNote || '').slice(0, 200),
     createdAt: serverTimestamp(),
   }
   await setDoc(eventRef, payload)
   return { id: eventRef.id, ...payload }
 }
 
+const resolvePartyField = (match, viewerUid) => {
+  if (!match?.id || !viewerUid) return null
+  if (match.watcherUid === viewerUid) return 'watcherUid'
+  if (match.requesterUid === viewerUid) return 'requesterUid'
+  return null
+}
+
+const mapWatchDocs = (snapshot) => snapshot.docs.map((snap) => ({ id: snap.id, ...snap.data() }))
+
 export const listWatchEventsForMatch = async (match, viewerUid, max = 80) => {
-  if (!db || !match?.id || !viewerUid) return []
-  const partyField = match.watcherUid === viewerUid
-    ? 'watcherUid'
-    : (match.requesterUid === viewerUid ? 'requesterUid' : null)
+  if (!db) return []
+  const partyField = resolvePartyField(match, viewerUid)
   if (!partyField) return []
   const snapshot = await getDocs(query(
     collection(db, 'watch_events'),
@@ -416,16 +430,13 @@ export const listWatchEventsForMatch = async (match, viewerUid, max = 80) => {
     where(partyField, '==', viewerUid),
     limit(max),
   ))
-  return snapshot.docs
-    .map((snap) => ({ id: snap.id, ...snap.data() }))
+  return mapWatchDocs(snapshot)
     .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt))
 }
 
 export const listWatchCommentsForMatch = async (match, viewerUid, max = 80) => {
-  if (!db || !match?.id || !viewerUid) return []
-  const partyField = match.watcherUid === viewerUid
-    ? 'watcherUid'
-    : (match.requesterUid === viewerUid ? 'requesterUid' : null)
+  if (!db) return []
+  const partyField = resolvePartyField(match, viewerUid)
   if (!partyField) return []
   const snapshot = await getDocs(query(
     collection(db, 'watch_comments'),
@@ -433,9 +444,54 @@ export const listWatchCommentsForMatch = async (match, viewerUid, max = 80) => {
     where(partyField, '==', viewerUid),
     limit(max),
   ))
-  return snapshot.docs
-    .map((snap) => ({ id: snap.id, ...snap.data() }))
+  return mapWatchDocs(snapshot)
     .sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt))
+}
+
+/** 画面表示中のリアルタイム購読。戻り値は解除関数 */
+export const subscribeWatchEventsForMatch = (match, viewerUid, onChange, onError, max = 80) => {
+  const partyField = resolvePartyField(match, viewerUid)
+  if (!db || !partyField) {
+    onChange?.([])
+    return () => {}
+  }
+  return onSnapshot(
+    query(
+      collection(db, 'watch_events'),
+      where('matchId', '==', match.id),
+      where(partyField, '==', viewerUid),
+      limit(max),
+    ),
+    (snapshot) => {
+      onChange?.(
+        mapWatchDocs(snapshot).sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt))
+      )
+    },
+    (error) => onError?.(error)
+  )
+}
+
+/** 画面表示中のリアルタイム購読。戻り値は解除関数 */
+export const subscribeWatchCommentsForMatch = (match, viewerUid, onChange, onError, max = 80) => {
+  const partyField = resolvePartyField(match, viewerUid)
+  if (!db || !partyField) {
+    onChange?.([])
+    return () => {}
+  }
+  return onSnapshot(
+    query(
+      collection(db, 'watch_comments'),
+      where('matchId', '==', match.id),
+      where(partyField, '==', viewerUid),
+      limit(max),
+    ),
+    (snapshot) => {
+      onChange?.(
+        mapWatchDocs(snapshot).sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt))
+      )
+    },
+    (error) => onError?.(error)
+  )
 }
 
 export const postWatchComment = async ({

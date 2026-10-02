@@ -61,6 +61,7 @@ import { openDeviceStepsAppForCheck } from './openDeviceStepsApp'
 import WatchCarePanel from './WatchCarePanel'
 import {
   WATCH_EVENT_BEDTIME,
+  WATCH_EVENT_CONDITION,
   WATCH_EVENT_MEDICATION,
   WATCH_EVENT_WAKE,
   WATCH_ROLE_REQUESTER,
@@ -938,7 +939,15 @@ function App() {
     status: subscriptionInfo.isActive ? SUBSCRIPTION_ACTIVE_STATUS : '',
   })
 
-  const publishWatchCareEventSafe = async ({ kind, dateKey, timeKey, slotKey = '', slotLabel = '' }) => {
+  const publishWatchCareEventSafe = async ({
+    kind,
+    dateKey,
+    timeKey,
+    slotKey = '',
+    slotLabel = '',
+    conditionLevel = '',
+    conditionNote = '',
+  }) => {
     if (!session?.uid || !watchCareEligible) return
     if (watchProfile?.role && watchProfile.role !== WATCH_ROLE_REQUESTER) return
     try {
@@ -951,6 +960,8 @@ function App() {
         timeKey,
         slotKey,
         slotLabel,
+        conditionLevel,
+        conditionNote,
       })
     } catch (error) {
       console.warn('見守りイベントの送信をスキップしました:', error)
@@ -2476,6 +2487,16 @@ function App() {
         },
       }))
       setMedicationSaveMessage('体調を記録しました。')
+      if (nextLevel || nextNote) {
+        await publishWatchCareEventSafe({
+          kind: WATCH_EVENT_CONDITION,
+          dateKey: selectedKey,
+          timeKey: formatCurrentTime(),
+          slotLabel: getConditionLevelLabel(nextLevel) || '記録',
+          conditionLevel: nextLevel,
+          conditionNote: nextNote,
+        })
+      }
     } catch (error) {
       console.error('体調記録保存エラー:', error)
       alert(`体調の保存に失敗しました:\n${error.message}`)

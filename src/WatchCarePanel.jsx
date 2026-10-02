@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Shield, UserRound } from 'lucide-react'
 import {
   WATCH_COMMENT_MAX_LENGTH,
+  WATCH_EVENT_CONDITION,
   WATCH_ROLE_REQUESTER,
   WATCH_ROLE_WATCHER,
   WATCH_STATUS_ACTIVE,
@@ -19,13 +20,13 @@ import {
   getWatchStatusLabel,
   listMatchesForRequester,
   listMatchesForWatcher,
-  listWatchCommentsForMatch,
-  listWatchEventsForMatch,
   loadWatchProfile,
   normalizeWatchEmail,
   postWatchComment,
   rejectWatchRequest,
   saveWatchProfile,
+  subscribeWatchCommentsForMatch,
+  subscribeWatchEventsForMatch,
 } from './watchCare'
 
 const sectionBox = {
@@ -50,6 +51,20 @@ const formatMaybeTime = (dateKey, timeKey) => {
   return `${dateKey || ''} ${timeKey || ''}`.trim()
 }
 
+const renderWatchEventItem = (event) => (
+  <div key={event.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
+    <strong>{getWatchEventLabel(event.kind, event.slotLabel)}</strong>
+    <span style={{ marginLeft: 8, color: '#475569', fontSize: 13 }}>
+      {formatMaybeTime(event.dateKey, event.timeKey)}
+    </span>
+    {event.kind === WATCH_EVENT_CONDITION && event.conditionNote ? (
+      <div style={{ marginTop: 4, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap' }}>
+        {event.conditionNote}
+      </div>
+    ) : null}
+  </div>
+)
+
 export default function WatchCarePanel({
   open,
   mode,
@@ -72,6 +87,8 @@ export default function WatchCarePanel({
   const [comments, setComments] = useState([])
   const [commentDraft, setCommentDraft] = useState('')
   const [termsOpenMatchId, setTermsOpenMatchId] = useState('')
+  const commentsScrollRef = useRef(null)
+  const commentsEndRef = useRef(null)
 
   const selectedMatch = useMemo(
     () => matches.find((match) => match.id === selectedMatchId) || null,
@@ -114,20 +131,11 @@ export default function WatchCarePanel({
       ))
       || nextMatches[0]
       || null
-    const nextSelectedId = preferred?.id || ''
-    setSelectedMatchId(nextSelectedId)
 
-    if (preferred?.status === WATCH_STATUS_ACTIVE) {
-      const [nextEvents, nextComments] = await Promise.all([
-        listWatchEventsForMatch(preferred, session.uid),
-        listWatchCommentsForMatch(preferred, session.uid),
-      ])
-      setEvents(nextEvents)
-      setComments(nextComments)
-    } else {
-      setEvents([])
-      setComments([])
-    }
+    setSelectedMatchId((current) => {
+      if (current && nextMatches.some((match) => match.id === current)) return current
+      return preferred?.id || ''
+    })
 
     onProfileChanged?.(nextProfile)
   }, [session?.uid, onProfileChanged])
@@ -153,7 +161,7 @@ export default function WatchCarePanel({
   }, [open, session?.uid, mode, refresh])
 
   useEffect(() => {
-    if (!open || !selectedMatchId) {
+    if (!open || !selectedMatchId || !session?.uid) {
       setEvents([])
       setComments([])
       return undefined
@@ -164,25 +172,37 @@ export default function WatchCarePanel({
       setComments([])
       return undefined
     }
-    let cancelled = false
-    ;(async () => {
-      try {
-        const [nextEvents, nextComments] = await Promise.all([
-          listWatchEventsForMatch(match, session.uid),
-          listWatchCommentsForMatch(match, session.uid),
-        ])
-        if (!cancelled) {
-          setEvents(nextEvents)
-          setComments(nextComments)
-        }
-      } catch (err) {
-        if (!cancelled) setError(err?.message || '記録の読み込みに失敗しました。')
-      }
-    })()
+
+    const unsubEvents = subscribeWatchEventsForMatch(
+      match,
+      session.uid,
+      (nextEvents) => setEvents(nextEvents),
+      (err) => setError(err?.message || '記録の購読に失敗しました。')
+    )
+    const unsubComments = subscribeWatchCommentsForMatch(
+      match,
+      session.uid,
+      (nextComments) => setComments(nextComments),
+      (err) => setError(err?.message || 'コメントの購読に失敗しました。')
+    )
+
     return () => {
-      cancelled = true
+      unsubEvents()
+      unsubComments()
     }
   }, [open, selectedMatchId, matches, session?.uid])
+
+  useEffect(() => {
+    if (!open || !selectedMatch || selectedMatch.status !== WATCH_STATUS_ACTIVE) return
+    const frame = window.requestAnimationFrame(() => {
+      if (commentsEndRef.current) {
+        commentsEndRef.current.scrollIntoView({ block: 'end' })
+      } else if (commentsScrollRef.current) {
+        commentsScrollRef.current.scrollTop = commentsScrollRef.current.scrollHeight
+      }
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [comments, open, selectedMatchId, selectedMatch])
 
   const runAction = async (action, successMessage) => {
     setBusy(true)
@@ -198,6 +218,49 @@ export default function WatchCarePanel({
       setBusy(false)
     }
   }
+
+  const renderCommentsSection = () => (
+    <div style={sectionBox}>
+      <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>コメント（リアルタイム）</h4>
+      <div
+        ref={commentsScrollRef}
+        style={{ maxHeight: 220, overflowY: 'auto', marginBottom: 8, paddingRight: 4 }}
+      >
+        {comments.length === 0 && <p style={muted}>コメントはまだありません。</p>}
+        {comments.map((comment) => (
+          <div key={comment.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
+            <div style={{ fontSize: 12, color: '#64748b' }}>{comment.fromName || 'メンバー'}</div>
+            <div style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{comment.body}</div>
+          </div>
+        ))}
+        <div ref={commentsEndRef} />
+      </div>
+      <textarea
+        value={commentDraft}
+        onChange={(event) => setCommentDraft(event.target.value.slice(0, WATCH_COMMENT_MAX_LENGTH))}
+        rows={3}
+        style={{ ...styles.modalInput, resize: 'vertical' }}
+        placeholder="コメント（マッチング中のみ）"
+        disabled={busy}
+      />
+      <button
+        type="button"
+        style={{ ...styles.primaryButton, marginTop: 8 }}
+        disabled={busy || !selectedMatch}
+        onClick={() => runAction(async () => {
+          await postWatchComment({
+            match: selectedMatch,
+            fromUid: session.uid,
+            fromName: profile?.name || '',
+            body: commentDraft,
+          })
+          setCommentDraft('')
+        }, 'コメントを送信しました。')}
+      >
+        送信
+      </button>
+    </div>
+  )
 
   if (!open) return null
 
@@ -378,54 +441,12 @@ export default function WatchCarePanel({
               <>
                 <div style={sectionBox}>
                   <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>
-                    記録（{selectedMatch.requesterName || '依頼人'}）
+                    記録（{selectedMatch.requesterName || '依頼人'}・リアルタイム）
                   </h4>
                   {events.length === 0 && <p style={muted}>まだ共有された記録はありません。</p>}
-                  {events.slice(0, 40).map((event) => (
-                    <div key={event.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
-                      <strong>{getWatchEventLabel(event.kind, event.slotLabel)}</strong>
-                      <span style={{ marginLeft: 8, color: '#475569', fontSize: 13 }}>
-                        {formatMaybeTime(event.dateKey, event.timeKey)}
-                      </span>
-                    </div>
-                  ))}
+                  {events.slice(0, 40).map((event) => renderWatchEventItem(event))}
                 </div>
-                <div style={sectionBox}>
-                  <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>コメント</h4>
-                  <div style={{ maxHeight: 180, overflowY: 'auto', marginBottom: 8 }}>
-                    {comments.length === 0 && <p style={muted}>コメントはまだありません。</p>}
-                    {comments.map((comment) => (
-                      <div key={comment.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
-                        <div style={{ fontSize: 12, color: '#64748b' }}>{comment.fromName || 'メンバー'}</div>
-                        <div style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{comment.body}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <textarea
-                    value={commentDraft}
-                    onChange={(event) => setCommentDraft(event.target.value.slice(0, WATCH_COMMENT_MAX_LENGTH))}
-                    rows={3}
-                    style={{ ...styles.modalInput, resize: 'vertical' }}
-                    placeholder="コメント（マッチング中のみ）"
-                    disabled={busy}
-                  />
-                  <button
-                    type="button"
-                    style={{ ...styles.primaryButton, marginTop: 8 }}
-                    disabled={busy}
-                    onClick={() => runAction(async () => {
-                      await postWatchComment({
-                        match: selectedMatch,
-                        fromUid: session.uid,
-                        fromName: profile?.name || '',
-                        body: commentDraft,
-                      })
-                      setCommentDraft('')
-                    }, 'コメントを送信しました。')}
-                  >
-                    送信
-                  </button>
-                </div>
+                {renderCommentsSection()}
               </>
             )}
           </>
@@ -541,53 +562,11 @@ export default function WatchCarePanel({
             {selectedMatch?.status === WATCH_STATUS_ACTIVE && (
               <>
                 <div style={sectionBox}>
-                  <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>共有済みの記録</h4>
+                  <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>共有済みの記録（リアルタイム）</h4>
                   {events.length === 0 && <p style={muted}>まだ記録はありません。</p>}
-                  {events.slice(0, 40).map((event) => (
-                    <div key={event.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
-                      <strong>{getWatchEventLabel(event.kind, event.slotLabel)}</strong>
-                      <span style={{ marginLeft: 8, color: '#475569', fontSize: 13 }}>
-                        {formatMaybeTime(event.dateKey, event.timeKey)}
-                      </span>
-                    </div>
-                  ))}
+                  {events.slice(0, 40).map((event) => renderWatchEventItem(event))}
                 </div>
-                <div style={sectionBox}>
-                  <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>コメント</h4>
-                  <div style={{ maxHeight: 180, overflowY: 'auto', marginBottom: 8 }}>
-                    {comments.length === 0 && <p style={muted}>コメントはまだありません。</p>}
-                    {comments.map((comment) => (
-                      <div key={comment.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
-                        <div style={{ fontSize: 12, color: '#64748b' }}>{comment.fromName || 'メンバー'}</div>
-                        <div style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{comment.body}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <textarea
-                    value={commentDraft}
-                    onChange={(event) => setCommentDraft(event.target.value.slice(0, WATCH_COMMENT_MAX_LENGTH))}
-                    rows={3}
-                    style={{ ...styles.modalInput, resize: 'vertical' }}
-                    placeholder="コメント（マッチング中のみ）"
-                    disabled={busy}
-                  />
-                  <button
-                    type="button"
-                    style={{ ...styles.primaryButton, marginTop: 8 }}
-                    disabled={busy}
-                    onClick={() => runAction(async () => {
-                      await postWatchComment({
-                        match: selectedMatch,
-                        fromUid: session.uid,
-                        fromName: profile?.name || '',
-                        body: commentDraft,
-                      })
-                      setCommentDraft('')
-                    }, 'コメントを送信しました。')}
-                  >
-                    送信
-                  </button>
-                </div>
+                {renderCommentsSection()}
               </>
             )}
           </>

@@ -131,7 +131,7 @@ service cloud.firestore {
         && request.resource.data.requesterUid == request.auth.uid
         && request.resource.data.watcherUid is string
         && request.resource.data.matchId is string
-        && request.resource.data.kind in ['bedtime', 'wake', 'medication'];
+        && request.resource.data.kind in ['bedtime', 'wake', 'medication', 'condition'];
       allow read: if isSignedIn()
         && (resource.data.watcherUid == request.auth.uid
           || resource.data.requesterUid == request.auth.uid);
