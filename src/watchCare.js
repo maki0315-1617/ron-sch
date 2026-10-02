@@ -522,6 +522,88 @@ export const postWatchComment = async ({
   return { id: ref.id, ...payload }
 }
 
+/** コメント欄を開いたときに既読時刻を更新（見守り人の未読防止用） */
+export const markWatchMatchCommentsRead = async ({ match, viewerUid }) => {
+  if (!db || !match?.id || !viewerUid) return
+  const field = match.watcherUid === viewerUid
+    ? 'watcherLastReadAt'
+    : (match.requesterUid === viewerUid ? 'requesterLastReadAt' : null)
+  if (!field) return
+  await updateDoc(doc(db, 'watch_matches', match.id), {
+    [field]: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/** 見守り人向け: 全依頼人のコメントをまとめて購読 */
+export const subscribeWatchCommentsForWatcher = (watcherUid, onChange, onError, max = 120) => {
+  if (!db || !watcherUid) {
+    onChange?.([])
+    return () => {}
+  }
+  return onSnapshot(
+    query(
+      collection(db, 'watch_comments'),
+      where('watcherUid', '==', watcherUid),
+      limit(max),
+    ),
+    (snapshot) => onChange?.(mapWatchDocs(snapshot)),
+    (error) => onError?.(error)
+  )
+}
+
+const getCommentReadAtMillis = (match, viewerUid) => {
+  if (!match || !viewerUid) return 0
+  if (match.watcherUid === viewerUid) return toMillis(match.watcherLastReadAt)
+  if (match.requesterUid === viewerUid) return toMillis(match.requesterLastReadAt)
+  return 0
+}
+
+/** 依頼人ごとの未読件数・最終コメント一行 */
+export const buildMatchCommentSummaries = (matches, comments, viewerUid) => {
+  const byMatch = {}
+  ;(matches || []).forEach((match) => {
+    byMatch[match.id] = {
+      unreadCount: 0,
+      lastBody: '',
+      lastFromName: '',
+      lastAt: 0,
+    }
+  })
+  ;(comments || []).forEach((comment) => {
+    const row = byMatch[comment.matchId]
+    if (!row) return
+    const match = (matches || []).find((item) => item.id === comment.matchId)
+    if (!match) return
+    const at = toMillis(comment.createdAt)
+    if (at >= row.lastAt) {
+      row.lastAt = at
+      row.lastBody = String(comment.body || '').replace(/\s+/g, ' ').slice(0, 36)
+      row.lastFromName = comment.fromName || ''
+    }
+    const readAt = getCommentReadAtMillis(match, viewerUid)
+    if (comment.fromUid && comment.fromUid !== viewerUid && at > readAt) {
+      row.unreadCount += 1
+    }
+  })
+  return byMatch
+}
+
+/** 未読が多い順 → マッチング中優先 → 最終コメントが新しい順 */
+export const sortMatchesByCommentAttention = (matches, summaries) => (
+  [...(matches || [])].sort((a, b) => {
+    const summaryA = summaries?.[a.id] || {}
+    const summaryB = summaries?.[b.id] || {}
+    const unreadA = summaryA.unreadCount || 0
+    const unreadB = summaryB.unreadCount || 0
+    if (unreadA !== unreadB) return unreadB - unreadA
+    const activeA = a.status === WATCH_STATUS_ACTIVE ? 1 : 0
+    const activeB = b.status === WATCH_STATUS_ACTIVE ? 1 : 0
+    if (activeA !== activeB) return activeB - activeA
+    return (summaryB.lastAt || 0) - (summaryA.lastAt || 0)
+  })
+)
+
 export const deleteWatchEmailIndexIfOwned = async (email, uid) => {
   const emailKey = watchEmailIndexId(email)
   if (!emailKey || !uid) return

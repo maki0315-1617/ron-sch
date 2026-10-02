@@ -11,6 +11,7 @@ import {
   WATCH_TERMS_TEXT,
   agreeWatchTerms,
   approveWatchRequest,
+  buildMatchCommentSummaries,
   cancelWatchRequest,
   createWatchRequest,
   endWatchMatch,
@@ -21,11 +22,14 @@ import {
   listMatchesForRequester,
   listMatchesForWatcher,
   loadWatchProfile,
+  markWatchMatchCommentsRead,
   normalizeWatchEmail,
   postWatchComment,
   rejectWatchRequest,
   saveWatchProfile,
+  sortMatchesByCommentAttention,
   subscribeWatchCommentsForMatch,
+  subscribeWatchCommentsForWatcher,
   subscribeWatchEventsForMatch,
 } from './watchCare'
 
@@ -56,7 +60,34 @@ const sectionTitle = {
   color: '#0f172a',
 }
 
+const unreadBadge = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minWidth: 22,
+  height: 22,
+  padding: '0 7px',
+  borderRadius: 999,
+  background: '#dc2626',
+  color: '#fff',
+  fontSize: 12,
+  fontWeight: 800,
+  lineHeight: 1,
+}
+
+const lastCommentLine = {
+  margin: '0 0 8px',
+  padding: '6px 8px',
+  borderRadius: 8,
+  background: '#fff7ed',
+  border: '1px solid #fdba74',
+  color: '#9a3412',
+  fontSize: 12,
+  lineHeight: 1.45,
+}
+
 const muted = { margin: '0 0 8px', color: '#64748b', fontSize: 13, lineHeight: 1.5 }
+
 const listItem = {
   border: '1px solid #e2e8f0',
   borderRadius: 10,
@@ -163,6 +194,7 @@ export default function WatchCarePanel({
   const [commentDraft, setCommentDraft] = useState('')
   const [termsOpenMatchId, setTermsOpenMatchId] = useState('')
   const [endConfirm, setEndConfirm] = useState(null)
+  const [watcherInboxComments, setWatcherInboxComments] = useState([])
   const commentsScrollRef = useRef(null)
   const commentsEndRef = useRef(null)
   const detailSectionRef = useRef(null)
@@ -172,13 +204,48 @@ export default function WatchCarePanel({
     [matches, selectedMatchId]
   )
 
+  const commentSummaries = useMemo(
+    () => buildMatchCommentSummaries(matches, watcherInboxComments, session?.uid),
+    [matches, watcherInboxComments, session?.uid]
+  )
+
+  const displayedMatches = useMemo(() => {
+    if (profile?.role !== WATCH_ROLE_WATCHER) return matches
+    return sortMatchesByCommentAttention(matches, commentSummaries)
+  }, [matches, commentSummaries, profile?.role])
+
+  const totalUnread = useMemo(
+    () => Object.values(commentSummaries).reduce((sum, row) => sum + (row.unreadCount || 0), 0),
+    [commentSummaries]
+  )
+
   const openMatchDetail = useCallback((matchId) => {
-    if (!matchId) return
+    if (!matchId || !session?.uid) return
     setSelectedMatchId(matchId)
+    const match = matches.find((item) => item.id === matchId)
+    if (match?.status === WATCH_STATUS_ACTIVE) {
+      markWatchMatchCommentsRead({ match, viewerUid: session.uid })
+        .then(() => {
+          const readAt = new Date()
+          setMatches((current) => current.map((item) => (
+            item.id === matchId
+              ? {
+                ...item,
+                ...(session.uid === item.watcherUid
+                  ? { watcherLastReadAt: readAt }
+                  : { requesterLastReadAt: readAt }),
+              }
+              : item
+          )))
+        })
+        .catch((err) => {
+          console.warn('見守りコメント既読の更新に失敗:', err)
+        })
+    }
     window.setTimeout(() => {
       detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 80)
-  }, [])
+  }, [matches, session?.uid])
 
   const refresh = useCallback(async () => {
     if (!session?.uid) return
@@ -244,6 +311,18 @@ export default function WatchCarePanel({
       cancelled = true
     }
   }, [open, session?.uid, mode, refresh])
+
+  useEffect(() => {
+    if (!open || !session?.uid || profile?.role !== WATCH_ROLE_WATCHER) {
+      setWatcherInboxComments([])
+      return undefined
+    }
+    return subscribeWatchCommentsForWatcher(
+      session.uid,
+      (nextComments) => setWatcherInboxComments(nextComments),
+      (err) => console.warn('見守りコメント一覧の購読に失敗:', err)
+    )
+  }, [open, session?.uid, profile?.role])
 
   useEffect(() => {
     if (!open || !selectedMatchId || !session?.uid) {
@@ -507,72 +586,117 @@ export default function WatchCarePanel({
             </div>
 
             <div style={sectionBox}>
-              <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>依頼一覧</h4>
-              {matches.length === 0 && <p style={muted}>依頼はまだありません。</p>}
-              {matches.map((match) => (
-                <div key={match.id} style={listItem}>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                    {match.requesterName || match.requesterEmail || '依頼人'}
-                  </div>
-                  <div style={{ fontSize: 13, color: '#475569', marginBottom: 8 }}>
-                    {match.requesterEmail} ／ {getWatchStatusLabel(match.status)}
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    <button
-                      type="button"
-                      style={styles.secondaryButton}
-                      disabled={busy}
-                      onClick={() => openMatchDetail(match.id)}
+              <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>
+                依頼一覧
+                {totalUnread > 0 ? (
+                  <span style={{ ...unreadBadge, marginLeft: 8, verticalAlign: 'middle' }}>
+                    未読 {totalUnread}
+                  </span>
+                ) : null}
+              </h4>
+              <p style={muted}>未読がある依頼人を上に表示します。選択すると未読が解消されます。</p>
+              {displayedMatches.length === 0 && <p style={muted}>依頼はまだありません。</p>}
+              {displayedMatches.map((match) => {
+                const summary = commentSummaries[match.id] || {}
+                const unreadCount = summary.unreadCount || 0
+                return (
+                  <div
+                    key={match.id}
+                    style={{
+                      ...listItem,
+                      ...(unreadCount > 0
+                        ? { borderColor: '#fca5a5', background: '#fff1f2' }
+                        : {}),
+                    }}
+                  >
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      marginBottom: 4,
+                    }}
                     >
-                      選択
-                    </button>
-                    {match.status === WATCH_STATUS_PENDING_APPROVAL && (
-                      <>
-                        <button
-                          type="button"
-                          style={styles.primaryButton}
-                          disabled={busy}
-                          onClick={() => runAction(
-                            () => approveWatchRequest({ matchId: match.id, watcherUid: session.uid }),
-                            '依頼を承認しました。相手の利用注意事項同意待ちです。'
-                          )}
-                        >
-                          承認
-                        </button>
+                      <div style={{ fontWeight: 700 }}>
+                        {match.requesterName || match.requesterEmail || '依頼人'}
+                      </div>
+                      {unreadCount > 0 ? (
+                        <span style={unreadBadge}>未読 {unreadCount}</span>
+                      ) : null}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#475569', marginBottom: 6 }}>
+                      {match.requesterEmail} ／ {getWatchStatusLabel(match.status)}
+                    </div>
+                    {summary.lastBody ? (
+                      <p style={{
+                        ...lastCommentLine,
+                        ...(unreadCount > 0 ? {} : { background: '#f8fafc', borderColor: '#e2e8f0', color: '#64748b' }),
+                      }}
+                      >
+                        💬 {summary.lastFromName ? `${summary.lastFromName}: ` : ''}
+                        {summary.lastBody}
+                        {String(summary.lastBody).length >= 36 ? '…' : ''}
+                      </p>
+                    ) : (
+                      <p style={{ ...muted, marginBottom: 8 }}>まだコメントはありません。</p>
+                    )}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      <button
+                        type="button"
+                        style={styles.secondaryButton}
+                        disabled={busy}
+                        onClick={() => openMatchDetail(match.id)}
+                      >
+                        {unreadCount > 0 ? '未読を確認' : '選択'}
+                      </button>
+                      {match.status === WATCH_STATUS_PENDING_APPROVAL && (
+                        <>
+                          <button
+                            type="button"
+                            style={styles.primaryButton}
+                            disabled={busy}
+                            onClick={() => runAction(
+                              () => approveWatchRequest({ matchId: match.id, watcherUid: session.uid }),
+                              '依頼を承認しました。相手の利用注意事項同意待ちです。'
+                            )}
+                          >
+                            承認
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...styles.secondaryButton, color: '#b91c1c' }}
+                            disabled={busy}
+                            onClick={() => {
+                              if (!window.confirm('この依頼を却下しますか？')) return
+                              runAction(
+                                () => rejectWatchRequest({ matchId: match.id, watcherUid: session.uid }),
+                                '依頼を却下しました。'
+                              )
+                            }}
+                          >
+                            却下
+                          </button>
+                        </>
+                      )}
+                      {match.status === WATCH_STATUS_ACTIVE && (
                         <button
                           type="button"
                           style={{ ...styles.secondaryButton, color: '#b91c1c' }}
                           disabled={busy}
                           onClick={() => {
-                            if (!window.confirm('この依頼を却下しますか？')) return
-                            runAction(
-                              () => rejectWatchRequest({ matchId: match.id, watcherUid: session.uid }),
-                              '依頼を却下しました。'
-                            )
+                            setEndConfirm({
+                              matchId: match.id,
+                              partnerLabel: match.requesterName || '依頼人',
+                            })
                           }}
                         >
-                          却下
+                          見守り終了
                         </button>
-                      </>
-                    )}
-                    {match.status === WATCH_STATUS_ACTIVE && (
-                      <button
-                        type="button"
-                        style={{ ...styles.secondaryButton, color: '#b91c1c' }}
-                        disabled={busy}
-                        onClick={() => {
-                          setEndConfirm({
-                            matchId: match.id,
-                            partnerLabel: match.requesterName || '依頼人',
-                          })
-                        }}
-                      >
-                        見守り終了
-                      </button>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             {selectedMatch?.status === WATCH_STATUS_ACTIVE && (
