@@ -5696,7 +5696,7 @@ function App() {
             points: [
               '点滅中に完了／取消できます。先の枠が点滅中で未完了の間は後続を操作できません。帯を逃した記録はできません。',
               '「服薬時刻・有無」から時刻・有無・服薬通知不要を設定します。全枠なしのときは「服薬予定無」と表示します。',
-              '体調は5段階（大変良い〜大変悪い）と一言メモを当日のみ記録できます。見守り機能から参照する想定です。',
+              '体調は5段階（大変良い〜大変悪い）と一言メモを当日のみ記録できます。<span class="guide-red">【追記／プラン: Sプラス】見守りが成立している場合、見守り人に共有されます。</span>',
               '設定変更で点滅中の枠を「無」にすると、そのボタンはすぐ消えます。',
               '服薬通知と目覚まし通知は別です。健康生活PDFの服薬列は表示のみで疲れスコアには加点しません。',
             ],
@@ -5740,6 +5740,19 @@ function App() {
               '集計期間は31日以内で指定します。超える場合はメッセージが表示されます。',
               '予定名が完全一致するものを1件として集計します。表記を揃えたい場合は定例タイトルの利用が便利です。',
               '集計結果の最下行に合計件数と合計時間が表示されます。',
+            ],
+          },
+          {
+            heading: '12. 見守り機能（プラン: Sプラス）',
+            variant: 'splus',
+            body: '<span class="guide-red">【追記】この機能はプランが「Sプラス」かつ契約状態が有効（active）のときだけ利用できます。メニューに「見守り処理」が表示されます。</span>',
+            points: [
+              '<span class="guide-red">初期設定で名前と役割（見守り人／見守り依頼人）を登録します。契約メールは表示のみです。一人の利用者はどちらか一方の役割のみです。</span>',
+              '<span class="guide-red">見守り依頼人が見守り人の契約メールを入力して依頼 → 見守り人が承認 → 依頼人が利用注意事項に同意するとマッチング完了です。</span>',
+              '<span class="guide-red">関係は「見守り人1人に依頼人が複数」「依頼人1人につき見守り人は1人まで」です。</span>',
+              '<span class="guide-red">共有される記録は、実就寝・実起床・実服薬・体調（段階とメモ）と、お互いのコメントです。スケジュール内容や住所・電話は共有しません。</span>',
+              '<span class="guide-red">見守り人へは、実際に記録した就寝・起床・服薬・体調のタイミングで通知されます（見守り画面を開いている間は記録・コメントもリアルタイム更新）。</span>',
+              '<span class="guide-red">見守り終了は双方から可能で、確認のうえ「終了する」を押すとただちに終了します（キャンセルで継続）。再開する場合は最初から依頼し直します。</span>',
             ],
           },
           {
@@ -5839,6 +5852,7 @@ function App() {
             points: [
               'Complete or undo only while blinking. Later slots stay locked while an earlier blinking slot is incomplete. Missed windows cannot be backfilled.',
               'Open “Medication times” for times, on/off per slot, and medication notification toggle. If every slot is off, the panel shows “No medication planned”.',
+              '<span class="guide-red">[Addendum / Plan: S Plus] You can log condition (5 levels + a short note) for today only. When Watch Care is matched, it is shared with the watcher.</span>',
               'Turning a blinking slot off removes its button immediately.',
               'Medication alerts are separate from the wake alarm. Healthy Life PDF medication columns are display-only and do not affect fatigue score.',
             ],
@@ -5882,6 +5896,19 @@ function App() {
               'The date range can be up to 31 days; a message appears if it is exceeded.',
               'Tasks are grouped by exact title match. Use common titles to keep names consistent.',
               'The total count and total minutes are shown in the last row of the summary.',
+            ],
+          },
+          {
+            heading: '12. Watch Care (Plan: S Plus)',
+            variant: 'splus',
+            body: '<span class="guide-red">[Addendum] Available only when your plan is “S Plus” and subscription status is active. The menu then shows “Watch Care”.</span>',
+            points: [
+              '<span class="guide-red">In setup, register your display name and role (Watcher or Requester). Contract email is read-only. Each user can hold only one role.</span>',
+              '<span class="guide-red">Requester invites by the Watcher’s contract email → Watcher approves → Requester agrees to the usage notes to complete matching.</span>',
+              '<span class="guide-red">One Watcher may have multiple Requesters; each Requester may have at most one Watcher.</span>',
+              '<span class="guide-red">Shared items: actual bedtime, wake time, medication times, condition (level + note), and mutual comments. Schedules, address, and phone are not shared.</span>',
+              '<span class="guide-red">The Watcher receives notifications when those records are logged. While the Watch Care screen is open, records and comments update in real time.</span>',
+              '<span class="guide-red">Either party can end Watch Care after confirmation (“End” ends immediately; Cancel keeps it). To resume, start the invite flow again.</span>',
             ],
           },
           {
@@ -5936,8 +5963,8 @@ function App() {
       </figure>
     `).join('')
     const sectionsHtml = guide.sections.map((section, index) => `
-      <section class="card">
-        <div class="step-badge">${index + 1}</div>
+      <section class="card${section.variant === 'splus' ? ' card-splus' : ''}">
+        <div class="step-badge${section.variant === 'splus' ? ' step-badge-splus' : ''}">${section.variant === 'splus' ? 'S+' : index + 1}</div>
         <h2>${section.heading}</h2>
         <p>${section.body}</p>
         <ul>
@@ -6044,12 +6071,17 @@ function App() {
               padding: 18px 18px 14px;
               margin-top: 18px;
             }
+            .card-splus {
+              background: linear-gradient(180deg, #fff7f7 0%, #ffffff 100%);
+              border: 1px solid #fecaca;
+            }
             .step-badge {
               display: inline-flex;
               align-items: center;
               justify-content: center;
-              width: 28px;
+              min-width: 28px;
               height: 28px;
+              padding: 0 8px;
               border-radius: 999px;
               background: #dbeafe;
               color: #1d4ed8;
@@ -6057,10 +6089,21 @@ function App() {
               font-weight: 800;
               margin-bottom: 10px;
             }
+            .step-badge-splus {
+              background: #fecaca;
+              color: #b91c1c;
+            }
             h2 {
               margin: 0 0 8px;
               font-size: 18px;
               color: #1e3a8a;
+            }
+            .card-splus h2 {
+              color: #b91c1c;
+            }
+            .guide-red {
+              color: #dc2626;
+              font-weight: 700;
             }
             p, li {
               font-size: 14px;

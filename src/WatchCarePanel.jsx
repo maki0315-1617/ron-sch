@@ -37,6 +37,25 @@ const sectionBox = {
   marginBottom: 12,
 }
 
+const recordsSectionBox = {
+  ...sectionBox,
+  background: '#eef6ff',
+  border: '1px solid #93c5fd',
+}
+
+const commentsSectionBox = {
+  ...sectionBox,
+  background: '#eefaf3',
+  border: '1px solid #86efac',
+}
+
+const sectionTitle = {
+  margin: '0 0 8px',
+  fontSize: 15,
+  fontWeight: 700,
+  color: '#0f172a',
+}
+
 const muted = { margin: '0 0 8px', color: '#64748b', fontSize: 13, lineHeight: 1.5 }
 const listItem = {
   border: '1px solid #e2e8f0',
@@ -46,24 +65,80 @@ const listItem = {
   marginBottom: 8,
 }
 
+const EVENT_KIND_STYLE = {
+  bedtime: { borderLeft: '4px solid #6366f1', labelColor: '#3730a3' },
+  wake: { borderLeft: '4px solid #f59e0b', labelColor: '#92400e' },
+  medication: { borderLeft: '4px solid #14b8a6', labelColor: '#115e59' },
+  condition: { borderLeft: '4px solid #f43f5e', labelColor: '#9f1239' },
+}
+
 const formatMaybeTime = (dateKey, timeKey) => {
   if (!dateKey && !timeKey) return '—'
   return `${dateKey || ''} ${timeKey || ''}`.trim()
 }
 
-const renderWatchEventItem = (event) => (
-  <div key={event.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
-    <strong>{getWatchEventLabel(event.kind, event.slotLabel)}</strong>
-    <span style={{ marginLeft: 8, color: '#475569', fontSize: 13 }}>
-      {formatMaybeTime(event.dateKey, event.timeKey)}
-    </span>
-    {event.kind === WATCH_EVENT_CONDITION && event.conditionNote ? (
-      <div style={{ marginTop: 4, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap' }}>
-        {event.conditionNote}
-      </div>
-    ) : null}
-  </div>
+const renderWatchEventItem = (event) => {
+  const kindStyle = EVENT_KIND_STYLE[event.kind] || {
+    borderLeft: '4px solid #94a3b8',
+    labelColor: '#334155',
+  }
+  return (
+    <div
+      key={event.id}
+      style={{
+        ...listItem,
+        marginBottom: 6,
+        padding: '8px 10px',
+        background: '#fff',
+        border: '1px solid #dbeafe',
+        borderLeft: kindStyle.borderLeft,
+      }}
+    >
+      <strong style={{ color: kindStyle.labelColor }}>
+        {getWatchEventLabel(event.kind, event.slotLabel)}
+      </strong>
+      <span style={{ marginLeft: 8, color: '#475569', fontSize: 13 }}>
+        {formatMaybeTime(event.dateKey, event.timeKey)}
+      </span>
+      {event.kind === WATCH_EVENT_CONDITION && event.conditionNote ? (
+        <div style={{ marginTop: 4, fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap' }}>
+          {event.conditionNote}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+const buildEndWatchNotice = (partnerLabel) => (
+  [
+    `${partnerLabel}との見守りを終了しようとしています。`,
+    '',
+    '■ 注意',
+    '・「終了する」を押すと、相手の承認なしでただちに終了します。',
+    '・終了後は記録の参照・コメント・通知ができなくなります。',
+    '・再開するには、最初から見守り依頼が必要です。',
+    '',
+    '■ キャンセル',
+    '・「キャンセル」を選ぶと終了しません。',
+    '・見守り関係はそのまま続きます。',
+    '',
+    'それでも終了する場合だけ「終了する」を押してください。',
+  ].join('\n')
 )
+
+const recordsScrollBox = {
+  maxHeight: 168,
+  overflowY: 'auto',
+  paddingRight: 4,
+  marginTop: 4,
+}
+
+const resolveCommentRole = (comment, match) => {
+  if (!match) return ''
+  if (comment.fromUid === match.watcherUid) return WATCH_ROLE_WATCHER
+  if (comment.fromUid === match.requesterUid) return WATCH_ROLE_REQUESTER
+  return ''
+}
 
 export default function WatchCarePanel({
   open,
@@ -87,13 +162,23 @@ export default function WatchCarePanel({
   const [comments, setComments] = useState([])
   const [commentDraft, setCommentDraft] = useState('')
   const [termsOpenMatchId, setTermsOpenMatchId] = useState('')
+  const [endConfirm, setEndConfirm] = useState(null)
   const commentsScrollRef = useRef(null)
   const commentsEndRef = useRef(null)
+  const detailSectionRef = useRef(null)
 
   const selectedMatch = useMemo(
     () => matches.find((match) => match.id === selectedMatchId) || null,
     [matches, selectedMatchId]
   )
+
+  const openMatchDetail = useCallback((matchId) => {
+    if (!matchId) return
+    setSelectedMatchId(matchId)
+    window.setTimeout(() => {
+      detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 80)
+  }, [])
 
   const refresh = useCallback(async () => {
     if (!session?.uid) return
@@ -195,9 +280,7 @@ export default function WatchCarePanel({
   useEffect(() => {
     if (!open || !selectedMatch || selectedMatch.status !== WATCH_STATUS_ACTIVE) return
     const frame = window.requestAnimationFrame(() => {
-      if (commentsEndRef.current) {
-        commentsEndRef.current.scrollIntoView({ block: 'end' })
-      } else if (commentsScrollRef.current) {
+      if (commentsScrollRef.current) {
         commentsScrollRef.current.scrollTop = commentsScrollRef.current.scrollHeight
       }
     })
@@ -220,26 +303,82 @@ export default function WatchCarePanel({
   }
 
   const renderCommentsSection = () => (
-    <div style={sectionBox}>
-      <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>コメント（リアルタイム）</h4>
+    <div style={commentsSectionBox}>
+      <h4 style={sectionTitle}>💬 コメント（リアルタイム）</h4>
+      <p style={{ ...muted, marginBottom: 10 }}>
+        右＝自分 ／ 緑＝見守り人 ／ 白＝見守り依頼人
+      </p>
       <div
         ref={commentsScrollRef}
-        style={{ maxHeight: 220, overflowY: 'auto', marginBottom: 8, paddingRight: 4 }}
+        style={{
+          maxHeight: 260,
+          overflowY: 'auto',
+          marginBottom: 8,
+          padding: '10px 8px',
+          borderRadius: 10,
+          background: '#c8e6c9',
+          border: '1px solid #86efac',
+        }}
       >
-        {comments.length === 0 && <p style={muted}>コメントはまだありません。</p>}
-        {comments.map((comment) => (
-          <div key={comment.id} style={{ ...listItem, marginBottom: 6, padding: 8 }}>
-            <div style={{ fontSize: 12, color: '#64748b' }}>{comment.fromName || 'メンバー'}</div>
-            <div style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{comment.body}</div>
-          </div>
-        ))}
+        {comments.length === 0 && (
+          <p style={{ ...muted, textAlign: 'center', margin: '12px 0' }}>コメントはまだありません。</p>
+        )}
+        {comments.map((comment) => {
+          const isMine = comment.fromUid === session?.uid
+          const role = resolveCommentRole(comment, selectedMatch)
+          const isWatcher = role === WATCH_ROLE_WATCHER
+          const roleLabel = isWatcher ? '見守り人' : role === WATCH_ROLE_REQUESTER ? '見守り依頼人' : 'メンバー'
+          const bubbleBg = isWatcher ? '#dcf8c6' : '#ffffff'
+          const bubbleBorder = isWatcher ? '#86efac' : '#e2e8f0'
+          return (
+            <div
+              key={comment.id}
+              style={{
+                display: 'flex',
+                justifyContent: isMine ? 'flex-end' : 'flex-start',
+                marginBottom: 10,
+              }}
+            >
+              <div style={{ maxWidth: '82%' }}>
+                <div style={{
+                  fontSize: 11,
+                  color: isWatcher ? '#166534' : '#475569',
+                  fontWeight: 700,
+                  marginBottom: 3,
+                  textAlign: isMine ? 'right' : 'left',
+                }}
+                >
+                  {isWatcher ? '🛡️ ' : '👤 '}
+                  {roleLabel}
+                  {comment.fromName ? ` · ${comment.fromName}` : ''}
+                  {isMine ? '（自分）' : ''}
+                </div>
+                <div style={{
+                  background: bubbleBg,
+                  border: `1px solid ${bubbleBorder}`,
+                  borderRadius: isMine ? '14px 4px 14px 14px' : '4px 14px 14px 14px',
+                  padding: '8px 11px',
+                  fontSize: 14,
+                  lineHeight: 1.45,
+                  color: '#0f172a',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.08)',
+                }}
+                >
+                  {comment.body}
+                </div>
+              </div>
+            </div>
+          )
+        })}
         <div ref={commentsEndRef} />
       </div>
       <textarea
         value={commentDraft}
         onChange={(event) => setCommentDraft(event.target.value.slice(0, WATCH_COMMENT_MAX_LENGTH))}
         rows={3}
-        style={{ ...styles.modalInput, resize: 'vertical' }}
+        style={{ ...styles.modalInput, resize: 'vertical', background: '#fff' }}
         placeholder="コメント（マッチング中のみ）"
         disabled={busy}
       />
@@ -383,7 +522,7 @@ export default function WatchCarePanel({
                       type="button"
                       style={styles.secondaryButton}
                       disabled={busy}
-                      onClick={() => setSelectedMatchId(match.id)}
+                      onClick={() => openMatchDetail(match.id)}
                     >
                       選択
                     </button>
@@ -422,11 +561,10 @@ export default function WatchCarePanel({
                         style={{ ...styles.secondaryButton, color: '#b91c1c' }}
                         disabled={busy}
                         onClick={() => {
-                          if (!window.confirm(`${match.requesterName || '依頼人'}との見守りを終了しますか？\n相手の承認は不要で、すぐに終了します。`)) return
-                          runAction(
-                            () => endWatchMatch({ matchId: match.id, actorUid: session.uid }),
-                            '見守りを終了しました。'
-                          )
+                          setEndConfirm({
+                            matchId: match.id,
+                            partnerLabel: match.requesterName || '依頼人',
+                          })
                         }}
                       >
                         見守り終了
@@ -438,16 +576,27 @@ export default function WatchCarePanel({
             </div>
 
             {selectedMatch?.status === WATCH_STATUS_ACTIVE && (
-              <>
-                <div style={sectionBox}>
-                  <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>
-                    記録（{selectedMatch.requesterName || '依頼人'}・リアルタイム）
+              <div ref={detailSectionRef}>
+                <div style={recordsSectionBox}>
+                  <h4 style={sectionTitle}>
+                    📋 共有済みの記録（{selectedMatch.requesterName || '依頼人'}・リアルタイム）
                   </h4>
-                  {events.length === 0 && <p style={muted}>まだ共有された記録はありません。</p>}
-                  {events.slice(0, 40).map((event) => renderWatchEventItem(event))}
+                  <p style={{ ...muted, marginBottom: 6 }}>
+                    左線の色：紫＝就寝 ／ 橙＝起床 ／ 青緑＝服薬 ／ 赤＝体調
+                  </p>
+                  <p style={{ ...muted, marginBottom: 8 }}>
+                    一覧は約3件分を表示し、それ以上はスクロールで確認できます。
+                  </p>
+                  {events.length === 0 ? (
+                    <p style={muted}>まだ共有された記録はありません。</p>
+                  ) : (
+                    <div style={recordsScrollBox}>
+                      {events.map((event) => renderWatchEventItem(event))}
+                    </div>
+                  )}
                 </div>
                 {renderCommentsSection()}
-              </>
+              </div>
             )}
           </>
         )}
@@ -534,7 +683,7 @@ export default function WatchCarePanel({
                           type="button"
                           style={styles.secondaryButton}
                           disabled={busy}
-                          onClick={() => setSelectedMatchId(match.id)}
+                          onClick={() => openMatchDetail(match.id)}
                         >
                           記録・コメントを開く
                         </button>
@@ -543,11 +692,10 @@ export default function WatchCarePanel({
                           style={{ ...styles.secondaryButton, color: '#b91c1c' }}
                           disabled={busy}
                           onClick={() => {
-                            if (!window.confirm('見守りを終了しますか？\n相手の承認は不要で、すぐに終了します。')) return
-                            runAction(
-                              () => endWatchMatch({ matchId: match.id, actorUid: session.uid }),
-                              '見守りを終了しました。'
-                            )
+                            setEndConfirm({
+                              matchId: match.id,
+                              partnerLabel: match.watcherName || '見守り人',
+                            })
                           }}
                         >
                           見守り終了
@@ -560,16 +708,98 @@ export default function WatchCarePanel({
             </div>
 
             {selectedMatch?.status === WATCH_STATUS_ACTIVE && (
-              <>
-                <div style={sectionBox}>
-                  <h4 style={{ margin: '0 0 8px', fontSize: 15 }}>共有済みの記録（リアルタイム）</h4>
-                  {events.length === 0 && <p style={muted}>まだ記録はありません。</p>}
-                  {events.slice(0, 40).map((event) => renderWatchEventItem(event))}
+              <div ref={detailSectionRef}>
+                <div style={recordsSectionBox}>
+                  <h4 style={sectionTitle}>📋 共有済みの記録（リアルタイム）</h4>
+                  <p style={{ ...muted, marginBottom: 6 }}>
+                    左線の色：紫＝就寝 ／ 橙＝起床 ／ 青緑＝服薬 ／ 赤＝体調
+                  </p>
+                  <p style={{ ...muted, marginBottom: 8 }}>
+                    一覧は約3件分を表示し、それ以上はスクロールで確認できます。
+                  </p>
+                  {events.length === 0 ? (
+                    <p style={muted}>まだ記録はありません。</p>
+                  ) : (
+                    <div style={recordsScrollBox}>
+                      {events.map((event) => renderWatchEventItem(event))}
+                    </div>
+                  )}
                 </div>
                 {renderCommentsSection()}
-              </>
+              </div>
             )}
           </>
+        )}
+
+        {endConfirm && (
+          <div
+            style={{ ...styles.modalOverlay, zIndex: 90 }}
+            onClick={() => {
+              if (!busy) setEndConfirm(null)
+            }}
+          >
+            <div
+              className="schedule-modal"
+              style={{ ...styles.modal, maxWidth: 480 }}
+              onClick={(event) => event.stopPropagation()}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="watch-end-confirm-title"
+            >
+              <div style={styles.modalHeader}>
+                <h3 id="watch-end-confirm-title" style={{ ...styles.modalTitle, color: '#b91c1c' }}>
+                  見守り終了の確認
+                </h3>
+                <button
+                  type="button"
+                  style={styles.closeButton}
+                  disabled={busy}
+                  onClick={() => setEndConfirm(null)}
+                >
+                  閉じる
+                </button>
+              </div>
+              <pre style={{
+                whiteSpace: 'pre-wrap',
+                fontFamily: 'inherit',
+                fontSize: 13,
+                lineHeight: 1.6,
+                background: '#fff7ed',
+                border: '1px solid #fdba74',
+                borderRadius: 10,
+                padding: 12,
+                margin: '0 0 12px',
+                color: '#7c2d12',
+              }}
+              >
+                {buildEndWatchNotice(endConfirm.partnerLabel)}
+              </pre>
+              <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  style={styles.secondaryButton}
+                  disabled={busy}
+                  onClick={() => setEndConfirm(null)}
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  style={{ ...styles.primaryButton, background: '#dc2626' }}
+                  disabled={busy}
+                  onClick={() => {
+                    const matchId = endConfirm.matchId
+                    runAction(async () => {
+                      await endWatchMatch({ matchId, actorUid: session.uid })
+                      setEndConfirm(null)
+                    }, '見守りを終了しました。')
+                  }}
+                >
+                  終了する
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {termsOpenMatchId && (
