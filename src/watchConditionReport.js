@@ -136,6 +136,7 @@ const buildConditionReportHtml = ({
   person,
   monthKey,
   rows,
+  includeActions = true,
 }) => {
   const chartSvg = buildConditionChartSvg(rows)
   const noteRows = rows.filter((row) => Number.isFinite(row.score) || Boolean(row.note))
@@ -150,6 +151,14 @@ const buildConditionReportHtml = ({
     : '<tr><td colspan="3" class="empty">この月の体調記録はありません</td></tr>'
 
   const outputDate = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })
+  // 別窓表示時のみ操作ボタンを付ける。画面内プレビューでは親モーダル側で操作する
+  const actionsHtml = includeActions
+    ? `<div class="actions">
+          <button type="button" onclick="window.print()">PDFとして保存 / 印刷</button>
+          <button type="button" class="close-button" onclick="window.close()">閉じる</button>
+        </div>`
+    : ''
+
   return `<!doctype html>
     <html lang="ja">
       <head>
@@ -177,10 +186,7 @@ const buildConditionReportHtml = ({
         </style>
       </head>
       <body>
-        <div class="actions">
-          <button onclick="window.print()">PDFとして保存 / 印刷</button>
-          <button class="close-button" onclick="window.close()">閉じる</button>
-        </div>
+        ${actionsHtml}
         <h1>体調グラフ（見守り）</h1>
         <div class="meta">
           対象: ${escapeHtml(person)}<br />
@@ -200,6 +206,42 @@ const buildConditionReportHtml = ({
         </table>
       </body>
     </html>`
+}
+
+/** 画面内表示から印刷ダイアログを開く（iframe.print はスマホで失敗しやすい） */
+export const printConditionReportHtml = (html) => {
+  if (!html) return false
+  let popup = null
+  try {
+    popup = window.open('', '_blank', 'width=1000,height=750')
+  } catch {
+    popup = null
+  }
+  if (!popup || popup.closed || popup === window) return false
+
+  const printable = String(html).includes('class="actions"')
+    ? html
+    : html.replace(
+      '<body>',
+      `<body>
+        <div class="actions">
+          <button type="button" onclick="window.print()">PDFとして保存 / 印刷</button>
+          <button type="button" class="close-button" onclick="window.close()">閉じる</button>
+        </div>`
+    )
+
+  const blobUrl = URL.createObjectURL(new Blob([printable], { type: 'text/html;charset=utf-8' }))
+  popup.location.href = blobUrl
+  window.setTimeout(() => {
+    try {
+      if (!popup.closed) {
+        popup.focus()
+        popup.print()
+      }
+    } catch { /* ignore */ }
+  }, 450)
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  return true
 }
 
 const isUsableReportWindow = (targetWindow) => {
@@ -269,16 +311,17 @@ export const openWatchConditionMonthReport = async ({
 
   const rows = await loadConditionMonthForUser(requesterUid, monthKey)
   const person = requesterName || '依頼人'
-  const html = buildConditionReportHtml({ person, monthKey, rows })
+  const popupHtml = buildConditionReportHtml({ person, monthKey, rows, includeActions: true })
+  const embedHtml = buildConditionReportHtml({ person, monthKey, rows, includeActions: false })
 
   if (isUsableReportWindow(popup)) {
     try {
       // 既存帳票と同様、初期化完了後に blob へ遷移
       await new Promise((resolve) => window.setTimeout(resolve, 0))
       if (!isUsableReportWindow(popup)) {
-        return { mode: 'html', html }
+        return { mode: 'html', html: embedHtml }
       }
-      navigateReportWindow(popup, html)
+      navigateReportWindow(popup, popupHtml)
       try { popup.focus() } catch { /* ignore */ }
       return { mode: 'popup' }
     } catch {
@@ -287,7 +330,7 @@ export const openWatchConditionMonthReport = async ({
   }
 
   // スマホ等: 別窓が使えない／異常になる場合はアプリ内表示
-  return { mode: 'html', html }
+  return { mode: 'html', html: embedHtml }
 }
 
 /** クリック直後に呼ぶ（ユーザー操作の同一タイミングで窓を開く） */

@@ -36,6 +36,7 @@ import {
   openReportWindowSync,
   openWatchConditionMonthReport,
   preferInAppConditionReport,
+  printConditionReportHtml,
 } from './watchConditionReport'
 
 const sectionBox = {
@@ -984,7 +985,7 @@ export default function WatchCarePanel({
               onClick={(event) => event.stopPropagation()}
             >
               <div style={{ ...styles.modalHeader, marginBottom: 8 }}>
-                <h3 style={styles.modalTitle}>体調グラフ（画面内表示）</h3>
+                <h3 style={styles.modalTitle}>体調グラフ</h3>
                 <button
                   type="button"
                   style={styles.closeButton}
@@ -998,23 +999,29 @@ export default function WatchCarePanel({
                   type="button"
                   style={styles.primaryButton}
                   onClick={() => {
-                    const frame = conditionReportFrameRef.current
-                    if (frame?.contentWindow) {
-                      frame.contentWindow.focus()
-                      frame.contentWindow.print()
+                    // iframe.print は端末によって無効なため、別窓で印刷ダイアログを開く
+                    const opened = printConditionReportHtml(conditionReportHtml)
+                    if (!opened) {
+                      const frame = conditionReportFrameRef.current
+                      if (frame?.contentWindow) {
+                        try {
+                          frame.contentWindow.focus()
+                          frame.contentWindow.print()
+                        } catch {
+                          setError('印刷画面を開けませんでした。ブラウザのポップアップ許可を確認してください。')
+                        }
+                      } else {
+                        setError('印刷画面を開けませんでした。ブラウザのポップアップ許可を確認してください。')
+                      }
                     }
                   }}
                 >
-                  印刷する
-                </button>
-                <button
-                  type="button"
-                  style={styles.secondaryButton}
-                  onClick={() => setConditionReportHtml('')}
-                >
-                  閉じる
+                  PDFとして保存 / 印刷
                 </button>
               </div>
+              <p style={{ ...muted, marginTop: 0, marginBottom: 8 }}>
+                印刷ダイアログから「PDFに保存」も選べます。
+              </p>
               <iframe
                 ref={conditionReportFrameRef}
                 title="体調グラフ"
