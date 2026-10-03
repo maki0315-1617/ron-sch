@@ -207,6 +207,7 @@ export default function WatchCarePanel({
   })
   const [conditionReportBusy, setConditionReportBusy] = useState(false)
   const [conditionReportHtml, setConditionReportHtml] = useState('')
+  const [conditionReportPrintHtml, setConditionReportPrintHtml] = useState('')
   const conditionReportFrameRef = useRef(null)
   const commentsScrollRef = useRef(null)
   const commentsEndRef = useRef(null)
@@ -283,8 +284,10 @@ export default function WatchCarePanel({
       })
       if (result?.mode === 'html' && result.html) {
         setConditionReportHtml(result.html)
-        setMessage('体調グラフを画面内に表示しました。「印刷する」から印刷できます。')
+        setConditionReportPrintHtml(result.printHtml || result.html)
+        setMessage('体調グラフを画面内に表示しました。「PDFとして保存 / 印刷」から印刷画面を開けます。')
       } else {
+        setConditionReportPrintHtml('')
         setMessage(`${selectedMatch.requesterName || '依頼人'}さんの ${conditionMonthKey} 体調グラフを開きました。`)
       }
     } catch (err) {
@@ -809,7 +812,7 @@ export default function WatchCarePanel({
                     {conditionReportBusy ? '作成中…' : '体調グラフを印刷'}
                   </button>
                   <p style={{ ...muted, marginTop: 8 }}>
-                    スマホでは画面内にグラフを表示します。表示後の「印刷する」から印刷できます。
+                    スマホでは画面内にグラフを表示します。表示後の「PDFとして保存 / 印刷」で印刷画面を開き、そこで保存・印刷してください。
                   </p>
                 </div>
                 <div style={recordsSectionBox}>
@@ -969,7 +972,10 @@ export default function WatchCarePanel({
         {conditionReportHtml && (
           <div
             style={{ ...styles.modalOverlay, zIndex: 95 }}
-            onClick={() => setConditionReportHtml('')}
+            onClick={() => {
+              setConditionReportHtml('')
+              setConditionReportPrintHtml('')
+            }}
           >
             <div
               className="schedule-modal"
@@ -989,7 +995,10 @@ export default function WatchCarePanel({
                 <button
                   type="button"
                   style={styles.closeButton}
-                  onClick={() => setConditionReportHtml('')}
+                  onClick={() => {
+                    setConditionReportHtml('')
+                    setConditionReportPrintHtml('')
+                  }}
                 >
                   閉じる
                 </button>
@@ -999,20 +1008,14 @@ export default function WatchCarePanel({
                   type="button"
                   style={styles.primaryButton}
                   onClick={() => {
-                    // iframe.print は端末によって無効なため、別窓で印刷ダイアログを開く
-                    const opened = printConditionReportHtml(conditionReportHtml)
+                    // 自動 print() はしない。印刷ボタン付き画面を開き、そこで押してもらう
+                    const opened = printConditionReportHtml(
+                      conditionReportPrintHtml || conditionReportHtml
+                    )
                     if (!opened) {
-                      const frame = conditionReportFrameRef.current
-                      if (frame?.contentWindow) {
-                        try {
-                          frame.contentWindow.focus()
-                          frame.contentWindow.print()
-                        } catch {
-                          setError('印刷画面を開けませんでした。ブラウザのポップアップ許可を確認してください。')
-                        }
-                      } else {
-                        setError('印刷画面を開けませんでした。ブラウザのポップアップ許可を確認してください。')
-                      }
+                      setError('印刷画面を開けませんでした。ブラウザのポップアップを許可して、もう一度お試しください。')
+                    } else {
+                      setMessage('印刷画面を開きました。画面内の「PDFとして保存 / 印刷」を押してください。')
                     }
                   }}
                 >
@@ -1020,7 +1023,7 @@ export default function WatchCarePanel({
                 </button>
               </div>
               <p style={{ ...muted, marginTop: 0, marginBottom: 8 }}>
-                印刷ダイアログから「PDFに保存」も選べます。
+                開いた画面の「PDFとして保存 / 印刷」を押すと、PDF保存や印刷ができます。
               </p>
               <iframe
                 ref={conditionReportFrameRef}

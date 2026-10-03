@@ -208,40 +208,58 @@ const buildConditionReportHtml = ({
     </html>`
 }
 
-/** 画面内表示から印刷ダイアログを開く（iframe.print はスマホで失敗しやすい） */
+const ACTIONS_MARKUP = `<div class="actions">
+          <button type="button" onclick="window.print()">PDFとして保存 / 印刷</button>
+          <button type="button" class="close-button" onclick="window.close()">閉じる</button>
+        </div>`
+
+/** 印刷用 HTML に操作ボタンが無い場合だけ付与する */
+const ensurePrintActions = (html) => {
+  const source = String(html || '')
+  if (!source) return ''
+  if (source.includes('class="actions"')) return source
+  return source.replace(/<body([^>]*)>/i, `<body$1>\n        ${ACTIONS_MARKUP}`)
+}
+
+/**
+ * 画面内プレビューから印刷用画面を開く。
+ * スマホ Chrome は setTimeout 後の print() を無視するため、自動印刷はしない。
+ * ユーザーが開いた画面の「PDFとして保存 / 印刷」を押して印刷する。
+ */
 export const printConditionReportHtml = (html) => {
-  if (!html) return false
+  const printable = ensurePrintActions(html)
+  if (!printable) return false
+
   let popup = null
   try {
+    // タップと同一タイミングで開く（ポップアップブロック回避）
     popup = window.open('', '_blank', 'width=1000,height=750')
   } catch {
     popup = null
   }
   if (!popup || popup.closed || popup === window) return false
 
-  const printable = String(html).includes('class="actions"')
-    ? html
-    : html.replace(
-      '<body>',
-      `<body>
-        <div class="actions">
-          <button type="button" onclick="window.print()">PDFとして保存 / 印刷</button>
-          <button type="button" class="close-button" onclick="window.close()">閉じる</button>
-        </div>`
-    )
+  // 1) 同一ジェスチャ内の document.write（Android Chrome で最も安定）
+  try {
+    popup.document.open()
+    popup.document.write(printable)
+    popup.document.close()
+    try { popup.focus() } catch { /* ignore */ }
+    return true
+  } catch {
+    // 2) 書けない場合は blob 遷移。自動 print はしない（ユーザー操作が切れるため）
+  }
 
-  const blobUrl = URL.createObjectURL(new Blob([printable], { type: 'text/html;charset=utf-8' }))
-  popup.location.href = blobUrl
-  window.setTimeout(() => {
-    try {
-      if (!popup.closed) {
-        popup.focus()
-        popup.print()
-      }
-    } catch { /* ignore */ }
-  }, 450)
-  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
-  return true
+  try {
+    const blobUrl = URL.createObjectURL(new Blob([printable], { type: 'text/html;charset=utf-8' }))
+    popup.location.href = blobUrl
+    try { popup.focus() } catch { /* ignore */ }
+    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+    return true
+  } catch {
+    try { popup.close() } catch { /* ignore */ }
+    return false
+  }
 }
 
 const isUsableReportWindow = (targetWindow) => {
@@ -288,7 +306,7 @@ export const preferInAppConditionReport = () => {
  * @param {string} [params.requesterName]
  * @param {string} params.monthKey
  * @param {Window|null} [params.reportWindow] クリック直後に開いた窓（PC向け）
- * @returns {Promise<{ mode: 'popup'|'html', html?: string }>}
+ * @returns {Promise<{ mode: 'popup'|'html', html?: string, printHtml?: string }>}
  */
 export const openWatchConditionMonthReport = async ({
   requesterUid,
@@ -316,10 +334,10 @@ export const openWatchConditionMonthReport = async ({
 
   if (isUsableReportWindow(popup)) {
     try {
-      // 既存帳票と同様、初期化完了後に blob へ遷移
+      // 既存帳票と同様、初期化完了後に blob へ遷移（PC経路は従来どおり）
       await new Promise((resolve) => window.setTimeout(resolve, 0))
       if (!isUsableReportWindow(popup)) {
-        return { mode: 'html', html: embedHtml }
+        return { mode: 'html', html: embedHtml, printHtml: popupHtml }
       }
       navigateReportWindow(popup, popupHtml)
       try { popup.focus() } catch { /* ignore */ }
@@ -330,7 +348,7 @@ export const openWatchConditionMonthReport = async ({
   }
 
   // スマホ等: 別窓が使えない／異常になる場合はアプリ内表示
-  return { mode: 'html', html: embedHtml }
+  return { mode: 'html', html: embedHtml, printHtml: popupHtml }
 }
 
 /** クリック直後に呼ぶ（ユーザー操作の同一タイミングで窓を開く） */
