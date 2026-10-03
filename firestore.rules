@@ -19,6 +19,16 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/watch_matches/$(matchId)).data.requesterUid == requesterUid;
     }
 
+    // medication_records ID = `{uid}_{YYYY-MM-DD}`（uid に _ を含まない前提）
+    function medicationRecordOwnerId(recordId) {
+      return recordId.split('_')[0];
+    }
+
+    function isMedicationRecordId(recordId) {
+      let parts = recordId.split('_');
+      return parts.size() == 2 && parts[1].matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
     match /schedule_items/{scheduleId} {
       allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
       allow read, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
@@ -62,8 +72,17 @@ service cloud.firestore {
     // 日次服薬・体調記録（ドキュメントID = `${uid}_${date}`。見守り参照用の conditionLevel / conditionNote 含む）
     match /medication_records/{recordId} {
       allow get: if isSignedIn() && (
-        (resource == null && recordId.matches('^' + request.auth.uid + '_.*'))
+        // 未作成ドキュメントの get（本人）
+        (resource == null
+          && isMedicationRecordId(recordId)
+          && recordId.matches('^' + request.auth.uid + '_.*'))
+        // 未作成ドキュメントの get（マッチング中の見守り人）
+        || (resource == null
+          && isMedicationRecordId(recordId)
+          && isActiveWatcherOf(medicationRecordOwnerId(recordId)))
+        // 既存ドキュメント（本人）
         || (resource != null && resource.data.user_id == request.auth.uid)
+        // 既存ドキュメント（マッチング中の見守り人）
         || (resource != null && isActiveWatcherOf(resource.data.user_id))
       );
       allow list: if isSignedIn() && resource.data.user_id == request.auth.uid;

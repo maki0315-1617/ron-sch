@@ -77,7 +77,11 @@ const buildConditionChartSvg = (rows) => {
   const toY = (score) => paddingTop + plotHeight - ((score - 1) / 4) * plotHeight
 
   const scored = rows
-    .map((row, index) => (row.score ? { ...row, index, x: toX(index), y: toY(row.score) } : null))
+    .map((row, index) => (
+      Number.isFinite(row.score)
+        ? { ...row, index, x: toX(index), y: toY(row.score) }
+        : null
+    ))
     .filter(Boolean)
 
   const grid = [1, 2, 3, 4, 5].map((score) => {
@@ -128,52 +132,34 @@ const buildConditionChartSvg = (rows) => {
   </svg>`
 }
 
-export const openWatchConditionMonthReport = async ({
-  requesterUid,
-  requesterName,
+const buildConditionReportHtml = ({
+  person,
   monthKey,
+  rows,
 }) => {
-  if (!requesterUid || !monthKey) {
-    throw new Error('対象者と対象月が必要です。')
-  }
-
-  const reportWindow = window.open('', '_blank', 'width=1000,height=750')
-  if (!reportWindow) {
-    throw new Error('印刷画面を開けませんでした。ポップアップを許可してください。')
-  }
-
-  reportWindow.document.write(`<!doctype html><html lang="ja"><head><meta charset="UTF-8"><title>体調グラフを準備中</title>
-    <style>body{font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center;padding:48px;color:#172033}
-    .track{max-width:460px;height:12px;margin:24px auto;background:#e2e8f0;border-radius:6px;overflow:hidden}
-    .bar{height:100%;width:40%;background:#2563eb;animation:load 1.2s ease-in-out infinite alternate}
-    @keyframes load{from{width:15%}to{width:85%}}</style></head>
-    <body><h1>体調グラフを準備しています</h1><div class="track"><div class="bar"></div></div></body></html>`)
-  reportWindow.document.close()
-
-  const rows = await loadConditionMonthForUser(requesterUid, monthKey)
   const chartSvg = buildConditionChartSvg(rows)
-  const noteRows = rows.filter((row) => row.score || row.note)
+  const noteRows = rows.filter((row) => Number.isFinite(row.score) || Boolean(row.note))
   const noteTable = noteRows.length
     ? noteRows.map((row) => `
         <tr>
           <td>${escapeHtml(row.dateKey)}</td>
-          <td>${row.score ? `${row.score}（${escapeHtml(row.levelLabel)}）` : '—'}</td>
+          <td>${Number.isFinite(row.score) ? `${row.score}（${escapeHtml(row.levelLabel)}）` : '—'}</td>
           <td class="note">${escapeHtml(row.note || '—')}</td>
         </tr>
       `).join('')
     : '<tr><td colspan="3" class="empty">この月の体調記録はありません</td></tr>'
 
-  const person = requesterName || '依頼人'
   const outputDate = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric' })
-  const html = `<!doctype html>
+  return `<!doctype html>
     <html lang="ja">
       <head>
         <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>体調グラフ ${escapeHtml(person)} ${escapeHtml(monthKey)}</title>
         <style>
           @page { size: A4 portrait; margin: 12mm; }
           * { box-sizing: border-box; }
-          body { margin: 0; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
+          body { margin: 0; padding: 16px; color: #172033; font-family: "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif; }
           h1 { margin: 0 0 6px; font-size: 22px; }
           h2 { margin: 20px 0 8px; font-size: 16px; color: #1e3a8a; }
           .meta { color: #475569; font-size: 13px; margin-bottom: 14px; line-height: 1.6; }
@@ -184,7 +170,7 @@ export const openWatchConditionMonthReport = async ({
           th { background: #e8f0ff; color: #1e3a8a; }
           td.note { white-space: pre-wrap; word-break: break-word; }
           .empty { text-align: center; color: #64748b; padding: 18px; }
-          .actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 12px; }
+          .actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
           button { border: 0; border-radius: 10px; background: #2563eb; color: white; padding: 12px 20px; font-size: 15px; font-weight: 700; cursor: pointer; }
           .close-button { background: #64748b; }
           @media print { .actions { display: none; } }
@@ -214,14 +200,79 @@ export const openWatchConditionMonthReport = async ({
         </table>
       </body>
     </html>`
+}
 
-  const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
-  setTimeout(() => {
-    if (reportWindow.closed) {
-      URL.revokeObjectURL(blobUrl)
-      return
+const writeReportHtml = (targetWindow, html) => {
+  if (!targetWindow || targetWindow.closed) {
+    throw new Error('印刷画面が閉じられました。もう一度お試しください。')
+  }
+  targetWindow.document.open()
+  targetWindow.document.write(html)
+  targetWindow.document.close()
+}
+
+/**
+ * @param {object} params
+ * @param {string} params.requesterUid
+ * @param {string} [params.requesterName]
+ * @param {string} params.monthKey
+ * @param {Window|null} [params.reportWindow] クリック直後に開いた窓（スマホのポップアップ対策）
+ * @returns {Promise<{ mode: 'popup'|'html', html?: string }>}
+ */
+export const openWatchConditionMonthReport = async ({
+  requesterUid,
+  requesterName,
+  monthKey,
+  reportWindow = null,
+}) => {
+  if (!requesterUid || !monthKey) {
+    throw new Error('対象者と対象月が必要です。')
+  }
+
+  let popup = reportWindow
+  if (!popup || popup.closed) {
+    popup = window.open('about:blank', '_blank')
+  }
+
+  if (popup && !popup.closed) {
+    try {
+      writeReportHtml(
+        popup,
+        `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>体調グラフを準備中</title>
+          <style>body{font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center;padding:48px;color:#172033}
+          .track{max-width:460px;height:12px;margin:24px auto;background:#e2e8f0;border-radius:6px;overflow:hidden}
+          .bar{height:100%;width:40%;background:#2563eb;animation:load 1.2s ease-in-out infinite alternate}
+          @keyframes load{from{width:15%}to{width:85%}}</style></head>
+          <body><h1>体調グラフを準備しています</h1><div class="track"><div class="bar"></div></div></body></html>`
+      )
+    } catch {
+      popup = null
     }
-    reportWindow.location.href = blobUrl
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
-  }, 50)
+  }
+
+  const rows = await loadConditionMonthForUser(requesterUid, monthKey)
+  const person = requesterName || '依頼人'
+  const html = buildConditionReportHtml({ person, monthKey, rows })
+
+  if (popup && !popup.closed) {
+    try {
+      writeReportHtml(popup, html)
+      try { popup.focus() } catch { /* ignore */ }
+      return { mode: 'popup' }
+    } catch {
+      // フォールバックへ
+    }
+  }
+
+  // スマホ等でポップアップが塞がれた場合は HTML を返し、アプリ内表示する
+  return { mode: 'html', html }
+}
+
+/** クリック直後に呼ぶ（ユーザー操作の同一タイミングで窓を開く） */
+export const openReportWindowSync = () => {
+  try {
+    return window.open('about:blank', '_blank')
+  } catch {
+    return null
+  }
 }

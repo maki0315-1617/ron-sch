@@ -32,7 +32,7 @@ import {
   subscribeWatchCommentsForWatcher,
   subscribeWatchEventsForMatch,
 } from './watchCare'
-import { openWatchConditionMonthReport } from './watchConditionReport'
+import { openReportWindowSync, openWatchConditionMonthReport } from './watchConditionReport'
 
 const sectionBox = {
   border: '1px solid #e2e8f0',
@@ -201,6 +201,8 @@ export default function WatchCarePanel({
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   })
   const [conditionReportBusy, setConditionReportBusy] = useState(false)
+  const [conditionReportHtml, setConditionReportHtml] = useState('')
+  const conditionReportFrameRef = useRef(null)
   const commentsScrollRef = useRef(null)
   const commentsEndRef = useRef(null)
   const detailSectionRef = useRef(null)
@@ -253,26 +255,37 @@ export default function WatchCarePanel({
     }, 80)
   }, [matches, session?.uid])
 
-  const printConditionReport = async () => {
+  const printConditionReport = async (reportWindow = null) => {
     if (!selectedMatch || selectedMatch.status !== WATCH_STATUS_ACTIVE) {
       setError('マッチング中の依頼人を選択してください。')
+      if (reportWindow && !reportWindow.closed) reportWindow.close()
       return
     }
     if (!conditionMonthKey) {
       setError('対象月を選択してください。')
+      if (reportWindow && !reportWindow.closed) reportWindow.close()
       return
     }
     setConditionReportBusy(true)
     setError('')
     setMessage('')
     try {
-      await openWatchConditionMonthReport({
+      const result = await openWatchConditionMonthReport({
         requesterUid: selectedMatch.requesterUid,
         requesterName: selectedMatch.requesterName || selectedMatch.requesterEmail || '依頼人',
         monthKey: conditionMonthKey,
+        reportWindow,
       })
-      setMessage(`${selectedMatch.requesterName || '依頼人'}さんの ${conditionMonthKey} 体調グラフを開きました。`)
+      if (result?.mode === 'html' && result.html) {
+        setConditionReportHtml(result.html)
+        setMessage('ポップアップがブロックされたため、画面内に体調グラフを表示しました。')
+      } else {
+        setMessage(`${selectedMatch.requesterName || '依頼人'}さんの ${conditionMonthKey} 体調グラフを開きました。`)
+      }
     } catch (err) {
+      if (reportWindow && !reportWindow.closed) {
+        try { reportWindow.close() } catch { /* ignore */ }
+      }
       setError(err?.message || '体調グラフの作成に失敗しました。')
     } finally {
       setConditionReportBusy(false)
@@ -780,10 +793,17 @@ export default function WatchCarePanel({
                     type="button"
                     style={{ ...styles.primaryButton, marginTop: 8 }}
                     disabled={busy || conditionReportBusy}
-                    onClick={printConditionReport}
+                    onClick={() => {
+                      // スマホは非同期後の window.open がブロックされるため、クリック直後に開く
+                      const reportWindow = openReportWindowSync()
+                      void printConditionReport(reportWindow)
+                    }}
                   >
                     {conditionReportBusy ? '作成中…' : '体調グラフを印刷'}
                   </button>
+                  <p style={{ ...muted, marginTop: 8 }}>
+                    画面が開かない場合は、このまま待つと画面内表示に切り替わります。印刷は表示後の「印刷」から行えます。
+                  </p>
                 </div>
                 <div style={recordsSectionBox}>
                   <h4 style={sectionTitle}>
@@ -937,6 +957,73 @@ export default function WatchCarePanel({
               </div>
             )}
           </>
+        )}
+
+        {conditionReportHtml && (
+          <div
+            style={{ ...styles.modalOverlay, zIndex: 95 }}
+            onClick={() => setConditionReportHtml('')}
+          >
+            <div
+              className="schedule-modal"
+              style={{
+                ...styles.modal,
+                maxWidth: 900,
+                width: '100%',
+                height: 'min(90vh, 900px)',
+                display: 'flex',
+                flexDirection: 'column',
+                padding: 12,
+              }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div style={{ ...styles.modalHeader, marginBottom: 8 }}>
+                <h3 style={styles.modalTitle}>体調グラフ（画面内表示）</h3>
+                <button
+                  type="button"
+                  style={styles.closeButton}
+                  onClick={() => setConditionReportHtml('')}
+                >
+                  閉じる
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  style={styles.primaryButton}
+                  onClick={() => {
+                    const frame = conditionReportFrameRef.current
+                    if (frame?.contentWindow) {
+                      frame.contentWindow.focus()
+                      frame.contentWindow.print()
+                    }
+                  }}
+                >
+                  印刷する
+                </button>
+                <button
+                  type="button"
+                  style={styles.secondaryButton}
+                  onClick={() => setConditionReportHtml('')}
+                >
+                  閉じる
+                </button>
+              </div>
+              <iframe
+                ref={conditionReportFrameRef}
+                title="体調グラフ"
+                srcDoc={conditionReportHtml}
+                style={{
+                  flex: 1,
+                  width: '100%',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 10,
+                  background: '#fff',
+                  minHeight: 360,
+                }}
+              />
+            </div>
+          </div>
         )}
 
         {endConfirm && (

@@ -45,9 +45,10 @@ export const CONDITION_SCORE_LABELS = {
   5: '大変良い',
 }
 
-export const getConditionScore = (level) => (
-  CONDITION_LEVEL_SCORES[level] || null
-)
+export const getConditionScore = (level) => {
+  if (!Object.prototype.hasOwnProperty.call(CONDITION_LEVEL_SCORES, level)) return null
+  return CONDITION_LEVEL_SCORES[level]
+}
 
 export const CONDITION_LEVEL_VALUES = CONDITION_LEVELS.map((item) => item.value)
 
