@@ -13,6 +13,7 @@ import {
   where,
 } from 'firebase/firestore'
 import { db } from './firebase'
+import { getConditionLevelLabel, getConditionScore } from './medicationUtils'
 
 export const WATCH_ROLE_WATCHER = 'watcher'
 export const WATCH_ROLE_REQUESTER = 'requester'
@@ -27,10 +28,111 @@ export const WATCH_PLAN_S_PLUS = 's_plus'
 export const WATCH_PENDING_EXPIRE_MS = 7 * 24 * 60 * 60 * 1000
 export const WATCH_COMMENT_MAX_LENGTH = 200
 
+/** 見守り人向け声かけテンプレ（入力欄へ挿入。即送信しない） */
+export const WATCH_COMMENT_TEMPLATES = [
+  'おはようございます。今日の調子はいかがですか？',
+  'お薬はお済みですか？',
+  '眠れましたか？無理しないでくださいね。',
+  '体調の記録、ありがとうございます。',
+  '気になることがあれば、ここに書いてくださいね。',
+]
+
 export const WATCH_EVENT_BEDTIME = 'bedtime'
 export const WATCH_EVENT_WAKE = 'wake'
 export const WATCH_EVENT_MEDICATION = 'medication'
 export const WATCH_EVENT_CONDITION = 'condition'
+
+export const formatLocalDateKey = (date = new Date()) => {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+/** 未読プレビュー用の相対時刻 */
+export const formatWatchRelativeTime = (value, nowMs = Date.now()) => {
+  const at = toMillis(value)
+  if (!at) return ''
+  const diff = Math.max(0, nowMs - at)
+  const minutes = Math.floor(diff / 60000)
+  if (minutes < 1) return 'たった今'
+  if (minutes < 60) return `${minutes}分前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}時間前`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}日前`
+  try {
+    return new Date(at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 依頼人ごとの「今日のひと目」要約。
+ * 服薬予定枠数は見守り人側から取れないため、当日の完了件数表示にする。
+ */
+export const buildTodayWatchSummary = (events, todayKey = formatLocalDateKey()) => {
+  const list = Array.isArray(events) ? events : []
+  const todays = list.filter((event) => event?.dateKey === todayKey)
+  const byCreatedDesc = (a, b) => toMillis(b.createdAt) - toMillis(a.createdAt)
+
+  const wakeToday = [...todays.filter((event) => event.kind === WATCH_EVENT_WAKE)].sort(byCreatedDesc)[0]
+  let sleepLabel = '記録なし'
+  if (wakeToday) {
+    sleepLabel = `起床済 ${wakeToday.timeKey || ''}`.trim()
+  } else {
+    const latestBed = [...list.filter((event) => event.kind === WATCH_EVENT_BEDTIME)].sort(byCreatedDesc)[0]
+    const latestWake = [...list.filter((event) => event.kind === WATCH_EVENT_WAKE)].sort(byCreatedDesc)[0]
+    if (
+      latestBed
+      && (!latestWake || toMillis(latestBed.createdAt) > toMillis(latestWake.createdAt))
+    ) {
+      sleepLabel = '就寝中'
+    }
+  }
+
+  const medSlots = new Set(
+    todays
+      .filter((event) => event.kind === WATCH_EVENT_MEDICATION)
+      .map((event) => event.slotKey || event.slotLabel || event.id)
+  )
+  const medLabel = medSlots.size > 0 ? `服薬 完了${medSlots.size}` : '服薬記録なし'
+
+  const conditionToday = [...todays.filter((event) => event.kind === WATCH_EVENT_CONDITION)].sort(byCreatedDesc)[0]
+  let conditionLabel = '体調 未記録'
+  if (conditionToday) {
+    const levelLabel = getConditionLevelLabel(conditionToday.conditionLevel)
+      || conditionToday.slotLabel
+      || '記録あり'
+    const score = getConditionScore(conditionToday.conditionLevel)
+    conditionLabel = Number.isFinite(score)
+      ? `体調 ${score}（${levelLabel}）`
+      : `体調 ${levelLabel}`
+  }
+
+  let lastAt = 0
+  let lastTime = ''
+  todays.forEach((event) => {
+    const at = toMillis(event.createdAt)
+    if (at >= lastAt) {
+      lastAt = at
+      lastTime = event.timeKey || ''
+    }
+  })
+  const lastLabel = lastAt
+    ? `最終 ${lastTime || formatWatchRelativeTime(lastAt)}`.trim()
+    : '最終 —'
+
+  return {
+    sleepLabel,
+    medLabel,
+    conditionLabel,
+    lastLabel,
+    text: `${sleepLabel} ／ ${medLabel} ／ ${conditionLabel}`,
+    lastText: lastLabel,
+  }
+}
 
 export const WATCH_TERMS_TEXT = [
   '見守り機能では、あなたが記録した実就寝時刻・実起床時刻・実服薬時刻・体調が見守り人に共有され、そのたびにお知らせが送られます。',
@@ -552,6 +654,23 @@ export const subscribeWatchCommentsForWatcher = (watcherUid, onChange, onError, 
   )
 }
 
+/** 見守り人向け: 全依頼人の共有イベントをまとめて購読（今日のひと目用） */
+export const subscribeWatchEventsForWatcher = (watcherUid, onChange, onError, max = 200) => {
+  if (!db || !watcherUid) {
+    onChange?.([])
+    return () => {}
+  }
+  return onSnapshot(
+    query(
+      collection(db, 'watch_events'),
+      where('watcherUid', '==', watcherUid),
+      limit(max),
+    ),
+    (snapshot) => onChange?.(mapWatchDocs(snapshot)),
+    (error) => onError?.(error)
+  )
+}
+
 const getCommentReadAtMillis = (match, viewerUid) => {
   if (!match || !viewerUid) return 0
   if (match.watcherUid === viewerUid) return toMillis(match.watcherLastReadAt)
@@ -559,7 +678,9 @@ const getCommentReadAtMillis = (match, viewerUid) => {
   return 0
 }
 
-/** 依頼人ごとの未読件数・最終コメント一行 */
+const clipCommentPreview = (body) => String(body || '').replace(/\s+/g, ' ').slice(0, 36)
+
+/** 依頼人ごとの未読件数・プレビュー一行（未読時は相手コメント優先） */
 export const buildMatchCommentSummaries = (matches, comments, viewerUid) => {
   const byMatch = {}
   ;(matches || []).forEach((match) => {
@@ -568,6 +689,10 @@ export const buildMatchCommentSummaries = (matches, comments, viewerUid) => {
       lastBody: '',
       lastFromName: '',
       lastAt: 0,
+      previewBody: '',
+      previewFromName: '',
+      previewAt: 0,
+      previewIsUnread: false,
     }
   })
   ;(comments || []).forEach((comment) => {
@@ -576,14 +701,35 @@ export const buildMatchCommentSummaries = (matches, comments, viewerUid) => {
     const match = (matches || []).find((item) => item.id === comment.matchId)
     if (!match) return
     const at = toMillis(comment.createdAt)
+    const body = clipCommentPreview(comment.body)
+    const fromName = comment.fromName || ''
     if (at >= row.lastAt) {
       row.lastAt = at
-      row.lastBody = String(comment.body || '').replace(/\s+/g, ' ').slice(0, 36)
-      row.lastFromName = comment.fromName || ''
+      row.lastBody = body
+      row.lastFromName = fromName
     }
     const readAt = getCommentReadAtMillis(match, viewerUid)
-    if (comment.fromUid && comment.fromUid !== viewerUid && at > readAt) {
+    const isUnreadFromOther = Boolean(
+      comment.fromUid
+      && comment.fromUid !== viewerUid
+      && at > readAt
+    )
+    if (isUnreadFromOther) {
       row.unreadCount += 1
+      if (at >= row.previewAt) {
+        row.previewAt = at
+        row.previewBody = body
+        row.previewFromName = fromName
+        row.previewIsUnread = true
+      }
+    }
+  })
+  Object.values(byMatch).forEach((row) => {
+    if (!row.previewBody) {
+      row.previewBody = row.lastBody
+      row.previewFromName = row.lastFromName
+      row.previewAt = row.lastAt
+      row.previewIsUnread = false
     }
   })
   return byMatch

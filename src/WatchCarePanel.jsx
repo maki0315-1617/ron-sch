@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Eye, Shield, UserRound } from 'lucide-react'
 import {
   WATCH_COMMENT_MAX_LENGTH,
+  WATCH_COMMENT_TEMPLATES,
   WATCH_EVENT_CONDITION,
   WATCH_ROLE_REQUESTER,
   WATCH_ROLE_WATCHER,
@@ -12,10 +13,13 @@ import {
   agreeWatchTerms,
   approveWatchRequest,
   buildMatchCommentSummaries,
+  buildTodayWatchSummary,
   cancelWatchRequest,
   createWatchRequest,
   endWatchMatch,
   expireStaleMatches,
+  formatLocalDateKey,
+  formatWatchRelativeTime,
   getWatchEventLabel,
   getWatchRoleLabel,
   getWatchStatusLabel,
@@ -31,6 +35,7 @@ import {
   subscribeWatchCommentsForMatch,
   subscribeWatchCommentsForWatcher,
   subscribeWatchEventsForMatch,
+  subscribeWatchEventsForWatcher,
 } from './watchCare'
 import {
   openReportWindowSync,
@@ -90,6 +95,34 @@ const lastCommentLine = {
   color: '#9a3412',
   fontSize: 12,
   lineHeight: 1.45,
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+}
+
+const todaySummaryLine = {
+  margin: '0 0 8px',
+  padding: '7px 8px',
+  borderRadius: 8,
+  background: '#eff6ff',
+  border: '1px solid #bfdbfe',
+  color: '#1e3a8a',
+  fontSize: 12,
+  lineHeight: 1.45,
+  fontWeight: 600,
+}
+
+const templateChip = {
+  border: '1px solid #86efac',
+  background: '#fff',
+  color: '#166534',
+  borderRadius: 999,
+  padding: '6px 10px',
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+  lineHeight: 1.3,
 }
 
 const muted = { margin: '0 0 8px', color: '#64748b', fontSize: 13, lineHeight: 1.5 }
@@ -201,6 +234,7 @@ export default function WatchCarePanel({
   const [termsOpenMatchId, setTermsOpenMatchId] = useState('')
   const [endConfirm, setEndConfirm] = useState(null)
   const [watcherInboxComments, setWatcherInboxComments] = useState([])
+  const [watcherInboxEvents, setWatcherInboxEvents] = useState([])
   const [conditionMonthKey, setConditionMonthKey] = useState(() => {
     const now = new Date()
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
@@ -210,8 +244,10 @@ export default function WatchCarePanel({
   const [conditionReportPrintHtml, setConditionReportPrintHtml] = useState('')
   const conditionReportFrameRef = useRef(null)
   const commentsScrollRef = useRef(null)
+  const commentsSectionRef = useRef(null)
   const commentsEndRef = useRef(null)
   const detailSectionRef = useRef(null)
+  const todayKey = formatLocalDateKey()
 
   const selectedMatch = useMemo(
     () => matches.find((match) => match.id === selectedMatchId) || null,
@@ -233,7 +269,17 @@ export default function WatchCarePanel({
     [commentSummaries]
   )
 
-  const openMatchDetail = useCallback((matchId) => {
+  const todaySummariesByMatch = useMemo(() => {
+    const byMatch = {}
+    ;(matches || []).forEach((match) => {
+      if (match.status !== WATCH_STATUS_ACTIVE) return
+      const matchEvents = (watcherInboxEvents || []).filter((event) => event.matchId === match.id)
+      byMatch[match.id] = buildTodayWatchSummary(matchEvents, todayKey)
+    })
+    return byMatch
+  }, [matches, watcherInboxEvents, todayKey])
+
+  const openMatchDetail = useCallback((matchId, { focusComments = false } = {}) => {
     if (!matchId || !session?.uid) return
     setSelectedMatchId(matchId)
     const match = matches.find((item) => item.id === matchId)
@@ -257,7 +303,11 @@ export default function WatchCarePanel({
         })
     }
     window.setTimeout(() => {
-      detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (focusComments && commentsSectionRef.current) {
+        commentsSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      } else {
+        detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
     }, 80)
   }, [matches, session?.uid])
 
@@ -368,13 +418,23 @@ export default function WatchCarePanel({
   useEffect(() => {
     if (!open || !session?.uid || profile?.role !== WATCH_ROLE_WATCHER) {
       setWatcherInboxComments([])
+      setWatcherInboxEvents([])
       return undefined
     }
-    return subscribeWatchCommentsForWatcher(
+    const unsubComments = subscribeWatchCommentsForWatcher(
       session.uid,
       (nextComments) => setWatcherInboxComments(nextComments),
       (err) => console.warn('見守りコメント一覧の購読に失敗:', err)
     )
+    const unsubEvents = subscribeWatchEventsForWatcher(
+      session.uid,
+      (nextEvents) => setWatcherInboxEvents(nextEvents),
+      (err) => console.warn('見守り記録一覧の購読に失敗:', err)
+    )
+    return () => {
+      unsubComments()
+      unsubEvents()
+    }
   }, [open, session?.uid, profile?.role])
 
   useEffect(() => {
@@ -434,8 +494,18 @@ export default function WatchCarePanel({
     }
   }
 
+  const renderTodaySummaryBox = (summary, { compact = false } = {}) => {
+    if (!summary) return null
+    return (
+      <div style={{ ...todaySummaryLine, ...(compact ? { marginBottom: 8 } : { marginBottom: 10 }) }}>
+        <div>{summary.text}</div>
+        <div style={{ marginTop: 2, fontWeight: 500, color: '#334155' }}>{summary.lastText}</div>
+      </div>
+    )
+  }
+
   const renderCommentsSection = () => (
-    <div style={commentsSectionBox}>
+    <div ref={commentsSectionRef} style={commentsSectionBox}>
       <h4 style={sectionTitle}>💬 コメント（リアルタイム）</h4>
       <p style={{ ...muted, marginBottom: 10 }}>
         右＝自分 ／ 緑＝見守り人 ／ 白＝見守り依頼人
@@ -506,6 +576,31 @@ export default function WatchCarePanel({
         })}
         <div ref={commentsEndRef} />
       </div>
+      {profile?.role === WATCH_ROLE_WATCHER && (
+        <div style={{ marginBottom: 8 }}>
+          <p style={{ ...muted, marginBottom: 6 }}>声かけテンプレ（タップで入力欄へ挿入）</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {WATCH_COMMENT_TEMPLATES.map((template) => (
+              <button
+                key={template}
+                type="button"
+                style={templateChip}
+                disabled={busy}
+                onClick={() => {
+                  setCommentDraft((current) => {
+                    const next = current?.trim()
+                      ? `${current.trim()}\n${template}`
+                      : template
+                    return next.slice(0, WATCH_COMMENT_MAX_LENGTH)
+                  })
+                }}
+              >
+                {template.length > 18 ? `${template.slice(0, 18)}…` : template}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <textarea
         value={commentDraft}
         onChange={(event) => setCommentDraft(event.target.value.slice(0, WATCH_COMMENT_MAX_LENGTH))}
@@ -647,12 +742,19 @@ export default function WatchCarePanel({
                   </span>
                 ) : null}
               </h4>
-              <p style={muted}>未読がある依頼人を上に表示します。青い枠が現在選択中の依頼人です。</p>
+              <p style={muted}>未読がある依頼人を上に表示します。青い枠が現在選択中の依頼人です。マッチング中は今日のひと目も表示します。</p>
               {displayedMatches.length === 0 && <p style={muted}>依頼はまだありません。</p>}
               {displayedMatches.map((match) => {
                 const summary = commentSummaries[match.id] || {}
                 const unreadCount = summary.unreadCount || 0
                 const isSelected = match.id === selectedMatchId
+                const previewBody = summary.previewBody || summary.lastBody || ''
+                const previewFromName = summary.previewFromName || summary.lastFromName || ''
+                const previewAt = summary.previewAt || summary.lastAt || 0
+                const previewRelative = previewAt ? formatWatchRelativeTime(previewAt) : ''
+                const todaySummary = match.status === WATCH_STATUS_ACTIVE
+                  ? todaySummariesByMatch[match.id]
+                  : null
                 return (
                   <div
                     key={match.id}
@@ -704,15 +806,18 @@ export default function WatchCarePanel({
                     <div style={{ fontSize: 13, color: '#475569', marginBottom: 6 }}>
                       {match.requesterEmail} ／ {getWatchStatusLabel(match.status)}
                     </div>
-                    {summary.lastBody ? (
+                    {todaySummary ? renderTodaySummaryBox(todaySummary, { compact: true }) : null}
+                    {previewBody ? (
                       <p style={{
                         ...lastCommentLine,
                         ...(unreadCount > 0 ? {} : { background: '#f8fafc', borderColor: '#e2e8f0', color: '#64748b' }),
                       }}
                       >
-                        💬 {summary.lastFromName ? `${summary.lastFromName}: ` : ''}
-                        {summary.lastBody}
-                        {String(summary.lastBody).length >= 36 ? '…' : ''}
+                        {unreadCount > 0 ? '未読 · ' : '💬 '}
+                        {previewFromName ? `${previewFromName}: ` : ''}
+                        {previewBody}
+                        {String(previewBody).length >= 36 ? '…' : ''}
+                        {previewRelative ? `（${previewRelative}）` : ''}
                       </p>
                     ) : (
                       <p style={{ ...muted, marginBottom: 8 }}>まだコメントはありません。</p>
@@ -727,7 +832,7 @@ export default function WatchCarePanel({
                             : {}),
                         }}
                         disabled={busy}
-                        onClick={() => openMatchDetail(match.id)}
+                        onClick={() => openMatchDetail(match.id, { focusComments: unreadCount > 0 })}
                       >
                         {isSelected ? '選択中' : (unreadCount > 0 ? '未読を確認' : '選択')}
                       </button>
@@ -783,6 +888,13 @@ export default function WatchCarePanel({
 
             {selectedMatch?.status === WATCH_STATUS_ACTIVE && (
               <div ref={detailSectionRef}>
+                <div style={sectionBox}>
+                  <h4 style={sectionTitle}>
+                    今日のひと目（{selectedMatch.requesterName || selectedMatch.requesterEmail || '依頼人'}）
+                  </h4>
+                  {renderTodaySummaryBox(todaySummariesByMatch[selectedMatch.id] || buildTodayWatchSummary(events, todayKey))}
+                  <p style={{ ...muted, marginBottom: 0 }}>共有された当日記録の要約です。詳細は下の記録一覧で確認できます。</p>
+                </div>
                 <div style={sectionBox}>
                   <h4 style={sectionTitle}>📈 体調グラフ印刷（一人ずつ）</h4>
                   <p style={muted}>
