@@ -210,6 +210,16 @@ const resolveCommentRole = (comment, match) => {
   return ''
 }
 
+/** PC（精密ポインタ＋幅あり）のみパネル移動を許可 */
+const canDragWatchPanel = () => {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.matchMedia('(pointer: fine) and (min-width: 901px)').matches
+  } catch {
+    return false
+  }
+}
+
 export default function WatchCarePanel({
   open,
   mode,
@@ -242,12 +252,76 @@ export default function WatchCarePanel({
   const [conditionReportBusy, setConditionReportBusy] = useState(false)
   const [conditionReportHtml, setConditionReportHtml] = useState('')
   const [conditionReportPrintHtml, setConditionReportPrintHtml] = useState('')
+  const [panelOffset, setPanelOffset] = useState({ x: 0, y: 0 })
+  const [panelDragging, setPanelDragging] = useState(false)
   const conditionReportFrameRef = useRef(null)
   const commentsScrollRef = useRef(null)
   const commentsSectionRef = useRef(null)
   const commentsEndRef = useRef(null)
   const detailSectionRef = useRef(null)
+  const panelRef = useRef(null)
+  const panelDragRef = useRef(null)
   const todayKey = formatLocalDateKey()
+
+  useEffect(() => {
+    if (!open) {
+      setPanelOffset({ x: 0, y: 0 })
+      setPanelDragging(false)
+      panelDragRef.current = null
+    }
+  }, [open, mode])
+
+  const clampPanelOffset = useCallback((x, y) => {
+    const el = panelRef.current
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+    const width = el?.offsetWidth || 560
+    const height = el?.offsetHeight || 480
+    // 画面外に出しすぎない（タイトル付近が残る程度まで）
+    const maxX = Math.max(48, (vw + width) / 2 - 48)
+    const maxY = Math.max(48, (vh + height) / 2 - 48)
+    return {
+      x: Math.min(maxX, Math.max(-maxX, x)),
+      y: Math.min(maxY, Math.max(-maxY, y)),
+    }
+  }, [])
+
+  const onPanelHeaderPointerDown = (event) => {
+    if (!canDragWatchPanel()) return
+    if (event.button != null && event.button !== 0) return
+    if (event.target?.closest?.('button, a, input, textarea, select, label')) return
+    event.preventDefault()
+    panelDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startOffsetX: panelOffset.x,
+      startOffsetY: panelOffset.y,
+    }
+    setPanelDragging(true)
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+    } catch { /* ignore */ }
+  }
+
+  const onPanelHeaderPointerMove = (event) => {
+    const drag = panelDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    setPanelOffset(clampPanelOffset(
+      drag.startOffsetX + event.clientX - drag.startX,
+      drag.startOffsetY + event.clientY - drag.startY
+    ))
+  }
+
+  const endPanelHeaderDrag = (event) => {
+    const drag = panelDragRef.current
+    if (!drag || (event && drag.pointerId !== event.pointerId)) return
+    panelDragRef.current = null
+    setPanelDragging(false)
+    try {
+      event?.currentTarget?.releasePointerCapture?.(event.pointerId)
+    } catch { /* ignore */ }
+  }
 
   const selectedMatch = useMemo(
     () => matches.find((match) => match.id === selectedMatchId) || null,
@@ -641,17 +715,42 @@ export default function WatchCarePanel({
   return (
     <div style={styles.modalOverlay} onClick={onClose}>
       <div
+        ref={panelRef}
         className="schedule-modal"
-        style={{ ...styles.modal, maxWidth: 560 }}
+        style={{
+          ...styles.modal,
+          maxWidth: 560,
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          transform: `translate(${panelOffset.x}px, ${panelOffset.y}px)`,
+          willChange: panelDragging ? 'transform' : undefined,
+        }}
         onClick={(event) => event.stopPropagation()}
       >
-        <div style={styles.modalHeader}>
+        <div
+          style={{
+            ...styles.modalHeader,
+            cursor: canDragWatchPanel() ? (panelDragging ? 'grabbing' : 'grab') : undefined,
+            userSelect: panelDragging ? 'none' : undefined,
+            touchAction: 'none',
+          }}
+          onPointerDown={onPanelHeaderPointerDown}
+          onPointerMove={onPanelHeaderPointerMove}
+          onPointerUp={endPanelHeaderDrag}
+          onPointerCancel={endPanelHeaderDrag}
+          title={canDragWatchPanel() ? 'ドラッグしてウィンドウを移動' : undefined}
+        >
           <div style={styles.modalTitleWrap}>
             <TitleIcon size={20} color="#2563eb" />
             <h3 style={styles.modalTitle}>{title}</h3>
           </div>
           <button type="button" style={styles.closeButton} onClick={onClose}>閉じる</button>
         </div>
+        {canDragWatchPanel() ? (
+          <p style={{ ...muted, marginTop: -4, fontSize: 12 }}>
+            タイトルバーをドラッグして画面を移動できます
+          </p>
+        ) : null}
 
         {message && <p style={{ ...muted, color: '#0f766e' }}>{message}</p>}
         {error && <p style={{ ...muted, color: '#b91c1c' }}>{error}</p>}
