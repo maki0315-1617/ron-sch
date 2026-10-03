@@ -7763,7 +7763,7 @@ function App() {
             </section>
             )}
 
-            {sleepRecordEnabled && (
+            {(sleepOnlyMode || sleepRecordEnabled) && (
               <div className="sleep-record-panel" style={styles.sleepRecordPanel} aria-label="睡眠記録">
                 <div style={styles.sleepRecordTitleRow}>
                   <button
@@ -7922,7 +7922,7 @@ function App() {
               </div>
             )}
 
-            {!sleepOnlyMode && medicationRecordEnabled && (
+            {(sleepOnlyMode || medicationRecordEnabled) && (
               <section className="medication-record-panel" style={styles.medicationRecordPanel} aria-label="服薬記録">
                 <div style={styles.medicationTitleRow}>
                   <button

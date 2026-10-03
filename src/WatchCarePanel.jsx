@@ -32,7 +32,11 @@ import {
   subscribeWatchCommentsForWatcher,
   subscribeWatchEventsForMatch,
 } from './watchCare'
-import { openReportWindowSync, openWatchConditionMonthReport } from './watchConditionReport'
+import {
+  openReportWindowSync,
+  openWatchConditionMonthReport,
+  preferInAppConditionReport,
+} from './watchConditionReport'
 
 const sectionBox = {
   border: '1px solid #e2e8f0',
@@ -278,7 +282,7 @@ export default function WatchCarePanel({
       })
       if (result?.mode === 'html' && result.html) {
         setConditionReportHtml(result.html)
-        setMessage('ポップアップがブロックされたため、画面内に体調グラフを表示しました。')
+        setMessage('体調グラフを画面内に表示しました。「印刷する」から印刷できます。')
       } else {
         setMessage(`${selectedMatch.requesterName || '依頼人'}さんの ${conditionMonthKey} 体調グラフを開きました。`)
       }
@@ -794,15 +798,17 @@ export default function WatchCarePanel({
                     style={{ ...styles.primaryButton, marginTop: 8 }}
                     disabled={busy || conditionReportBusy}
                     onClick={() => {
-                      // スマホは非同期後の window.open がブロックされるため、クリック直後に開く
-                      const reportWindow = openReportWindowSync()
+                      // スマホは別タブの URL がおかしくなる／ブロックされるため画面内表示を優先
+                      const reportWindow = preferInAppConditionReport()
+                        ? null
+                        : openReportWindowSync()
                       void printConditionReport(reportWindow)
                     }}
                   >
                     {conditionReportBusy ? '作成中…' : '体調グラフを印刷'}
                   </button>
                   <p style={{ ...muted, marginTop: 8 }}>
-                    画面が開かない場合は、このまま待つと画面内表示に切り替わります。印刷は表示後の「印刷」から行えます。
+                    スマホでは画面内にグラフを表示します。表示後の「印刷する」から印刷できます。
                   </p>
                 </div>
                 <div style={recordsSectionBox}>

@@ -283,7 +283,6 @@ html.schedule-card-reorder-active .schedule-section {
 .sleep-only-mode .schedule-search-section,
 .sleep-only-mode .schedule-section,
 .sleep-only-mode .achievement-bar,
-.sleep-only-mode .medication-record-panel,
 .sleep-only-mode .health-life-count-section,
 .sleep-only-mode .selected-header,
 .sleep-only-mode .double-tap-hint-banner,
@@ -297,11 +296,22 @@ html.schedule-card-reorder-active .schedule-section {
 .sleep-only-mode .sleep-only-main {
   min-height: 100vh !important;
   padding: 12px 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.sleep-only-mode .sleep-record-panel {
+.sleep-only-mode .week-section {
+  max-width: 560px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.sleep-only-mode .sleep-record-panel,
+.sleep-only-mode .medication-record-panel {
   grid-template-columns: 1fr !important;
   max-width: 560px;
+  width: 100%;
   margin: 0 auto;
   padding: 16px;
   border: 1px solid #dbeafe;

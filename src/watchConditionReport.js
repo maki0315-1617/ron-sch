@@ -202,13 +202,42 @@ const buildConditionReportHtml = ({
     </html>`
 }
 
-const writeReportHtml = (targetWindow, html) => {
-  if (!targetWindow || targetWindow.closed) {
+const isUsableReportWindow = (targetWindow) => {
+  try {
+    // 一部スマホは window.open 失敗時に自窓を返す → 自窓へ書き込むとアプリが壊れる
+    return Boolean(targetWindow && !targetWindow.closed && targetWindow !== window)
+  } catch {
+    return false
+  }
+}
+
+const navigateReportWindow = (targetWindow, html) => {
+  if (!isUsableReportWindow(targetWindow)) {
     throw new Error('印刷画面が閉じられました。もう一度お試しください。')
   }
-  targetWindow.document.open()
-  targetWindow.document.write(html)
-  targetWindow.document.close()
+  // about:blank + document.write は端末によって URL が「?-」など異常表示になるため blob で遷移する
+  const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
+  targetWindow.location.href = blobUrl
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+}
+
+const LOADING_REPORT_HTML = `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>体調グラフを準備中</title>
+<style>body{font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center;padding:48px;color:#172033}
+.track{max-width:460px;height:12px;margin:24px auto;background:#e2e8f0;border-radius:6px;overflow:hidden}
+.bar{height:100%;width:40%;background:#2563eb;animation:load 1.2s ease-in-out infinite alternate}
+@keyframes load{from{width:15%}to{width:85%}}</style></head>
+<body><h1>体調グラフを準備しています</h1><div class="track"><div class="bar"></div></div></body></html>`
+
+/** スマホでは別タブの URL 異常・ブロックが多いので画面内表示を優先 */
+export const preferInAppConditionReport = () => {
+  if (typeof window === 'undefined') return true
+  try {
+    const coarse = window.matchMedia('(pointer: coarse)').matches
+    const narrow = window.matchMedia('(max-width: 900px)').matches
+    return Boolean(coarse || narrow)
+  } catch {
+    return true
+  }
 }
 
 /**
@@ -216,7 +245,7 @@ const writeReportHtml = (targetWindow, html) => {
  * @param {string} params.requesterUid
  * @param {string} [params.requesterName]
  * @param {string} params.monthKey
- * @param {Window|null} [params.reportWindow] クリック直後に開いた窓（スマホのポップアップ対策）
+ * @param {Window|null} [params.reportWindow] クリック直後に開いた窓（PC向け）
  * @returns {Promise<{ mode: 'popup'|'html', html?: string }>}
  */
 export const openWatchConditionMonthReport = async ({
@@ -229,22 +258,10 @@ export const openWatchConditionMonthReport = async ({
     throw new Error('対象者と対象月が必要です。')
   }
 
-  let popup = reportWindow
-  if (!popup || popup.closed) {
-    popup = window.open('about:blank', '_blank')
-  }
-
-  if (popup && !popup.closed) {
+  let popup = isUsableReportWindow(reportWindow) ? reportWindow : null
+  if (popup) {
     try {
-      writeReportHtml(
-        popup,
-        `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>体調グラフを準備中</title>
-          <style>body{font-family:"Noto Sans JP","Yu Gothic",Meiryo,sans-serif;text-align:center;padding:48px;color:#172033}
-          .track{max-width:460px;height:12px;margin:24px auto;background:#e2e8f0;border-radius:6px;overflow:hidden}
-          .bar{height:100%;width:40%;background:#2563eb;animation:load 1.2s ease-in-out infinite alternate}
-          @keyframes load{from{width:15%}to{width:85%}}</style></head>
-          <body><h1>体調グラフを準備しています</h1><div class="track"><div class="bar"></div></div></body></html>`
-      )
+      navigateReportWindow(popup, LOADING_REPORT_HTML)
     } catch {
       popup = null
     }
@@ -254,9 +271,14 @@ export const openWatchConditionMonthReport = async ({
   const person = requesterName || '依頼人'
   const html = buildConditionReportHtml({ person, monthKey, rows })
 
-  if (popup && !popup.closed) {
+  if (isUsableReportWindow(popup)) {
     try {
-      writeReportHtml(popup, html)
+      // 既存帳票と同様、初期化完了後に blob へ遷移
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+      if (!isUsableReportWindow(popup)) {
+        return { mode: 'html', html }
+      }
+      navigateReportWindow(popup, html)
       try { popup.focus() } catch { /* ignore */ }
       return { mode: 'popup' }
     } catch {
@@ -264,14 +286,15 @@ export const openWatchConditionMonthReport = async ({
     }
   }
 
-  // スマホ等でポップアップが塞がれた場合は HTML を返し、アプリ内表示する
+  // スマホ等: 別窓が使えない／異常になる場合はアプリ内表示
   return { mode: 'html', html }
 }
 
 /** クリック直後に呼ぶ（ユーザー操作の同一タイミングで窓を開く） */
 export const openReportWindowSync = () => {
   try {
-    return window.open('about:blank', '_blank')
+    const popup = window.open('', '_blank', 'width=1000,height=750')
+    return isUsableReportWindow(popup) ? popup : null
   } catch {
     return null
   }
