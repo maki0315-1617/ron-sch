@@ -32,6 +32,7 @@ import {
   subscribeWatchCommentsForWatcher,
   subscribeWatchEventsForMatch,
 } from './watchCare'
+import { openWatchConditionMonthReport } from './watchConditionReport'
 
 const sectionBox = {
   border: '1px solid #e2e8f0',
@@ -195,6 +196,11 @@ export default function WatchCarePanel({
   const [termsOpenMatchId, setTermsOpenMatchId] = useState('')
   const [endConfirm, setEndConfirm] = useState(null)
   const [watcherInboxComments, setWatcherInboxComments] = useState([])
+  const [conditionMonthKey, setConditionMonthKey] = useState(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [conditionReportBusy, setConditionReportBusy] = useState(false)
   const commentsScrollRef = useRef(null)
   const commentsEndRef = useRef(null)
   const detailSectionRef = useRef(null)
@@ -246,6 +252,32 @@ export default function WatchCarePanel({
       detailSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 80)
   }, [matches, session?.uid])
+
+  const printConditionReport = async () => {
+    if (!selectedMatch || selectedMatch.status !== WATCH_STATUS_ACTIVE) {
+      setError('マッチング中の依頼人を選択してください。')
+      return
+    }
+    if (!conditionMonthKey) {
+      setError('対象月を選択してください。')
+      return
+    }
+    setConditionReportBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      await openWatchConditionMonthReport({
+        requesterUid: selectedMatch.requesterUid,
+        requesterName: selectedMatch.requesterName || selectedMatch.requesterEmail || '依頼人',
+        monthKey: conditionMonthKey,
+      })
+      setMessage(`${selectedMatch.requesterName || '依頼人'}さんの ${conditionMonthKey} 体調グラフを開きました。`)
+    } catch (err) {
+      setError(err?.message || '体調グラフの作成に失敗しました。')
+    } finally {
+      setConditionReportBusy(false)
+    }
+  }
 
   const refresh = useCallback(async () => {
     if (!session?.uid) return
@@ -701,6 +733,29 @@ export default function WatchCarePanel({
 
             {selectedMatch?.status === WATCH_STATUS_ACTIVE && (
               <div ref={detailSectionRef}>
+                <div style={sectionBox}>
+                  <h4 style={sectionTitle}>📈 体調グラフ印刷（一人ずつ）</h4>
+                  <p style={muted}>
+                    対象: {selectedMatch.requesterName || selectedMatch.requesterEmail || '依頼人'}
+                    （5段階: 1大変悪い〜5大変良い／普通=3の点線）
+                  </p>
+                  <label style={styles.fieldLabel}>対象月</label>
+                  <input
+                    type="month"
+                    value={conditionMonthKey}
+                    onChange={(event) => setConditionMonthKey(event.target.value)}
+                    style={styles.modalInput}
+                    disabled={busy || conditionReportBusy}
+                  />
+                  <button
+                    type="button"
+                    style={{ ...styles.primaryButton, marginTop: 8 }}
+                    disabled={busy || conditionReportBusy}
+                    onClick={printConditionReport}
+                  >
+                    {conditionReportBusy ? '作成中…' : '体調グラフを印刷'}
+                  </button>
+                </div>
                 <div style={recordsSectionBox}>
                   <h4 style={sectionTitle}>
                     📋 共有済みの記録（{selectedMatch.requesterName || '依頼人'}・リアルタイム）

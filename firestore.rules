@@ -10,6 +10,15 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    // 見守り成立中のみ、見守り人が依頼人の日次記録を get できる（list は本人のみのまま）
+    function isActiveWatcherOf(requesterUid) {
+      let matchId = request.auth.uid + '_' + requesterUid;
+      return exists(/databases/$(database)/documents/watch_matches/$(matchId))
+        && get(/databases/$(database)/documents/watch_matches/$(matchId)).data.status == 'active'
+        && get(/databases/$(database)/documents/watch_matches/$(matchId)).data.watcherUid == request.auth.uid
+        && get(/databases/$(database)/documents/watch_matches/$(matchId)).data.requesterUid == requesterUid;
+    }
+
     match /schedule_items/{scheduleId} {
       allow create: if isSignedIn() && request.resource.data.user_id == request.auth.uid;
       allow read, delete: if isSignedIn() && resource.data.user_id == request.auth.uid;
@@ -55,6 +64,7 @@ service cloud.firestore {
       allow get: if isSignedIn() && (
         (resource == null && recordId.matches('^' + request.auth.uid + '_.*'))
         || (resource != null && resource.data.user_id == request.auth.uid)
+        || (resource != null && isActiveWatcherOf(resource.data.user_id))
       );
       allow list: if isSignedIn() && resource.data.user_id == request.auth.uid;
       allow create: if isSignedIn()

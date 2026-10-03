@@ -28,6 +28,27 @@ export const CONDITION_LEVELS = [
   { value: 'very_bad', label: '大変悪い' },
 ]
 
+/** 印刷グラフ用: 大変悪い=1 … 大変良い=5（普通=3） */
+export const CONDITION_LEVEL_SCORES = {
+  very_bad: 1,
+  bad: 2,
+  normal: 3,
+  good: 4,
+  very_good: 5,
+}
+
+export const CONDITION_SCORE_LABELS = {
+  1: '大変悪い',
+  2: '悪い',
+  3: '普通',
+  4: '良い',
+  5: '大変良い',
+}
+
+export const getConditionScore = (level) => (
+  CONDITION_LEVEL_SCORES[level] || null
+)
+
 export const CONDITION_LEVEL_VALUES = CONDITION_LEVELS.map((item) => item.value)
 
 export const CONDITION_PLACEHOLDER_LABEL = '体調について'
