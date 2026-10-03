@@ -722,7 +722,10 @@ export default function WatchCarePanel({
           maxWidth: 560,
           maxHeight: '90vh',
           overflowY: 'auto',
-          transform: `translate(${panelOffset.x}px, ${panelOffset.y}px)`,
+          // 未移動時は transform を付けない（fixed 子要素の基準ずれ防止）
+          transform: (panelOffset.x || panelOffset.y)
+            ? `translate(${panelOffset.x}px, ${panelOffset.y}px)`
+            : undefined,
           willChange: panelDragging ? 'transform' : undefined,
         }}
         onClick={(event) => event.stopPropagation()}
@@ -1180,197 +1183,211 @@ export default function WatchCarePanel({
           </>
         )}
 
-        {conditionReportHtml && (
-          <div
-            style={{ ...styles.modalOverlay, zIndex: 95 }}
-            onClick={() => {
-              setConditionReportHtml('')
-              setConditionReportPrintHtml('')
-            }}
-          >
-            <div
-              className="schedule-modal"
-              style={{
-                ...styles.modal,
-                maxWidth: 900,
-                width: '100%',
-                height: 'min(90vh, 900px)',
-                display: 'flex',
-                flexDirection: 'column',
-                padding: 12,
-              }}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div style={{ ...styles.modalHeader, marginBottom: 8 }}>
-                <h3 style={styles.modalTitle}>体調グラフ</h3>
-                <button
-                  type="button"
-                  style={styles.closeButton}
-                  onClick={() => {
-                    setConditionReportHtml('')
-                    setConditionReportPrintHtml('')
-                  }}
-                >
-                  閉じる
-                </button>
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  style={styles.primaryButton}
-                  onClick={() => {
-                    // 自動 print() はしない。印刷ボタン付き画面を開き、そこで押してもらう
-                    const opened = printConditionReportHtml(
-                      conditionReportPrintHtml || conditionReportHtml
-                    )
-                    if (!opened) {
-                      setError('印刷画面を開けませんでした。ブラウザのポップアップを許可して、もう一度お試しください。')
-                    } else {
-                      setMessage('印刷画面を開きました。画面内の「PDFとして保存 / 印刷」を押してください。')
-                    }
-                  }}
-                >
-                  PDFとして保存 / 印刷
-                </button>
-              </div>
-              <p style={{ ...muted, marginTop: 0, marginBottom: 8 }}>
-                開いた画面の「PDFとして保存 / 印刷」を押すと、PDF保存や印刷ができます。
-              </p>
-              <iframe
-                ref={conditionReportFrameRef}
-                title="体調グラフ"
-                srcDoc={conditionReportHtml}
-                style={{
-                  flex: 1,
-                  width: '100%',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 10,
-                  background: '#fff',
-                  minHeight: 360,
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {endConfirm && (
-          <div
-            style={{ ...styles.modalOverlay, zIndex: 90 }}
-            onClick={() => {
-              if (!busy) setEndConfirm(null)
-            }}
-          >
-            <div
-              className="schedule-modal"
-              style={{ ...styles.modal, maxWidth: 480 }}
-              onClick={(event) => event.stopPropagation()}
-              role="alertdialog"
-              aria-modal="true"
-              aria-labelledby="watch-end-confirm-title"
-            >
-              <div style={styles.modalHeader}>
-                <h3 id="watch-end-confirm-title" style={{ ...styles.modalTitle, color: '#b91c1c' }}>
-                  見守り終了の確認
-                </h3>
-                <button
-                  type="button"
-                  style={styles.closeButton}
-                  disabled={busy}
-                  onClick={() => setEndConfirm(null)}
-                >
-                  閉じる
-                </button>
-              </div>
-              <pre style={{
-                whiteSpace: 'pre-wrap',
-                fontFamily: 'inherit',
-                fontSize: 13,
-                lineHeight: 1.6,
-                background: '#fff7ed',
-                border: '1px solid #fdba74',
-                borderRadius: 10,
-                padding: 12,
-                margin: '0 0 12px',
-                color: '#7c2d12',
-              }}
-              >
-                {buildEndWatchNotice(endConfirm.partnerLabel)}
-              </pre>
-              <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  style={styles.secondaryButton}
-                  disabled={busy}
-                  onClick={() => setEndConfirm(null)}
-                >
-                  キャンセル
-                </button>
-                <button
-                  type="button"
-                  style={{ ...styles.primaryButton, background: '#dc2626' }}
-                  disabled={busy}
-                  onClick={() => {
-                    const matchId = endConfirm.matchId
-                    runAction(async () => {
-                      await endWatchMatch({ matchId, actorUid: session.uid })
-                      setEndConfirm(null)
-                    }, '見守りを終了しました。')
-                  }}
-                >
-                  終了する
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {termsOpenMatchId && (
-          <div style={{ ...styles.modalOverlay, zIndex: 80 }} onClick={() => setTermsOpenMatchId('')}>
-            <div
-              className="schedule-modal"
-              style={{ ...styles.modal, maxWidth: 480 }}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div style={styles.modalHeader}>
-                <h3 style={styles.modalTitle}>利用注意事項</h3>
-                <button type="button" style={styles.closeButton} onClick={() => setTermsOpenMatchId('')}>閉じる</button>
-              </div>
-              <pre style={{
-                whiteSpace: 'pre-wrap',
-                fontFamily: 'inherit',
-                fontSize: 13,
-                lineHeight: 1.6,
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-                padding: 12,
-                margin: '0 0 12px',
-              }}
-              >
-                {WATCH_TERMS_TEXT}
-              </pre>
-              <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
-                <button type="button" style={styles.secondaryButton} onClick={() => setTermsOpenMatchId('')}>戻る</button>
-                <button
-                  type="button"
-                  style={styles.primaryButton}
-                  disabled={busy}
-                  onClick={() => runAction(async () => {
-                    await agreeWatchTerms({ matchId: termsOpenMatchId, requesterUid: session.uid })
-                    setTermsOpenMatchId('')
-                  }, 'マッチングが完了しました。見守り人に記録が共有されます。')}
-                >
-                  同意してマッチング完了
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
           <button type="button" style={styles.secondaryButton} onClick={onClose}>閉じる</button>
         </div>
       </div>
+
+      {/*
+        子ダイアログは transform 付きパネルの外へ。
+        パネル内だと position:fixed が画面基準にならず、スマホで表示位置が大きくずれる。
+      */}
+      {conditionReportHtml && (
+        <div
+          style={{
+            ...styles.modalOverlay,
+            zIndex: 95,
+            alignItems: 'flex-start',
+            paddingTop: 'max(12px, env(safe-area-inset-top))',
+            paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+            overflowY: 'auto',
+          }}
+          onClick={() => {
+            setConditionReportHtml('')
+            setConditionReportPrintHtml('')
+          }}
+        >
+          <div
+            className="schedule-modal"
+            style={{
+              ...styles.modal,
+              maxWidth: 900,
+              width: '100%',
+              maxHeight: 'min(92vh, 900px)',
+              height: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              padding: 12,
+              margin: '0 auto',
+              transform: 'none',
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={{ ...styles.modalHeader, marginBottom: 8, flexShrink: 0 }}>
+              <h3 style={styles.modalTitle}>体調グラフ</h3>
+              <button
+                type="button"
+                style={styles.closeButton}
+                onClick={() => {
+                  setConditionReportHtml('')
+                  setConditionReportPrintHtml('')
+                }}
+              >
+                閉じる
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+              <button
+                type="button"
+                style={styles.primaryButton}
+                onClick={() => {
+                  const opened = printConditionReportHtml(
+                    conditionReportPrintHtml || conditionReportHtml
+                  )
+                  if (!opened) {
+                    setError('印刷画面を開けませんでした。ブラウザのポップアップを許可して、もう一度お試しください。')
+                  } else {
+                    setMessage('印刷画面を開きました。画面内の「PDFとして保存 / 印刷」を押してください。')
+                  }
+                }}
+              >
+                PDFとして保存 / 印刷
+              </button>
+            </div>
+            <p style={{ ...muted, marginTop: 0, marginBottom: 8, flexShrink: 0 }}>
+              開いた画面の「PDFとして保存 / 印刷」を押すと、PDF保存や印刷ができます。
+            </p>
+            <iframe
+              ref={conditionReportFrameRef}
+              title="体調グラフ"
+              srcDoc={conditionReportHtml}
+              style={{
+                flex: '1 1 auto',
+                width: '100%',
+                border: '1px solid #e2e8f0',
+                borderRadius: 10,
+                background: '#fff',
+                minHeight: 280,
+                height: 'min(60vh, 520px)',
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {endConfirm && (
+        <div
+          style={{ ...styles.modalOverlay, zIndex: 90 }}
+          onClick={() => {
+            if (!busy) setEndConfirm(null)
+          }}
+        >
+          <div
+            className="schedule-modal"
+            style={{ ...styles.modal, maxWidth: 480, transform: 'none' }}
+            onClick={(event) => event.stopPropagation()}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="watch-end-confirm-title"
+          >
+            <div style={styles.modalHeader}>
+              <h3 id="watch-end-confirm-title" style={{ ...styles.modalTitle, color: '#b91c1c' }}>
+                見守り終了の確認
+              </h3>
+              <button
+                type="button"
+                style={styles.closeButton}
+                disabled={busy}
+                onClick={() => setEndConfirm(null)}
+              >
+                閉じる
+              </button>
+            </div>
+            <pre style={{
+              whiteSpace: 'pre-wrap',
+              fontFamily: 'inherit',
+              fontSize: 13,
+              lineHeight: 1.6,
+              background: '#fff7ed',
+              border: '1px solid #fdba74',
+              borderRadius: 10,
+              padding: 12,
+              margin: '0 0 12px',
+              color: '#7c2d12',
+            }}
+            >
+              {buildEndWatchNotice(endConfirm.partnerLabel)}
+            </pre>
+            <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                style={styles.secondaryButton}
+                disabled={busy}
+                onClick={() => setEndConfirm(null)}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                style={{ ...styles.primaryButton, background: '#dc2626' }}
+                disabled={busy}
+                onClick={() => {
+                  const matchId = endConfirm.matchId
+                  runAction(async () => {
+                    await endWatchMatch({ matchId, actorUid: session.uid })
+                    setEndConfirm(null)
+                  }, '見守りを終了しました。')
+                }}
+              >
+                終了する
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {termsOpenMatchId && (
+        <div style={{ ...styles.modalOverlay, zIndex: 80 }} onClick={() => setTermsOpenMatchId('')}>
+          <div
+            className="schedule-modal"
+            style={{ ...styles.modal, maxWidth: 480, transform: 'none' }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div style={styles.modalHeader}>
+              <h3 style={styles.modalTitle}>利用注意事項</h3>
+              <button type="button" style={styles.closeButton} onClick={() => setTermsOpenMatchId('')}>閉じる</button>
+            </div>
+            <pre style={{
+              whiteSpace: 'pre-wrap',
+              fontFamily: 'inherit',
+              fontSize: 13,
+              lineHeight: 1.6,
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 10,
+              padding: 12,
+              margin: '0 0 12px',
+            }}
+            >
+              {WATCH_TERMS_TEXT}
+            </pre>
+            <div style={{ ...styles.modalActionRow, justifyContent: 'flex-end' }}>
+              <button type="button" style={styles.secondaryButton} onClick={() => setTermsOpenMatchId('')}>戻る</button>
+              <button
+                type="button"
+                style={styles.primaryButton}
+                disabled={busy}
+                onClick={() => runAction(async () => {
+                  await agreeWatchTerms({ matchId: termsOpenMatchId, requesterUid: session.uid })
+                  setTermsOpenMatchId('')
+                }, 'マッチングが完了しました。見守り人に記録が共有されます。')}
+              >
+                同意してマッチング完了
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
