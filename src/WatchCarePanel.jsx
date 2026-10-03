@@ -626,20 +626,29 @@ export default function WatchCarePanel({
                   </span>
                 ) : null}
               </h4>
-              <p style={muted}>未読がある依頼人を上に表示します。選択すると未読が解消されます。</p>
+              <p style={muted}>未読がある依頼人を上に表示します。青い枠が現在選択中の依頼人です。</p>
               {displayedMatches.length === 0 && <p style={muted}>依頼はまだありません。</p>}
               {displayedMatches.map((match) => {
                 const summary = commentSummaries[match.id] || {}
                 const unreadCount = summary.unreadCount || 0
+                const isSelected = match.id === selectedMatchId
                 return (
                   <div
                     key={match.id}
                     style={{
                       ...listItem,
-                      ...(unreadCount > 0
+                      ...(unreadCount > 0 && !isSelected
                         ? { borderColor: '#fca5a5', background: '#fff1f2' }
                         : {}),
+                      ...(isSelected
+                        ? {
+                          borderColor: '#2563eb',
+                          background: '#eff6ff',
+                          boxShadow: 'inset 4px 0 0 #2563eb',
+                        }
+                        : {}),
                     }}
+                    aria-current={isSelected ? 'true' : undefined}
                   >
                     <div style={{
                       display: 'flex',
@@ -649,8 +658,23 @@ export default function WatchCarePanel({
                       marginBottom: 4,
                     }}
                     >
-                      <div style={{ fontWeight: 700 }}>
+                      <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         {match.requesterName || match.requesterEmail || '依頼人'}
+                        {isSelected ? (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            background: '#2563eb',
+                            color: '#fff',
+                            fontSize: 11,
+                            fontWeight: 800,
+                          }}
+                          >
+                            選択中
+                          </span>
+                        ) : null}
                       </div>
                       {unreadCount > 0 ? (
                         <span style={unreadBadge}>未読 {unreadCount}</span>
@@ -675,11 +699,16 @@ export default function WatchCarePanel({
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       <button
                         type="button"
-                        style={styles.secondaryButton}
+                        style={{
+                          ...styles.secondaryButton,
+                          ...(isSelected
+                            ? { borderColor: '#2563eb', color: '#1d4ed8', background: '#dbeafe', fontWeight: 700 }
+                            : {}),
+                        }}
                         disabled={busy}
                         onClick={() => openMatchDetail(match.id)}
                       >
-                        {unreadCount > 0 ? '未読を確認' : '選択'}
+                        {isSelected ? '選択中' : (unreadCount > 0 ? '未読を確認' : '選択')}
                       </button>
                       {match.status === WATCH_STATUS_PENDING_APPROVAL && (
                         <>
