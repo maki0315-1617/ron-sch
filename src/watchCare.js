@@ -35,6 +35,10 @@ export const WATCH_COMMENT_TEMPLATES = [
   '眠れましたか？無理しないでくださいね。',
   '体調の記録、ありがとうございます。',
   '気になることがあれば、ここに書いてくださいね。',
+  'ありがとうございます',
+  'よろしくお願いします',
+  '失礼します',
+  '後ほど連絡します。',
 ]
 
 export const WATCH_EVENT_BEDTIME = 'bedtime'
