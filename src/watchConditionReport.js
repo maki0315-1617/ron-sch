@@ -223,43 +223,46 @@ const ensurePrintActions = (html) => {
 
 /**
  * 画面内プレビューから印刷用画面を開く。
- * スマホ Chrome は setTimeout 後の print() を無視するため、自動印刷はしない。
- * ユーザーが開いた画面の「PDFとして保存 / 印刷」を押して印刷する。
+ * 既存帳票と同じ blob URL 方式を優先（document.write は端末によって白紙になる）。
+ * 自動 print() はしない。開いた画面の「PDFとして保存 / 印刷」を押して印刷する。
  */
 export const printConditionReportHtml = (html) => {
   const printable = ensurePrintActions(html)
   if (!printable) return false
 
+  let blobUrl = ''
+  try {
+    blobUrl = URL.createObjectURL(new Blob([printable], { type: 'text/html;charset=utf-8' }))
+  } catch {
+    return false
+  }
+
   let popup = null
   try {
-    // タップと同一タイミングで開く（ポップアップブロック回避）
-    popup = window.open('', '_blank', 'width=1000,height=750')
+    // クリックと同時に blob を開く（App.jsx の帳票と同じ）
+    popup = window.open(blobUrl, '_blank', 'width=1000,height=750')
   } catch {
     popup = null
   }
-  if (!popup || popup.closed || popup === window) return false
 
-  // 1) 同一ジェスチャ内の document.write（Android Chrome で最も安定）
-  try {
-    popup.document.open()
-    popup.document.write(printable)
-    popup.document.close()
-    try { popup.focus() } catch { /* ignore */ }
-    return true
-  } catch {
-    // 2) 書けない場合は blob 遷移。自動 print はしない（ユーザー操作が切れるため）
+  if (!popup || popup.closed || popup === window) {
+    try {
+      popup = window.open('', '_blank', 'width=1000,height=750')
+      if (popup && !popup.closed && popup !== window) {
+        popup.location.href = blobUrl
+      } else {
+        URL.revokeObjectURL(blobUrl)
+        return false
+      }
+    } catch {
+      URL.revokeObjectURL(blobUrl)
+      return false
+    }
   }
 
-  try {
-    const blobUrl = URL.createObjectURL(new Blob([printable], { type: 'text/html;charset=utf-8' }))
-    popup.location.href = blobUrl
-    try { popup.focus() } catch { /* ignore */ }
-    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
-    return true
-  } catch {
-    try { popup.close() } catch { /* ignore */ }
-    return false
-  }
+  try { popup.focus() } catch { /* ignore */ }
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 120000)
+  return true
 }
 
 const isUsableReportWindow = (targetWindow) => {
@@ -275,10 +278,10 @@ const navigateReportWindow = (targetWindow, html) => {
   if (!isUsableReportWindow(targetWindow)) {
     throw new Error('印刷画面が閉じられました。もう一度お試しください。')
   }
-  // about:blank + document.write は端末によって URL が「?-」など異常表示になるため blob で遷移する
+  // 既存帳票と同じ blob 遷移（document.write は白紙化することがある）
   const blobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
   targetWindow.location.href = blobUrl
-  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 120000)
 }
 
 const LOADING_REPORT_HTML = `<!doctype html><html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>体調グラフを準備中</title>

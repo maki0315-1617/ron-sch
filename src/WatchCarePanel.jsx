@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Eye, Shield, UserRound } from 'lucide-react'
 import {
   WATCH_COMMENT_MAX_LENGTH,
@@ -253,6 +254,7 @@ export default function WatchCarePanel({
   const [conditionReportBusy, setConditionReportBusy] = useState(false)
   const [conditionReportHtml, setConditionReportHtml] = useState('')
   const [conditionReportPrintHtml, setConditionReportPrintHtml] = useState('')
+  const [conditionReportFrameUrl, setConditionReportFrameUrl] = useState('')
   const [panelOffset, setPanelOffset] = useState({ x: 0, y: 0 })
   const [panelDragging, setPanelDragging] = useState(false)
   const conditionReportFrameRef = useRef(null)
@@ -271,6 +273,26 @@ export default function WatchCarePanel({
       panelDragRef.current = null
     }
   }, [open, mode])
+
+  // srcDoc は端末によって白紙になることがあるため blob URL でプレビューする
+  useEffect(() => {
+    if (!conditionReportHtml) {
+      setConditionReportFrameUrl('')
+      return undefined
+    }
+    let objectUrl = ''
+    try {
+      objectUrl = URL.createObjectURL(
+        new Blob([conditionReportHtml], { type: 'text/html;charset=utf-8' })
+      )
+      setConditionReportFrameUrl(objectUrl)
+    } catch {
+      setConditionReportFrameUrl('')
+    }
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [conditionReportHtml])
 
   const clampPanelOffset = useCallback((x, y) => {
     const el = panelRef.current
@@ -1193,92 +1215,103 @@ export default function WatchCarePanel({
         </div>
       </div>
 
-      {/*
-        子ダイアログは transform 付きパネルの外へ。
-        パネル内だと position:fixed が画面基準にならず、スマホで表示位置が大きくずれる。
-      */}
-      {conditionReportHtml && (
-        <div
-          style={{
-            ...styles.modalOverlay,
-            zIndex: 95,
-            alignItems: 'flex-start',
-            paddingTop: 'max(12px, env(safe-area-inset-top))',
-            paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
-            overflowY: 'auto',
-          }}
-          onClick={() => {
-            setConditionReportHtml('')
-            setConditionReportPrintHtml('')
-          }}
-        >
+      {conditionReportHtml
+        && createPortal(
           <div
-            className="schedule-modal"
             style={{
-              ...styles.modal,
-              maxWidth: 900,
-              width: '100%',
-              maxHeight: 'min(92vh, 900px)',
-              height: 'auto',
-              display: 'flex',
-              flexDirection: 'column',
-              padding: 12,
-              margin: '0 auto',
-              transform: 'none',
+              ...styles.modalOverlay,
+              zIndex: 200,
+              alignItems: 'flex-start',
+              paddingTop: 'max(12px, env(safe-area-inset-top))',
+              paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+              overflowY: 'auto',
             }}
-            onClick={(event) => event.stopPropagation()}
+            onClick={() => {
+              setConditionReportHtml('')
+              setConditionReportPrintHtml('')
+            }}
           >
-            <div style={{ ...styles.modalHeader, marginBottom: 8, flexShrink: 0 }}>
-              <h3 style={styles.modalTitle}>体調グラフ</h3>
-              <button
-                type="button"
-                style={styles.closeButton}
-                onClick={() => {
-                  setConditionReportHtml('')
-                  setConditionReportPrintHtml('')
-                }}
-              >
-                閉じる
-              </button>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', flexShrink: 0 }}>
-              <button
-                type="button"
-                style={styles.primaryButton}
-                onClick={() => {
-                  const opened = printConditionReportHtml(
-                    conditionReportPrintHtml || conditionReportHtml
-                  )
-                  if (!opened) {
-                    setError('印刷画面を開けませんでした。ブラウザのポップアップを許可して、もう一度お試しください。')
-                  } else {
-                    setMessage('印刷画面を開きました。画面内の「PDFとして保存 / 印刷」を押してください。')
-                  }
-                }}
-              >
-                PDFとして保存 / 印刷
-              </button>
-            </div>
-            <p style={{ ...muted, marginTop: 0, marginBottom: 8, flexShrink: 0 }}>
-              開いた画面の「PDFとして保存 / 印刷」を押すと、PDF保存や印刷ができます。
-            </p>
-            <iframe
-              ref={conditionReportFrameRef}
-              title="体調グラフ"
-              srcDoc={conditionReportHtml}
+            <div
+              className="schedule-modal"
               style={{
-                flex: '1 1 auto',
+                ...styles.modal,
+                maxWidth: 900,
                 width: '100%',
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-                background: '#fff',
-                minHeight: 280,
-                height: 'min(60vh, 520px)',
+                maxHeight: 'min(92vh, 900px)',
+                height: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                padding: 12,
+                margin: '0 auto',
+                transform: 'none',
               }}
-            />
-          </div>
-        </div>
-      )}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div style={{ ...styles.modalHeader, marginBottom: 8, flexShrink: 0 }}>
+                <h3 style={styles.modalTitle}>体調グラフ</h3>
+                <button
+                  type="button"
+                  style={styles.closeButton}
+                  onClick={() => {
+                    setConditionReportHtml('')
+                    setConditionReportPrintHtml('')
+                  }}
+                >
+                  閉じる
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  style={styles.primaryButton}
+                  onClick={() => {
+                    const html = conditionReportPrintHtml || conditionReportHtml
+                    const opened = printConditionReportHtml(html)
+                    if (opened) {
+                      setMessage('印刷画面を開きました。画面内の「PDFとして保存 / 印刷」を押してください。')
+                      return
+                    }
+                    // ポップアップ不可時はプレビュー iframe から印刷
+                    try {
+                      const frame = conditionReportFrameRef.current
+                      if (frame?.contentWindow) {
+                        frame.contentWindow.focus()
+                        frame.contentWindow.print()
+                        setMessage('印刷ダイアログを開きました。「PDFに保存」を選べます。')
+                        return
+                      }
+                    } catch { /* ignore */ }
+                    setError('印刷画面を開けませんでした。ブラウザのポップアップを許可して、もう一度お試しください。')
+                  }}
+                >
+                  PDFとして保存 / 印刷
+                </button>
+              </div>
+              <p style={{ ...muted, marginTop: 0, marginBottom: 8, flexShrink: 0 }}>
+                開いた画面の「PDFとして保存 / 印刷」を押すと、PDF保存や印刷ができます。
+              </p>
+              {conditionReportFrameUrl ? (
+                <iframe
+                  ref={conditionReportFrameRef}
+                  title="体調グラフ"
+                  src={conditionReportFrameUrl}
+                  style={{
+                    flex: '1 1 auto',
+                    width: '100%',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 10,
+                    background: '#fff',
+                    minHeight: 280,
+                    height: 'min(60vh, 520px)',
+                  }}
+                />
+              ) : (
+                <p style={{ ...muted, color: '#b91c1c' }}>プレビューを表示できませんでした。もう一度「体調グラフを印刷」を押してください。</p>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
 
       {endConfirm && (
         <div
