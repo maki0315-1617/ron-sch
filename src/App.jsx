@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Capacitor } from '@capacitor/core'
-import { auth, db, deleteFcmToken, getFcmToken, subscribeForegroundNotifications } from './firebase'
+import { auth, db, deleteFcmToken, ensureAuthLanguageJa, getFcmToken, subscribeForegroundNotifications } from './firebase'
 import {
   EmailAuthProvider,
   createUserWithEmailAndPassword,
@@ -207,6 +207,7 @@ const sendAppEmailVerification = async (user) => {
   if (!user) {
     throw new Error('ログインユーザーがありません。')
   }
+  ensureAuthLanguageJa()
   await sendEmailVerification(user)
 }
 
@@ -2925,6 +2926,7 @@ function App() {
     }
     setAuthError('')
     try {
+      ensureAuthLanguageJa()
       await sendPasswordResetEmail(auth, email.trim())
       alert(`「${email.trim()}」宛にパスワード再設定用メールを送信しました。\nメール内のリンクから新しいパスワードを設定してください。`)
     } catch (error) {
@@ -2998,6 +3000,7 @@ function App() {
   const handleSendResetEmailInDeleteModal = async () => {
     if (!session?.email) return
     try {
+      ensureAuthLanguageJa()
       await sendPasswordResetEmail(auth, session.email)
       alert(`「${session.email}」宛にパスワード再設定用のメールを送信しました。\nメールに記載されているリンクからパスワードを再設定したあと、再度アカウント削除を行ってください。`)
     } catch (error) {
