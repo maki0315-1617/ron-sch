@@ -619,6 +619,18 @@ html.schedule-card-reorder-active .schedule-section {
     padding: 14px;
   }
 
+  .watch-comment-body,
+  .watch-comment-body * {
+    pointer-events: auto !important;
+  }
+
+  .linked-text-link {
+    color: #1d4ed8 !important;
+    text-decoration: underline !important;
+    cursor: pointer !important;
+    -webkit-touch-callout: default !important;
+  }
+
   .schedule-details-input {
     min-height: 88px !important;
     height: 88px;

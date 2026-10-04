@@ -43,6 +43,7 @@ import {
   preferInAppConditionReport,
   printConditionReportHtml,
 } from './watchConditionReport'
+import { LinkedText } from './scheduleDetailsLinkify'
 
 const sectionBox = {
   border: '1px solid #e2e8f0',
@@ -629,20 +630,23 @@ export default function WatchCarePanel({
                   {comment.fromName ? ` · ${comment.fromName}` : ''}
                   {isMine ? '（自分）' : ''}
                 </div>
-                <div style={{
-                  background: bubbleBg,
-                  border: `1px solid ${bubbleBorder}`,
-                  borderRadius: isMine ? '14px 4px 14px 14px' : '4px 14px 14px 14px',
-                  padding: '8px 11px',
-                  fontSize: 14,
-                  lineHeight: 1.45,
-                  color: '#0f172a',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.08)',
-                }}
+                <div
+                  className="watch-comment-body"
+                  style={{
+                    background: bubbleBg,
+                    border: `1px solid ${bubbleBorder}`,
+                    borderRadius: isMine ? '14px 4px 14px 14px' : '4px 14px 14px 14px',
+                    padding: '8px 11px',
+                    fontSize: 14,
+                    lineHeight: 1.45,
+                    color: '#0f172a',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.08)',
+                    pointerEvents: 'auto',
+                  }}
                 >
-                  {comment.body}
+                  <LinkedText text={comment.body} />
                 </div>
               </div>
             </div>
@@ -913,11 +917,12 @@ export default function WatchCarePanel({
                       <p style={{
                         ...lastCommentLine,
                         ...(unreadCount > 0 ? {} : { background: '#f8fafc', borderColor: '#e2e8f0', color: '#64748b' }),
+                        pointerEvents: 'auto',
                       }}
                       >
                         {unreadCount > 0 ? '未読 · ' : '💬 '}
                         {previewFromName ? `${previewFromName}: ` : ''}
-                        {previewBody}
+                        <LinkedText text={previewBody} />
                         {String(previewBody).length >= 36 ? '…' : ''}
                         {previewRelative ? `（${previewRelative}）` : ''}
                       </p>
