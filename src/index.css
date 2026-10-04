@@ -375,6 +375,18 @@ html.schedule-card-reorder-active .schedule-section {
     font-size: 17px !important;
   }
 
+  .watch-care-shortcut-btn {
+    padding: 5px 8px !important;
+  }
+
+  .watch-care-shortcut-label {
+    /* 狭い幅でもアイコン＋バッジで判別できるようにする */
+    max-width: 3.2em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .app-brand-mark {
     width: 28px !important;
     height: 28px !important;

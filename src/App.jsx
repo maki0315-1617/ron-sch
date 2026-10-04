@@ -67,10 +67,13 @@ import {
   WATCH_ROLE_REQUESTER,
   WATCH_ROLE_WATCHER,
   formatWatchPlanLabel,
+  formatWatchUnreadBadge,
   isWatchCarePlanEligible,
   loadActiveMatchForRequester,
   loadWatchProfile,
   publishWatchCareEvent,
+  subscribeWatchMatchesForParty,
+  sumWatchUnreadForViewer,
 } from './watchCare'
 import {
   buildScheduleRelationTimeChangeConfirm,
@@ -841,6 +844,7 @@ function App() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
   const [watchCareMenuOpen, setWatchCareMenuOpen] = useState(false)
   const [watchCarePanelMode, setWatchCarePanelMode] = useState(null)
+  const [watchActiveMatches, setWatchActiveMatches] = useState([])
   const [subscriptionInfo, setSubscriptionInfo] = useState({
     isActive: false,
     plan: '',
@@ -1111,6 +1115,7 @@ function App() {
       status: subscriptionInfo.isActive ? SUBSCRIPTION_ACTIVE_STATUS : '',
     })) {
       setWatchProfile(null)
+      setWatchActiveMatches([])
       return undefined
     }
     ;(async () => {
@@ -1127,6 +1132,29 @@ function App() {
     }
   }, [session?.uid, subscriptionInfo.plan, subscriptionInfo.isActive])
 
+  // メイン画面バッジ用: active マッチのみ購読（コメントは購読しない）
+  useEffect(() => {
+    if (
+      !session?.uid
+      || sleepOnlyMode
+      || !watchCareEligible
+      || !watchProfile?.role
+      || (watchProfile.role !== WATCH_ROLE_WATCHER && watchProfile.role !== WATCH_ROLE_REQUESTER)
+    ) {
+      setWatchActiveMatches([])
+      return undefined
+    }
+    return subscribeWatchMatchesForParty(
+      session.uid,
+      watchProfile.role,
+      (matches) => setWatchActiveMatches(matches),
+      (error) => {
+        console.warn('見守りマッチ購読に失敗:', error)
+        setWatchActiveMatches([])
+      }
+    )
+  }, [session?.uid, sleepOnlyMode, watchCareEligible, watchProfile?.role])
+
   const dismissDemoWelcome = () => {
     try {
       if (session?.uid) {
@@ -1136,6 +1164,29 @@ function App() {
       // ignore
     }
     setDemoWelcomeOpen(false)
+  }
+
+  const watchUnreadTotal = useMemo(
+    () => sumWatchUnreadForViewer(watchActiveMatches, session?.uid),
+    [watchActiveMatches, session?.uid]
+  )
+  const watchUnreadBadge = formatWatchUnreadBadge(watchUnreadTotal)
+
+  const openWatchCareShortcut = () => {
+    if (!watchCareEligible) return
+    if (!watchProfile) {
+      setWatchCarePanelMode('setup')
+      return
+    }
+    if (watchProfile.role === WATCH_ROLE_WATCHER) {
+      setWatchCarePanelMode('watcher')
+      return
+    }
+    if (watchProfile.role === WATCH_ROLE_REQUESTER) {
+      setWatchCarePanelMode('requester')
+      return
+    }
+    setWatchCarePanelMode('setup')
   }
 
   const countScheduleItemsFromMap = () => {
@@ -6996,6 +7047,24 @@ function App() {
                 height={32}
               />
               <h1 style={styles.title} className="app-title">{APP_DISPLAY_NAME}</h1>
+              {watchCareEligible && !sleepOnlyMode && (
+                <button
+                  type="button"
+                  className="watch-care-shortcut-btn"
+                  style={styles.watchCareShortcutButton}
+                  onClick={openWatchCareShortcut}
+                  title="見守り処理"
+                  aria-label={watchUnreadBadge
+                    ? `見守り処理、未読${watchUnreadBadge}件`
+                    : '見守り処理'}
+                >
+                  <Shield size={16} />
+                  <span className="watch-care-shortcut-label">見守り</span>
+                  {watchUnreadBadge ? (
+                    <span style={styles.watchCareShortcutBadge}>{watchUnreadBadge}</span>
+                  ) : null}
+                </button>
+              )}
             </div>
 
             <div style={styles.userArea} className="app-user-area">
@@ -9891,6 +9960,37 @@ const styles = {
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+  },
+  watchCareShortcutButton: {
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    flexShrink: 0,
+    border: '1px solid #93c5fd',
+    background: '#eff6ff',
+    color: '#1d4ed8',
+    borderRadius: '999px',
+    padding: '5px 10px',
+    fontSize: '12px',
+    fontWeight: 700,
+    cursor: 'pointer',
+    lineHeight: 1.2,
+  },
+  watchCareShortcutBadge: {
+    position: 'absolute',
+    top: '-6px',
+    right: '-6px',
+    minWidth: '18px',
+    height: '18px',
+    padding: '0 5px',
+    borderRadius: '999px',
+    background: '#dc2626',
+    color: '#fff',
+    fontSize: '11px',
+    fontWeight: 700,
+    lineHeight: '18px',
+    textAlign: 'center',
   },
   userArea: {
     display: 'flex',

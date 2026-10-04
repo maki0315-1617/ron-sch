@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   limit,
   onSnapshot,
   query,
@@ -367,6 +368,8 @@ export const createWatchRequest = async ({
     watcherName: watcher.name || '',
     requesterName: requesterProfile.name || '',
     status: WATCH_STATUS_PENDING_APPROVAL,
+    watcherUnreadCount: 0,
+    requesterUnreadCount: 0,
     updatedAt: serverTimestamp(),
   }
   if (!previous) payload.createdAt = serverTimestamp()
@@ -457,6 +460,8 @@ export const agreeWatchTerms = async ({ matchId, requesterUid }) => {
   await updateDoc(ref, {
     status: WATCH_STATUS_ACTIVE,
     termsAgreedAt: serverTimestamp(),
+    watcherUnreadCount: 0,
+    requesterUnreadCount: 0,
     updatedAt: serverTimestamp(),
   })
 }
@@ -625,20 +630,82 @@ export const postWatchComment = async ({
     createdAt: serverTimestamp(),
   }
   await setDoc(ref, payload)
+
+  // 相手側のメイン画面バッジ用未読を加算（コメント常時購読は不要）
+  const unreadField = fromUid === match.watcherUid
+    ? 'requesterUnreadCount'
+    : (fromUid === match.requesterUid ? 'watcherUnreadCount' : null)
+  if (unreadField) {
+    try {
+      await updateDoc(doc(db, 'watch_matches', match.id), {
+        [unreadField]: increment(1),
+        updatedAt: serverTimestamp(),
+      })
+    } catch (error) {
+      console.warn('見守り未読カウンタの更新に失敗:', error)
+    }
+  }
+
   return { id: ref.id, ...payload }
 }
 
 /** コメント欄を開いたときに既読時刻を更新（見守り人の未読防止用） */
 export const markWatchMatchCommentsRead = async ({ match, viewerUid }) => {
   if (!db || !match?.id || !viewerUid) return
-  const field = match.watcherUid === viewerUid
+  const readAtField = match.watcherUid === viewerUid
     ? 'watcherLastReadAt'
     : (match.requesterUid === viewerUid ? 'requesterLastReadAt' : null)
-  if (!field) return
+  const unreadField = match.watcherUid === viewerUid
+    ? 'watcherUnreadCount'
+    : (match.requesterUid === viewerUid ? 'requesterUnreadCount' : null)
+  if (!readAtField || !unreadField) return
   await updateDoc(doc(db, 'watch_matches', match.id), {
-    [field]: serverTimestamp(),
+    [readAtField]: serverTimestamp(),
+    [unreadField]: 0,
     updatedAt: serverTimestamp(),
   })
+}
+
+/** メイン画面用: 自分のマッチを購読し、active のみ返す（コメントは購読しない） */
+export const subscribeWatchMatchesForParty = (uid, role, onChange, onError, max = 40) => {
+  if (!db || !uid || (role !== WATCH_ROLE_WATCHER && role !== WATCH_ROLE_REQUESTER)) {
+    onChange?.([])
+    return () => {}
+  }
+  const partyField = role === WATCH_ROLE_WATCHER ? 'watcherUid' : 'requesterUid'
+  return onSnapshot(
+    query(
+      collection(db, 'watch_matches'),
+      where(partyField, '==', uid),
+      limit(max),
+    ),
+    (snapshot) => {
+      const active = mapWatchDocs(snapshot).filter((match) => match.status === WATCH_STATUS_ACTIVE)
+      onChange?.(active)
+    },
+    (error) => onError?.(error)
+  )
+}
+
+/** 閲覧者視点の未読合計（active マッチのカウンタ合計） */
+export const sumWatchUnreadForViewer = (matches, viewerUid) => (
+  (matches || []).reduce((sum, match) => {
+    if (!match || !viewerUid) return sum
+    if (match.watcherUid === viewerUid) {
+      return sum + (Number(match.watcherUnreadCount) || 0)
+    }
+    if (match.requesterUid === viewerUid) {
+      return sum + (Number(match.requesterUnreadCount) || 0)
+    }
+    return sum
+  }, 0)
+)
+
+export const formatWatchUnreadBadge = (count) => {
+  const n = Number(count) || 0
+  if (n <= 0) return ''
+  if (n > 99) return '99+'
+  return String(n)
 }
 
 /** 見守り人向け: 全依頼人のコメントをまとめて購読 */

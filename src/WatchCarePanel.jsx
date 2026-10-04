@@ -366,8 +366,8 @@ export default function WatchCarePanel({
               ? {
                 ...item,
                 ...(session.uid === item.watcherUid
-                  ? { watcherLastReadAt: readAt }
-                  : { requesterLastReadAt: readAt }),
+                  ? { watcherLastReadAt: readAt, watcherUnreadCount: 0 }
+                  : { requesterLastReadAt: readAt, requesterUnreadCount: 0 }),
               }
               : item
           )))
