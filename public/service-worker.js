@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ron-sch-pwa-v2'
+const CACHE_NAME = 'ron-sch-pwa-v3'
 
 self.addEventListener('install', () => {
   self.skipWaiting()
