@@ -46,12 +46,22 @@ export const WATCH_EVENT_BEDTIME = 'bedtime'
 export const WATCH_EVENT_WAKE = 'wake'
 export const WATCH_EVENT_MEDICATION = 'medication'
 export const WATCH_EVENT_CONDITION = 'condition'
+export const WATCH_EVENT_LOCATION = 'location'
+
+/** 手動位置共有の有効期限（2時間） */
+export const WATCH_LOCATION_TTL_MS = 2 * 60 * 60 * 1000
 
 export const formatLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear()
   const m = String(date.getMonth() + 1).padStart(2, '0')
   const d = String(date.getDate()).padStart(2, '0')
   return `${y}-${m}-${d}`
+}
+
+export const formatLocalTimeKey = (date = new Date()) => {
+  const h = String(date.getHours()).padStart(2, '0')
+  const min = String(date.getMinutes()).padStart(2, '0')
+  return `${h}:${min}`
 }
 
 /** 未読プレビュー用の相対時刻 */
@@ -143,10 +153,11 @@ export const buildTodayWatchSummary = (events, todayKey = formatLocalDateKey()) 
 
 export const WATCH_TERMS_TEXT = [
   '見守り機能では、あなたが記録した実就寝時刻・実起床時刻・実服薬時刻・体調が見守り人に共有され、そのたびにお知らせが送られます。',
-  'お互いのコメントも共有されます。住所・電話番号・スケジュール内容は共有されません。',
+  'お互いのコメントも共有されます。電話番号・スケジュール内容は共有されません。',
+  '依頼人が手動で「いまの位置」を共有した場合のみ、その時点の位置情報が見守り人に届きます（常時追跡ではありません。共有停止・見守り終了・一定時間の経過で見えなくなります）。',
   '見守り関係は、あなたまたは見守り人のどちらからでも、申請だけで即時終了できます。',
   'Sプラスかつ契約が有効なあいだのみ利用できます。条件を外れた場合は参照・通知が停止します。',
-  '見守りは生活の参考情報であり、医療行為や緊急対応の代替ではありません。',
+  '見守りは生活の参考情報であり、医療行為や緊急対応の代替ではありません。位置共有も緊急通報・救護の代わりにはなりません。',
 ].join('\n')
 
 export const normalizeWatchEmail = (value) => String(value || '').trim().toLowerCase()
@@ -183,6 +194,7 @@ export const getWatchEventLabel = (kind, slotLabel = '') => {
   if (kind === WATCH_EVENT_WAKE) return '起床'
   if (kind === WATCH_EVENT_MEDICATION) return slotLabel ? `服薬（${slotLabel}）` : '服薬'
   if (kind === WATCH_EVENT_CONDITION) return slotLabel ? `体調（${slotLabel}）` : '体調'
+  if (kind === WATCH_EVENT_LOCATION) return slotLabel ? `位置（${slotLabel}）` : 'いまの位置'
   return '記録'
 }
 
@@ -484,6 +496,11 @@ export const endWatchMatch = async ({ matchId, actorUid }) => {
     endedAt: serverTimestamp(),
     endedByUid: actorUid,
     endReason: 'ended',
+    liveLocation: {
+      active: false,
+      clearedAtMs: Date.now(),
+      clearedReason: 'ended',
+    },
     updatedAt: serverTimestamp(),
   })
 }
@@ -522,6 +539,186 @@ export const publishWatchCareEvent = async ({
   }
   await setDoc(eventRef, payload)
   return { id: eventRef.id, ...payload }
+}
+
+/** Google マップ（外部）で開くURL。アプリ内地図は使わない */
+export const buildWatchMapsUrl = (lat, lng) => {
+  const latitude = Number(lat)
+  const longitude = Number(lng)
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return ''
+  return `https://www.google.com/maps?q=${latitude},${longitude}`
+}
+
+/**
+ * マッチに保存された liveLocation を正規化。
+ * 共有停止・期限切れ・不正値は null（見守り人にも見せない）。
+ */
+export const normalizeWatchLiveLocation = (raw, nowMs = Date.now()) => {
+  if (!raw || raw.active !== true) return null
+  const lat = Number(raw.lat)
+  const lng = Number(raw.lng)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null
+  const sharedAtMs = Number(raw.sharedAtMs) || toMillis(raw.sharedAt) || 0
+  const expiresAtMs = Number(raw.expiresAtMs)
+    || (sharedAtMs ? sharedAtMs + WATCH_LOCATION_TTL_MS : 0)
+  if (expiresAtMs && nowMs >= expiresAtMs) return null
+  const accuracyRaw = Number(raw.accuracy)
+  return {
+    active: true,
+    lat,
+    lng,
+    accuracy: Number.isFinite(accuracyRaw) && accuracyRaw >= 0 ? accuracyRaw : null,
+    sharedAtMs,
+    expiresAtMs,
+    mapsUrl: buildWatchMapsUrl(lat, lng),
+  }
+}
+
+export const getWatchLiveLocation = (match, nowMs = Date.now()) => (
+  normalizeWatchLiveLocation(match?.liveLocation, nowMs)
+)
+
+/** ブラウザから現在位置を1回取得（手動共有用） */
+export const getBrowserGeolocation = () => new Promise((resolve, reject) => {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    reject(new Error('この端末では位置情報を利用できません。'))
+    return
+  }
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const coords = position?.coords
+      const lat = Number(coords?.latitude)
+      const lng = Number(coords?.longitude)
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        reject(new Error('位置情報を取得できませんでした。'))
+        return
+      }
+      const accuracy = Number(coords?.accuracy)
+      resolve({
+        lat,
+        lng,
+        accuracy: Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null,
+      })
+    },
+    (error) => {
+      const code = error?.code
+      if (code === 1) {
+        reject(new Error('位置情報の許可がありません。ブラウザの設定を確認してください。'))
+        return
+      }
+      if (code === 3) {
+        reject(new Error('位置情報の取得がタイムアウトしました。もう一度お試しください。'))
+        return
+      }
+      reject(new Error('位置情報を取得できませんでした。'))
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 20000,
+      maximumAge: 60000,
+    }
+  )
+})
+
+/** 依頼人がいまの位置を手動共有（最新1件を上書き + 通知用イベント） */
+export const shareWatchLiveLocation = async ({
+  match,
+  requesterUid,
+  lat,
+  lng,
+  accuracy = null,
+}) => {
+  if (!db || !match?.id) throw new Error('見守り関係が見つかりません。')
+  if (!requesterUid || match.requesterUid !== requesterUid) {
+    throw new Error('位置を共有する権限がありません。')
+  }
+  if (match.status !== WATCH_STATUS_ACTIVE) {
+    throw new Error('マッチング中のみ位置を共有できます。')
+  }
+  const latitude = Number(lat)
+  const longitude = Number(lng)
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new Error('位置情報が不正です。')
+  }
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+    throw new Error('位置情報が不正です。')
+  }
+  const accuracyNum = Number(accuracy)
+  const now = Date.now()
+  const expiresAtMs = now + WATCH_LOCATION_TTL_MS
+  const nowDate = new Date(now)
+  await updateDoc(doc(db, 'watch_matches', match.id), {
+    liveLocation: {
+      active: true,
+      lat: latitude,
+      lng: longitude,
+      accuracy: Number.isFinite(accuracyNum) && accuracyNum >= 0 ? accuracyNum : null,
+      sharedAtMs: now,
+      expiresAtMs,
+      sharedAt: serverTimestamp(),
+    },
+    updatedAt: serverTimestamp(),
+  })
+  await publishWatchCareEvent({
+    match,
+    kind: WATCH_EVENT_LOCATION,
+    dateKey: formatLocalDateKey(nowDate),
+    timeKey: formatLocalTimeKey(nowDate),
+    slotLabel: 'いまの位置',
+  })
+  return getWatchLiveLocation({
+    liveLocation: {
+      active: true,
+      lat: latitude,
+      lng: longitude,
+      accuracy: Number.isFinite(accuracyNum) && accuracyNum >= 0 ? accuracyNum : null,
+      sharedAtMs: now,
+      expiresAtMs,
+    },
+  }, now)
+}
+
+/** 依頼人が位置共有を停止（見守り人からも即非表示） */
+export const clearWatchLiveLocation = async ({
+  match,
+  requesterUid,
+  reason = 'cleared',
+}) => {
+  if (!db || !match?.id) throw new Error('見守り関係が見つかりません。')
+  if (!requesterUid || match.requesterUid !== requesterUid) {
+    throw new Error('位置共有を停止する権限がありません。')
+  }
+  if (match.status !== WATCH_STATUS_ACTIVE) {
+    throw new Error('マッチング中のみ操作できます。')
+  }
+  await updateDoc(doc(db, 'watch_matches', match.id), {
+    liveLocation: {
+      active: false,
+      clearedAtMs: Date.now(),
+      clearedReason: reason || 'cleared',
+    },
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/** 画面表示中のマッチ一覧購読（位置共有のリアルタイム反映用） */
+export const subscribeWatchMatchesForRole = (uid, role, onChange, onError, max = 100) => {
+  if (!db || !uid || (role !== WATCH_ROLE_WATCHER && role !== WATCH_ROLE_REQUESTER)) {
+    onChange?.([])
+    return () => {}
+  }
+  const partyField = role === WATCH_ROLE_WATCHER ? 'watcherUid' : 'requesterUid'
+  const queryLimit = role === WATCH_ROLE_WATCHER ? Math.min(max, 100) : Math.min(max, 50)
+  return onSnapshot(
+    query(
+      collection(db, 'watch_matches'),
+      where(partyField, '==', uid),
+      limit(queryLimit),
+    ),
+    (snapshot) => onChange?.(mapWatchDocs(snapshot)),
+    (error) => onError?.(error)
+  )
 }
 
 const resolvePartyField = (match, viewerUid) => {

@@ -16,12 +16,15 @@ import {
   buildMatchCommentSummaries,
   buildTodayWatchSummary,
   cancelWatchRequest,
+  clearWatchLiveLocation,
   createWatchRequest,
   endWatchMatch,
   expireStaleMatches,
   formatLocalDateKey,
   formatWatchRelativeTime,
+  getBrowserGeolocation,
   getWatchEventLabel,
+  getWatchLiveLocation,
   getWatchRoleLabel,
   getWatchStatusLabel,
   listMatchesForRequester,
@@ -32,11 +35,13 @@ import {
   postWatchComment,
   rejectWatchRequest,
   saveWatchProfile,
+  shareWatchLiveLocation,
   sortMatchesByCommentAttention,
   subscribeWatchCommentsForMatch,
   subscribeWatchCommentsForWatcher,
   subscribeWatchEventsForMatch,
   subscribeWatchEventsForWatcher,
+  subscribeWatchMatchesForRole,
 } from './watchCare'
 import {
   openReportWindowSync,
@@ -187,6 +192,7 @@ const EVENT_KIND_STYLE = {
   wake: { borderLeft: '4px solid #f59e0b', labelColor: '#92400e' },
   medication: { borderLeft: '4px solid #14b8a6', labelColor: '#115e59' },
   condition: { borderLeft: '4px solid #f43f5e', labelColor: '#9f1239' },
+  location: { borderLeft: '4px solid #0ea5e9', labelColor: '#075985' },
 }
 
 const formatMaybeTime = (dateKey, timeKey) => {
@@ -309,6 +315,7 @@ export default function WatchCarePanel({
   const detailSectionRef = useRef(null)
   const panelRef = useRef(null)
   const panelDragRef = useRef(null)
+  const locationExpireClearRef = useRef(new Set())
   const todayKey = formatLocalDateKey()
 
   useEffect(() => {
@@ -579,6 +586,61 @@ export default function WatchCarePanel({
     }
   }, [open, session?.uid, profile?.role])
 
+  // マッチ文書の liveLocation などをリアルタイム反映
+  useEffect(() => {
+    if (!open || !session?.uid || !profile?.role) return undefined
+    if (profile.role !== WATCH_ROLE_WATCHER && profile.role !== WATCH_ROLE_REQUESTER) {
+      return undefined
+    }
+    return subscribeWatchMatchesForRole(
+      session.uid,
+      profile.role,
+      (nextMatches) => {
+        setMatches(nextMatches)
+        setSelectedMatchId((current) => {
+          if (current && nextMatches.some((match) => match.id === current)) return current
+          const preferred = nextMatches.find((match) => match.status === WATCH_STATUS_ACTIVE)
+            || nextMatches.find((match) => (
+              match.status === WATCH_STATUS_PENDING_APPROVAL
+              || match.status === WATCH_STATUS_PENDING_TERMS
+            ))
+            || nextMatches[0]
+            || null
+          return preferred?.id || ''
+        })
+      },
+      (err) => console.warn('見守りマッチ一覧の購読に失敗:', err)
+    )
+  }, [open, session?.uid, profile?.role])
+
+  // 期限切れの位置共有を依頼人側で自動クリア（見守り人からも消える）
+  useEffect(() => {
+    if (!open || !session?.uid || profile?.role !== WATCH_ROLE_REQUESTER) return undefined
+    const activeMatches = (matches || []).filter((match) => match.status === WATCH_STATUS_ACTIVE)
+    activeMatches.forEach((match) => {
+      const raw = match.liveLocation
+      if (!raw || raw.active !== true) {
+        locationExpireClearRef.current.delete(match.id)
+        return
+      }
+      if (getWatchLiveLocation(match)) {
+        locationExpireClearRef.current.delete(match.id)
+        return
+      }
+      if (locationExpireClearRef.current.has(match.id)) return
+      locationExpireClearRef.current.add(match.id)
+      clearWatchLiveLocation({
+        match,
+        requesterUid: session.uid,
+        reason: 'expired',
+      }).catch((err) => {
+        locationExpireClearRef.current.delete(match.id)
+        console.warn('期限切れ位置共有のクリアに失敗:', err)
+      })
+    })
+    return undefined
+  }, [open, session?.uid, profile?.role, matches])
+
   useEffect(() => {
     if (!open || !selectedMatchId || !session?.uid) {
       setEvents([])
@@ -644,6 +706,107 @@ export default function WatchCarePanel({
         <span aria-hidden="true">{alert.mark}</span>
         {alert.label}
       </span>
+    )
+  }
+
+  const shareLiveLocationForMatch = (match) => {
+    if (!match || !session?.uid) return
+    if (!window.confirm(
+      'いまの位置を見守り人に共有しますか？\n常時追跡ではなく、この時点の位置だけが届きます。\n緊急通報や救護の代わりにはなりません。'
+    )) return
+    runAction(async () => {
+      const position = await getBrowserGeolocation()
+      await shareWatchLiveLocation({
+        match,
+        requesterUid: session.uid,
+        lat: position.lat,
+        lng: position.lng,
+        accuracy: position.accuracy,
+      })
+    }, 'いまの位置を共有しました。')
+  }
+
+  const stopLiveLocationForMatch = (match) => {
+    if (!match || !session?.uid) return
+    if (!window.confirm('位置の共有をやめますか？見守り人からもすぐに見えなくなります。')) return
+    runAction(
+      () => clearWatchLiveLocation({
+        match,
+        requesterUid: session.uid,
+        reason: 'cleared',
+      }),
+      '位置の共有をやめました。'
+    )
+  }
+
+  const renderLiveLocationSection = (match, { canControl = false } = {}) => {
+    if (!match || match.status !== WATCH_STATUS_ACTIVE) return null
+    const live = getWatchLiveLocation(match)
+    const sharedRelative = live?.sharedAtMs ? formatWatchRelativeTime(live.sharedAtMs) : ''
+    const accuracyLabel = live?.accuracy != null
+      ? `精度の目安: 約${Math.round(live.accuracy)}m`
+      : ''
+    return (
+      <div style={sectionBox}>
+        <h4 style={sectionTitle}>📍 いまの位置</h4>
+        <p style={muted}>
+          依頼人が手動で共有した時点の位置だけが表示されます（常時追跡ではありません）。
+          緊急通報・救護の代わりにはなりません。
+        </p>
+        {live ? (
+          <div style={{
+            margin: '0 0 10px',
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: '#f0f9ff',
+            border: '1px solid #7dd3fc',
+            color: '#0c4a6e',
+            fontSize: 13,
+            lineHeight: 1.5,
+            fontWeight: 600,
+          }}
+          >
+            <div>共有中{sharedRelative ? ` · ${sharedRelative}` : ''}</div>
+            {accuracyLabel ? (
+              <div style={{ marginTop: 2, fontWeight: 500, color: '#334155' }}>{accuracyLabel}</div>
+            ) : null}
+            {live.mapsUrl ? (
+              <a
+                href={live.mapsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ display: 'inline-block', marginTop: 6, color: '#0369a1', fontWeight: 700 }}
+              >
+                地図で開く
+              </a>
+            ) : null}
+          </div>
+        ) : (
+          <p style={{ ...muted, marginBottom: 10 }}>いまは共有されていません。</p>
+        )}
+        {canControl ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              type="button"
+              style={styles.primaryButton}
+              disabled={busy}
+              onClick={() => shareLiveLocationForMatch(match)}
+            >
+              {live ? '位置を更新して共有' : 'いまの位置を共有する'}
+            </button>
+            {live ? (
+              <button
+                type="button"
+                style={{ ...styles.secondaryButton, color: '#b91c1c' }}
+                disabled={busy}
+                onClick={() => stopLiveLocationForMatch(match)}
+              >
+                共有をやめる
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
     )
   }
 
@@ -945,6 +1108,9 @@ export default function WatchCarePanel({
                 const todaySummary = match.status === WATCH_STATUS_ACTIVE
                   ? todaySummariesByMatch[match.id]
                   : null
+                const liveLocation = match.status === WATCH_STATUS_ACTIVE
+                  ? getWatchLiveLocation(match)
+                  : null
                 return (
                   <div
                     key={match.id}
@@ -974,6 +1140,25 @@ export default function WatchCarePanel({
                       <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         {match.requesterName || match.requesterEmail || '依頼人'}
                         {todaySummary ? renderConditionAlertBadge(todaySummary.conditionLevel) : null}
+                        {liveLocation ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              background: '#e0f2fe',
+                              border: '1px solid #7dd3fc',
+                              color: '#075985',
+                              fontSize: 11,
+                              fontWeight: 800,
+                            }}
+                            aria-label="いまの位置を共有中"
+                            title="いまの位置を共有中"
+                          >
+                            📍 共有中
+                          </span>
+                        ) : null}
                         {isSelected ? (
                           <span style={{
                             display: 'inline-flex',
@@ -1087,6 +1272,7 @@ export default function WatchCarePanel({
                   {renderTodaySummaryBox(todaySummariesByMatch[selectedMatch.id] || buildTodayWatchSummary(events, todayKey))}
                   <p style={{ ...muted, marginBottom: 0 }}>共有された当日記録の要約です。詳細は下の記録一覧で確認できます。</p>
                 </div>
+                {renderLiveLocationSection(selectedMatch, { canControl: false })}
                 <div style={sectionBox}>
                   <h4 style={sectionTitle}>📈 体調グラフ印刷（一人ずつ）</h4>
                   <p style={muted}>
@@ -1124,7 +1310,7 @@ export default function WatchCarePanel({
                     📋 共有済みの記録（{selectedMatch.requesterName || '依頼人'}・リアルタイム）
                   </h4>
                   <p style={{ ...muted, marginBottom: 6 }}>
-                    左線の色：紫＝就寝 ／ 橙＝起床 ／ 青緑＝服薬 ／ 赤＝体調
+                    左線の色：紫＝就寝 ／ 橙＝起床 ／ 青緑＝服薬 ／ 赤＝体調 ／ 水色＝位置
                   </p>
                   <p style={{ ...muted, marginBottom: 8 }}>
                     一覧は約3件分を表示し、それ以上はスクロールで確認できます。
@@ -1251,10 +1437,11 @@ export default function WatchCarePanel({
 
             {selectedMatch?.status === WATCH_STATUS_ACTIVE && (
               <div ref={detailSectionRef}>
+                {renderLiveLocationSection(selectedMatch, { canControl: true })}
                 <div style={recordsSectionBox}>
                   <h4 style={sectionTitle}>📋 共有済みの記録（リアルタイム）</h4>
                   <p style={{ ...muted, marginBottom: 6 }}>
-                    左線の色：紫＝就寝 ／ 橙＝起床 ／ 青緑＝服薬 ／ 赤＝体調
+                    左線の色：紫＝就寝 ／ 橙＝起床 ／ 青緑＝服薬 ／ 赤＝体調 ／ 水色＝位置
                   </p>
                   <p style={{ ...muted, marginBottom: 8 }}>
                     一覧は約3件分を表示し、それ以上はスクロールで確認できます。
