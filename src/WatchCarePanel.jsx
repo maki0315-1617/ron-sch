@@ -115,6 +115,51 @@ const todaySummaryLine = {
   fontWeight: 600,
 }
 
+const conditionAlertBadgeBase = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  padding: '2px 8px',
+  borderRadius: 999,
+  fontSize: 11,
+  fontWeight: 800,
+  lineHeight: 1.3,
+  whiteSpace: 'nowrap',
+}
+
+/** 当日体調が悪い／大変悪いときだけ注意マークを返す（それ以外は null） */
+const getConditionAlertMeta = (conditionLevel) => {
+  if (conditionLevel === 'very_bad') {
+    return {
+      level: 'very_bad',
+      mark: '✕',
+      label: '大変悪い',
+      ariaLabel: '当日体調：大変悪い',
+      style: {
+        ...conditionAlertBadgeBase,
+        background: '#fee2e2',
+        border: '1px solid #f87171',
+        color: '#b91c1c',
+      },
+    }
+  }
+  if (conditionLevel === 'bad') {
+    return {
+      level: 'bad',
+      mark: '⚠',
+      label: '悪い',
+      ariaLabel: '当日体調：悪い（注意）',
+      style: {
+        ...conditionAlertBadgeBase,
+        background: '#fffbeb',
+        border: '1px solid #fbbf24',
+        color: '#b45309',
+      },
+    }
+  }
+  return null
+}
+
 const templateChip = {
   border: '1px solid #86efac',
   background: '#fff',
@@ -591,10 +636,27 @@ export default function WatchCarePanel({
     }
   }
 
+  const renderConditionAlertBadge = (conditionLevel) => {
+    const alert = getConditionAlertMeta(conditionLevel)
+    if (!alert) return null
+    return (
+      <span style={alert.style} aria-label={alert.ariaLabel} title={alert.ariaLabel}>
+        <span aria-hidden="true">{alert.mark}</span>
+        {alert.label}
+      </span>
+    )
+  }
+
   const renderTodaySummaryBox = (summary, { compact = false } = {}) => {
     if (!summary) return null
+    const conditionAlert = getConditionAlertMeta(summary.conditionLevel)
     return (
       <div style={{ ...todaySummaryLine, ...(compact ? { marginBottom: 8 } : { marginBottom: 10 }) }}>
+        {conditionAlert ? (
+          <div style={{ marginBottom: 4 }}>
+            {renderConditionAlertBadge(summary.conditionLevel)}
+          </div>
+        ) : null}
         <div>{summary.text}</div>
         <div style={{ marginTop: 2, fontWeight: 500, color: '#334155' }}>{summary.lastText}</div>
       </div>
@@ -870,7 +932,7 @@ export default function WatchCarePanel({
                   </span>
                 ) : null}
               </h4>
-              <p style={muted}>未読がある依頼人を上に表示します。青い枠が現在選択中の依頼人です。マッチング中は今日のひと目も表示します。</p>
+              <p style={muted}>未読がある依頼人を上に表示します。青い枠が現在選択中の依頼人です。マッチング中は今日のひと言も表示します。当日体調が「悪い」「大変悪い」のときは注意マークが付きます。</p>
               {displayedMatches.length === 0 && <p style={muted}>依頼はまだありません。</p>}
               {displayedMatches.map((match) => {
                 const summary = commentSummaries[match.id] || {}
@@ -911,6 +973,7 @@ export default function WatchCarePanel({
                     >
                       <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                         {match.requesterName || match.requesterEmail || '依頼人'}
+                        {todaySummary ? renderConditionAlertBadge(todaySummary.conditionLevel) : null}
                         {isSelected ? (
                           <span style={{
                             display: 'inline-flex',
@@ -1019,7 +1082,7 @@ export default function WatchCarePanel({
               <div ref={detailSectionRef}>
                 <div style={sectionBox}>
                   <h4 style={sectionTitle}>
-                    今日のひと目（{selectedMatch.requesterName || selectedMatch.requesterEmail || '依頼人'}）
+                    今日のひと言（{selectedMatch.requesterName || selectedMatch.requesterEmail || '依頼人'}）
                   </h4>
                   {renderTodaySummaryBox(todaySummariesByMatch[selectedMatch.id] || buildTodayWatchSummary(events, todayKey))}
                   <p style={{ ...muted, marginBottom: 0 }}>共有された当日記録の要約です。詳細は下の記録一覧で確認できます。</p>

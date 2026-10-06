@@ -74,7 +74,7 @@ export const formatWatchRelativeTime = (value, nowMs = Date.now()) => {
 }
 
 /**
- * 依頼人ごとの「今日のひと目」要約。
+ * 依頼人ごとの「今日のひと言」要約。
  * 服薬予定枠数は見守り人側から取れないため、当日の完了件数表示にする。
  */
 export const buildTodayWatchSummary = (events, todayKey = formatLocalDateKey()) => {
@@ -105,6 +105,7 @@ export const buildTodayWatchSummary = (events, todayKey = formatLocalDateKey()) 
   const medLabel = medSlots.size > 0 ? `服薬 完了${medSlots.size}` : '服薬記録なし'
 
   const conditionToday = [...todays.filter((event) => event.kind === WATCH_EVENT_CONDITION)].sort(byCreatedDesc)[0]
+  const conditionLevel = conditionToday?.conditionLevel || ''
   let conditionLabel = '体調 未記録'
   if (conditionToday) {
     const levelLabel = getConditionLevelLabel(conditionToday.conditionLevel)
@@ -133,6 +134,7 @@ export const buildTodayWatchSummary = (events, todayKey = formatLocalDateKey()) 
     sleepLabel,
     medLabel,
     conditionLabel,
+    conditionLevel,
     lastLabel,
     text: `${sleepLabel} ／ ${medLabel} ／ ${conditionLabel}`,
     lastText: lastLabel,
@@ -725,7 +727,7 @@ export const subscribeWatchCommentsForWatcher = (watcherUid, onChange, onError, 
   )
 }
 
-/** 見守り人向け: 全依頼人の共有イベントをまとめて購読（今日のひと目用） */
+/** 見守り人向け: 全依頼人の共有イベントをまとめて購読（今日のひと言用） */
 export const subscribeWatchEventsForWatcher = (watcherUid, onChange, onError, max = 200) => {
   if (!db || !watcherUid) {
     onChange?.([])
