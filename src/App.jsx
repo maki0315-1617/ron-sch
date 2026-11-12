@@ -27,7 +27,8 @@ import {
   writeBatch,
   where,
 } from 'firebase/firestore'
-import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, Eye, EyeOff, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Shield, Trash2, TrendingUp, UserX, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Bell, BellOff, CalendarDays, ChartColumn, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ClipboardList, Clock3, Copy, Eye, EyeOff, FileText, GripVertical, HelpCircle, Home, Link2, LogOut, Mail, Menu, Mic, MoreHorizontal, MoveHorizontal, PencilLine, Plus, Repeat2, Search, Settings, Shield, Trash2, TrendingUp, UserX, X } from 'lucide-react'
+import VisualSupportVoiceInput from './VisualSupportVoiceInput'
 import { addDays, formatDateKey, getSleepAdviceLevel, getSleepDurationMinutes, parseTimeValue } from './dateSleepUtils'
 import {
   CONDITION_LEVELS,
@@ -170,6 +171,7 @@ const WEEK_CALENDAR_ENABLED_KEY = 'ron-sch-week-calendar-enabled'
 const SLEEP_RECORD_ENABLED_KEY = 'ron-sch-sleep-record-enabled'
 const MEDICATION_RECORD_ENABLED_KEY = 'ron-sch-medication-record-enabled'
 const HEALTH_LIFE_COUNT_ENABLED_KEY = 'ron-sch-health-life-count-enabled'
+const VISUAL_SUPPORT_ENABLED_KEY = 'ron-sch-visual-support-enabled'
 const DEMO_NOTICE_SEEN_KEY = 'ron-sch-demo-notice-seen'
 const USAGE_TIPS_DISMISSED_KEY = 'ron-sch-usage-tips-dismissed'
 const DEMO_MAX_PER_DAY = 5
@@ -904,6 +906,10 @@ function App() {
   const [healthLifeCountEnabled, setHealthLifeCountEnabled] = useState(() => {
     return typeof window !== 'undefined' && window.localStorage.getItem(HEALTH_LIFE_COUNT_ENABLED_KEY) === 'true'
   })
+  const [visualSupportEnabled, setVisualSupportEnabled] = useState(() => {
+    return typeof window !== 'undefined' && window.localStorage.getItem(VISUAL_SUPPORT_ENABLED_KEY) === 'true'
+  })
+  const [voiceInputTarget, setVoiceInputTarget] = useState(null)
   const [healthLifeCountCollapsed, setHealthLifeCountCollapsed] = useState(false)
   const [stepsByDate, setStepsByDate] = useState(null)
   const [stepManualDraft, setStepManualDraft] = useState('')
@@ -1627,6 +1633,19 @@ function App() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(HEALTH_LIFE_COUNT_ENABLED_KEY, String(healthLifeCountEnabled))
   }, [healthLifeCountEnabled])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(VISUAL_SUPPORT_ENABLED_KEY, String(visualSupportEnabled))
+  }, [visualSupportEnabled])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined
+    document.documentElement.classList.toggle('visual-support-on', visualSupportEnabled)
+    return () => {
+      document.documentElement.classList.remove('visual-support-on')
+    }
+  }, [visualSupportEnabled])
 
   useEffect(() => {
     if (!session || typeof window === 'undefined') return
@@ -6829,6 +6848,15 @@ function App() {
                           <Check size={18} color={healthLifeCountEnabled ? '#2563eb' : 'transparent'} />
                           健康生活カウント表示
                         </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          style={styles.menuItem}
+                          onClick={() => setVisualSupportEnabled((current) => !current)}
+                        >
+                          <Check size={18} color={visualSupportEnabled ? '#2563eb' : 'transparent'} />
+                          視覚サポート（大きい文字・音声入力）
+                        </button>
                         <label style={styles.settingsSelectLabel}>
                           週の開始を設定
                           <select
@@ -8124,6 +8152,22 @@ function App() {
                       </label>
                       <label style={styles.conditionField}>
                         <span style={styles.conditionFieldLabel}>体調について一言</span>
+                        {visualSupportEnabled && selectedIsToday ? (
+                          <button
+                            type="button"
+                            style={{ ...styles.voiceSpeakButton, marginBottom: 6 }}
+                            disabled={medicationSaving}
+                            onClick={() => setVoiceInputTarget({
+                              field: 'conditionNote',
+                              label: '体調について一言',
+                              initialText: conditionNoteDraft || '',
+                              maxLength: CONDITION_NOTE_MAX_LENGTH,
+                            })}
+                          >
+                            <Mic size={16} aria-hidden="true" />
+                            話す
+                          </button>
+                        ) : null}
                         <textarea
                           value={conditionNoteDraft}
                           onChange={(event) => setConditionNoteDraft(event.target.value.slice(0, CONDITION_NOTE_MAX_LENGTH))}
@@ -9062,7 +9106,24 @@ function App() {
                   </div>
                 )}
 
-                <label style={styles.fieldLabel}>タイトル（必須）</label>
+                <div style={styles.voiceFieldHeader}>
+                  <label style={{ ...styles.fieldLabel, marginBottom: 0 }}>タイトル（必須）</label>
+                  {visualSupportEnabled ? (
+                    <button
+                      type="button"
+                      style={styles.voiceSpeakButton}
+                      onClick={() => setVoiceInputTarget({
+                        field: 'title',
+                        label: 'タイトル',
+                        initialText: detailDraft.title || '',
+                        maxLength: 120,
+                      })}
+                    >
+                      <Mic size={16} aria-hidden="true" />
+                      話す
+                    </button>
+                  ) : null}
+                </div>
                 {commonTitles.length > 0 && (
                   <select
                     style={{ ...styles.modalInput, marginBottom: '8px' }}
@@ -9251,7 +9312,24 @@ function App() {
                   </>
                 )}
 
-                <label style={styles.fieldLabel}>詳細メモ</label>
+                <div style={styles.voiceFieldHeader}>
+                  <label style={{ ...styles.fieldLabel, marginBottom: 0 }}>詳細メモ</label>
+                  {visualSupportEnabled ? (
+                    <button
+                      type="button"
+                      style={styles.voiceSpeakButton}
+                      onClick={() => setVoiceInputTarget({
+                        field: 'details',
+                        label: '詳細メモ',
+                        initialText: detailDraft.details || '',
+                        maxLength: 2000,
+                      })}
+                    >
+                      <Mic size={16} aria-hidden="true" />
+                      話す
+                    </button>
+                  ) : null}
+                </div>
                 <textarea
                   className="schedule-details-input"
                   value={detailDraft.details}
@@ -9549,6 +9627,30 @@ function App() {
               </div>
             </div>
           )}
+
+          <VisualSupportVoiceInput
+            open={Boolean(voiceInputTarget)}
+            fieldLabel={voiceInputTarget?.label || '入力欄'}
+            initialText={voiceInputTarget?.initialText || ''}
+            maxLength={voiceInputTarget?.maxLength || 0}
+            onClose={() => setVoiceInputTarget(null)}
+            onConfirm={(text) => {
+              const field = voiceInputTarget?.field
+              if (field === 'title') {
+                setDetailDraft((prev) => (prev ? { ...prev, title: text } : prev))
+              } else if (field === 'details') {
+                setDetailDraft((prev) => (prev ? { ...prev, details: text } : prev))
+              } else if (field === 'conditionNote') {
+                setConditionNoteDraft(text.slice(0, CONDITION_NOTE_MAX_LENGTH))
+                if (selectedIsToday) {
+                  saveMedicationCondition({
+                    conditionLevel: medicationRecord?.conditionLevel || '',
+                    conditionNote: text,
+                  })
+                }
+              }
+            }}
+          />
 
           {scheduleAppConfirm && (
             <div
@@ -11950,6 +12052,30 @@ const styles = {
     fontSize: '13px',
     fontWeight: 700,
     color: '#334155',
+  },
+  voiceFieldHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    marginTop: '12px',
+    marginBottom: '8px',
+  },
+  voiceSpeakButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    minHeight: '44px',
+    padding: '8px 12px',
+    borderRadius: '10px',
+    border: '2px solid #1d4ed8',
+    background: '#eff6ff',
+    color: '#1e3a8a',
+    fontSize: '14px',
+    fontWeight: 800,
+    cursor: 'pointer',
+    flexShrink: 0,
   },
   modalInput: {
     width: '100%',

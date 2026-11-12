@@ -719,3 +719,24 @@ html.schedule-card-reorder-active .schedule-section {
     height: 44px !important;
   }
 }
+
+/* 視覚サポート: 文字・行間・コントラストを上げ、操作しやすくする */
+html.visual-support-on {
+  font-size: 112%;
+}
+
+html.visual-support-on body {
+  line-height: 1.65;
+}
+
+html.visual-support-on button,
+html.visual-support-on input,
+html.visual-support-on select,
+html.visual-support-on textarea {
+  font-size: 1.05em;
+  line-height: 1.45;
+}
+
+html.visual-support-on .visual-support-voice-panel button {
+  min-height: 52px;
+}
